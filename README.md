@@ -464,7 +464,6 @@ python3 record_codebuddy_real_fixtures.py
 
 文档:
   README.md                         本文档
-  ENDPOINTS.md                      端点处理逻辑完整梳理
 ```
 
 ### 模块依赖
@@ -583,7 +582,6 @@ python3 codebuddy_proxy.py --log-file /tmp/proxy.jsonl
 
 ## 参考资料
 
-- **完整端点处理逻辑**: `ENDPOINTS.md`
 - **脱敏词表**: `desensitize.py` 中的 `SENSITIVE_TERMS`
 - **压缩参数配置**: `responses_projection.py` 中的常量（`MAX_TAIL_MESSAGES` 等）
 
