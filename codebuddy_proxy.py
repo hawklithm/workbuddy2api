@@ -342,7 +342,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 # (older builds used /v2/config).  Keep the old path as a
                 # compatibility fallback for older CodeBuddy deployments.
                 try:
-                    payload = self.upstream_json("GET", "/v3/config")
+                    payload = self.upstream_json("GET", "/v3/config?repos=")
                 except CodeBuddyError as exc:
                     if "404" not in str(exc):
                         raise
@@ -397,7 +397,17 @@ class ProxyHandler(BaseHTTPRequestHandler):
         if self.state.mock_dir is not None:
             return self.state.mock_json("models.v3-config.json")
         self.state.client.ensure_authenticated()
-        headers = {**self.state.client._auth_headers(), "Accept": "application/json", "X-Product": "SaaS"}
+        headers = {
+            **self.state.client._auth_headers(),
+            "Accept": "application/json",
+            "User-Agent": "CodeBuddyIDE/4.10.33259736",
+            "X-IDE-Type": "VSCode",
+            "X-IDE-Name": "VSCode",
+            "X-IDE-Version": "1.70.2",
+            "X-Product-Version": "4.10.33259736",
+            "X-Requested-With": "XMLHttpRequest",
+            "X-Product": "SaaS",
+        }
         data = None if body is None else json.dumps(body).encode("utf-8")
         if data:
             headers["Content-Type"] = "application/json"
