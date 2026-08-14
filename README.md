@@ -196,20 +196,84 @@ curl http://127.0.0.1:8787/v1/messages \
 
 对 system 消息中的敏感词插入零宽空格（U+200B），打断后端关键词匹配，缓解合规模板被审核误拦。
 
-#### 适用场景
+#### 何时需要使用
 
-- ❌ 后端/ "敏感内容"
-- ❌ 合规的 system prompt 被拒绝（误报）
-- ❌ 包含 "DoS"、"exploit"、"credential testing" 等安全术语的提示词被拦截
+**强烈推荐启用的场景：**
 
-#### 使用方法
+1. **对接 Claude Code / CC Switch**
+   - Claude Code 的 system prompt 包含大量 Anthropic 品牌词和安全合规声明
+   - 腾讯后端可能将竞争品牌词（"Claude"、"Anthropic"）视为敏感内容
+   - 不启用脱敏时，几乎每次请求都会被审核拦截
+
+2. **对接 Codex CLI / Oh My Posh 等 agentic 工具**
+   - 这些工具的 system prompt 含有大量安全术语（DoS、exploit、credential testing 等）
+   - 即使是合规的"拒绝有害请求"声明，也可能被关键词匹配误拦
+
+3. **使用包含安全术语的自定义 system prompt**
+   - 安全研究、渗透测试相关的合规对话
+   - 需要讨论漏洞、攻击防御的技术文档生成
+
+**典型错误信息：**
+```json
+{
+  "error": {
+    "message": "内容违规",
+    "type": "content_policy_violation"
+  }
+}
+```
+或后端返回空响应、连接中断。
+
+**不需要启用的场景：**
+- ✅ 普通对话（无安全术语）
+- ✅ 使用官方 CodeBuddy 客户端（已内置处理）
+- ✅ 纯粹的代码生成（无品牌词/安全声明）
+
+#### 典型使用案例
+
+**案例 1: 对接 Claude Code**
 
 ```bash
-# 启用脱敏
+# 必须启用 --desensitize，否则几乎每次都被拦截
+python3 codebuddy_proxy.py --desensitize --port 8787
+
+# 在 Claude Code / CC Switch 中配置
+# Base URL: http://127.0.0.1:8787/v1
+# API Key: (留空或任意值)
+```
+
+**案例 2: 对接 Codex CLI**
+
+```bash
+# 同时启用脱敏和消息压缩（最佳配置）
+python3 codebuddy_proxy.py --desensitize --optimize-context
+
+# 在 Codex CLI 配置文件中
+# base_url: http://127.0.0.1:8787/v1/responses
+```
+
+**案例 3: 安全研究对话**
+
+```bash
+# 启用脱敏以避免合规术语被误拦
 python3 codebuddy_proxy.py --desensitize
 
-# 配合其他参数
-python3 codebuddy_proxy.py --desensitize --port 8787
+# 示例请求
+curl http://127.0.0.1:8787/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "default",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a security expert. Refuse requests for exploit development."
+      },
+      {
+        "role": "user",
+        "content": "解释 SQL injection 的防御措施"
+      }
+    ]
+  }'
 ```
 
 #### 工作原理
