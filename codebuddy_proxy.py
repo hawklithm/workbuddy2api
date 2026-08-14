@@ -13,6 +13,8 @@ import base64
 import hashlib
 import io
 import json
+import logging
+import logging.handlers
 import os
 import pathlib
 import sys
@@ -45,6 +47,40 @@ except ImportError:
         return body, {}
 
 
+
+
+def setup_logging(log_dir: pathlib.Path) -> logging.Logger:
+    """配置滚动日志：按天分片，保留30天，输出到文件而非标准输出。"""
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "proxy.log"
+    
+    # 创建 logger
+    logger = logging.getLogger("codebuddy_proxy")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False  # 不传播到 root logger
+    
+    # 清除已有的 handlers（避免重复）
+    logger.handlers.clear()
+    
+    # 按天滚动的文件 handler（midnight 滚动，保留30天）
+    handler = logging.handlers.TimedRotatingFileHandler(
+        log_file,
+        when='midnight',
+        interval=1,
+        backupCount=30,
+        encoding='utf-8'
+    )
+    handler.suffix = "%Y-%m-%d"  # 备份文件后缀格式：proxy.log.2026-08-14
+    
+    # 日志格式
+    formatter = logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    
+    return logger
 
 def now_s() -> int:
     return int(time.time())
@@ -282,7 +318,8 @@ class ProxyState:
     def __init__(self, client: CodeBuddyClient, mock_dir: pathlib.Path | None = None,
                  log_file: pathlib.Path | None = None,
                  enable_desensitize: bool = False,
-                 enable_optimize_context: bool = False) -> None:
+                 enable_optimize_context: bool = False,
+                 logger: logging.Logger | None = None) -> None:
         self.client = client
         self.mock_dir = mock_dir
         self.log_file = log_file
@@ -291,6 +328,7 @@ class ProxyState:
         self.started_at = time.time()
         self.enable_desensitize = enable_desensitize
         self.enable_optimize_context = enable_optimize_context
+        self.logger = logger or logging.getLogger("codebuddy_proxy")
 
     def ensure_auth(self) -> None:
         if self.mock_dir is not None:
@@ -332,8 +370,7 @@ class ProxyState:
                 finally:
                     os.close(fd)
         except OSError as exc:
-            print(f"[proxy] unable to write log file {self.log_file}: {exc}",
-                  file=sys.stderr, flush=True)
+            self.logger.error(f"Unable to write log file {self.log_file}: {exc}")
 
     def write_body_log(self, event: str, body: bytes, **fields: Any) -> None:
         self.write_log(event, body_bytes=len(body),
@@ -350,13 +387,15 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt: str, *args: Any) -> None:
         # Never log Authorization, query strings, request bodies, or tokens.
-        print(f"[proxy] {self.command} {self.path.split('?', 1)[0]} - {fmt % args}")
+        message = f"{self.command} {self.path.split('?', 1)[0]} - {fmt % args}"
+        self.state.logger.info(message)
 
     def diagnostic(self, event: str, **fields: Any) -> None:
         """Write structured, non-sensitive request diagnostics to the service log."""
         values = " ".join(f"{key}={json.dumps(value, ensure_ascii=False)}"
                            for key, value in fields.items())
-        print(f"[proxy-debug] event={event} {values}".rstrip(), file=sys.stderr, flush=True)
+        message = f"event={event} {values}".rstrip()
+        self.state.logger.debug(message)
 
     @staticmethod
     def body_summary(body: dict[str, Any]) -> dict[str, Any]:
@@ -766,6 +805,11 @@ def main() -> int:
     parser.add_argument("--login", action="store_true", help="启动时执行浏览器登录/账户查询")
     parser.add_argument("--no-browser", action="store_true", help="登录时不自动打开浏览器")
     args = parser.parse_args()
+    
+    # 初始化日志系统
+    log_dir = args.log_file.parent if args.log_file else pathlib.Path("logs")
+    logger = setup_logging(log_dir)
+    
     client = CodeBuddyClient(args.endpoint, session_file=args.session_file)
     if args.login:
         client.login(open_browser=not args.no_browser)
@@ -773,10 +817,12 @@ def main() -> int:
     server.proxy_state = ProxyState(
         client, args.mock_dir, args.log_file,
         enable_desensitize=args.desensitize,
-        enable_optimize_context=args.optimize_context
+        enable_optimize_context=args.optimize_context,
+        logger=logger
     )  # type: ignore[attr-defined]
-    print(f"CodeBuddy proxy listening on http://{args.host}:{args.port}")
-    print("Endpoints: /v1/models /v1/chat/completions /v1/responses /v1/messages /health")
+    
+    logger.info(f"CodeBuddy proxy listening on http://{args.host}:{args.port}")
+    logger.info("Endpoints: /v1/models /v1/chat/completions /v1/responses /v1/messages /health")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
