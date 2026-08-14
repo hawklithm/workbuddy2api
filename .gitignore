@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Local authentication state; never commit tokens or cookies.
+.codebuddy-session.json
+codebuddy-session.json
+
+# Original plugin bundle contains embedded environment credentials.
+coding-copilot-latest.vsix
