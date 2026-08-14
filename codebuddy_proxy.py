@@ -9,10 +9,13 @@ external-link-v2 flow found in coding-copilot-latest.vsix.
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import io
 import json
 import os
 import pathlib
+import sys
 import threading
 import time
 import uuid
@@ -23,6 +26,24 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Iterator
 
 from codebuddy_client_demo import CodeBuddyClient, CodeBuddyError
+
+# 尝试导入高级功能模块（可选）
+try:
+    from desensitize import desensitize_body
+    HAS_DESENSITIZE = True
+except ImportError:
+    HAS_DESENSITIZE = False
+    def desensitize_body(body, **kwargs):
+        return body
+
+try:
+    from responses_projection import project_responses_chat_body
+    HAS_PROJECTION = True
+except ImportError:
+    HAS_PROJECTION = False
+    def project_responses_chat_body(body):
+        return body, {}
+
 
 
 def now_s() -> int:
@@ -258,11 +279,18 @@ class AnthropicStreamState:
 
 
 class ProxyState:
-    def __init__(self, client: CodeBuddyClient, mock_dir: pathlib.Path | None = None) -> None:
+    def __init__(self, client: CodeBuddyClient, mock_dir: pathlib.Path | None = None,
+                 log_file: pathlib.Path | None = None,
+                 enable_desensitize: bool = False,
+                 enable_optimize_context: bool = False) -> None:
         self.client = client
         self.mock_dir = mock_dir
+        self.log_file = log_file
         self.lock = threading.RLock()
+        self.log_lock = threading.RLock()
         self.started_at = time.time()
+        self.enable_desensitize = enable_desensitize
+        self.enable_optimize_context = enable_optimize_context
 
     def ensure_auth(self) -> None:
         if self.mock_dir is not None:
@@ -288,6 +316,30 @@ class ProxyState:
     def mock_chat_response(self) -> io.BytesIO:
         return io.BytesIO(self.mock_body("chat-hi.sse.json"))
 
+    def write_log(self, event: str, **fields: Any) -> None:
+        """Append a complete, JSONL diagnostic record without auth headers."""
+        if self.log_file is None:
+            return
+        record = {"timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "event": event, **fields}
+        raw = (json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+        try:
+            with self.log_lock:
+                self.log_file.parent.mkdir(parents=True, exist_ok=True)
+                flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+                fd = os.open(self.log_file, flags, 0o600)
+                try:
+                    os.write(fd, raw)
+                finally:
+                    os.close(fd)
+        except OSError as exc:
+            print(f"[proxy] unable to write log file {self.log_file}: {exc}",
+                  file=sys.stderr, flush=True)
+
+    def write_body_log(self, event: str, body: bytes, **fields: Any) -> None:
+        self.write_log(event, body_bytes=len(body),
+                       body_text=body.decode("utf-8", errors="replace"),
+                       body_base64=base64.b64encode(body).decode("ascii"), **fields)
+
 
 class ProxyHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -299,6 +351,52 @@ class ProxyHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: Any) -> None:
         # Never log Authorization, query strings, request bodies, or tokens.
         print(f"[proxy] {self.command} {self.path.split('?', 1)[0]} - {fmt % args}")
+
+    def diagnostic(self, event: str, **fields: Any) -> None:
+        """Write structured, non-sensitive request diagnostics to the service log."""
+        values = " ".join(f"{key}={json.dumps(value, ensure_ascii=False)}"
+                           for key, value in fields.items())
+        print(f"[proxy-debug] event={event} {values}".rstrip(), file=sys.stderr, flush=True)
+
+    @staticmethod
+    def body_summary(body: dict[str, Any]) -> dict[str, Any]:
+        messages = body.get("messages") or []
+        message_summary = []
+        for item in messages:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content", "")
+            if isinstance(content, str):
+                content_length = len(content)
+                content_type = "text"
+            elif isinstance(content, list):
+                content_length = sum(
+                    len(str(part.get("text", ""))) for part in content if isinstance(part, dict)
+                )
+                content_type = "parts"
+            else:
+                content_length = 0
+                content_type = type(content).__name__
+            message_summary.append({
+                "role": item.get("role"),
+                "content_type": content_type,
+                "content_length": content_length,
+            })
+        return {
+            "model": body.get("model"),
+            "stream": bool(body.get("stream")),
+            "message_count": len(messages),
+            "messages": message_summary,
+            "tool_count": len(body.get("tools") or []),
+        }
+
+    @staticmethod
+    def text_summary(value: str) -> dict[str, Any]:
+        return {
+            "content_length": len(value),
+            "content_sha256": hashlib.sha256(value.encode("utf-8")).hexdigest()[:16],
+            "safety_message_detected": any(marker in value for marker in ("敏感内容", "无法响应")),
+        }
 
     def send_json(self, status: int, payload: Any) -> None:
         raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -332,6 +430,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 })
                 return
             if path == "/v1/models":
+                self.state.write_log("client_request", method="GET", path=path, body=None)
                 self.state.ensure_auth()
                 if self.state.mock_dir is not None:
                     payload = self.state.mock_json("models.v3-config.json")
@@ -358,10 +457,22 @@ class ProxyHandler(BaseHTTPRequestHandler):
         path = urllib.parse.urlsplit(self.path).path
         try:
             body = self.read_json()
+            self.state.write_log("client_request", method="POST", path=path, body=body)
+            self.diagnostic("request", request_id=self.headers.get("X-Request-ID", "-"),
+                            protocol=path, **self.body_summary(body))
             if path == "/v1/chat/completions":
                 self.forward_chat(body, "openai")
             elif path == "/v1/responses":
-                self.forward_chat(responses_to_chat(body), "responses", original=body)
+                chat_body = responses_to_chat(body)
+                
+                # 消息压缩优化（如果启用）
+                if self.state.enable_optimize_context and HAS_PROJECTION:
+                    chat_body, proj_stats = project_responses_chat_body(chat_body)
+                    self.diagnostic("projection_applied", protocol="responses", **proj_stats)
+                
+                self.diagnostic("request", request_id=self.headers.get("X-Request-ID", "-"),
+                                protocol="responses", **self.body_summary(chat_body))
+                self.forward_chat(chat_body, "responses", original=body)
             elif path == "/v1/messages":
                 self.forward_chat(anthropic_to_chat(body), "anthropic", original=body)
             else:
@@ -414,21 +525,30 @@ class ProxyHandler(BaseHTTPRequestHandler):
         request = urllib.request.Request(
             self.state.client.endpoint + path, data=data, headers=headers, method=method
         )
+        self.state.write_log("upstream_request", method=method, path=path, body=body)
         try:
             with urllib.request.urlopen(request, timeout=60) as response:
-                return json.loads(response.read().decode("utf-8"))
+                raw_response = response.read()
+                self.state.write_body_log("upstream_response", raw_response,
+                                          method=method, path=path, status=response.status)
+                return json.loads(raw_response.decode("utf-8"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
+            self.state.write_body_log("upstream_response", detail.encode("utf-8"),
+                                      method=method, path=path, status=exc.code)
             raise CodeBuddyError(f"upstream HTTP {exc.code}: {detail[:1000]}") from exc
 
     def forward_chat(self, body: dict[str, Any], protocol: str, original: dict[str, Any] | None = None) -> None:
         self.state.ensure_auth()
+        self.diagnostic("upstream_request", protocol=protocol, **self.body_summary(body))
         stream = bool(body.get("stream"))
         upstream_body = dict(body)
         # The CodeBuddy endpoint is SSE-oriented.  Match codebuddy2api:
         # always request a stream and aggregate it for non-stream clients.
         upstream_body["stream"] = True
         upstream_body.setdefault("stream_options", {"include_usage": True})
+        self.state.write_log("upstream_request", protocol=protocol,
+                             method="POST", path="/v2/chat/completions", body=upstream_body)
         headers = {
             **self.state.client._auth_headers(),
             "Content-Type": "application/json",
@@ -443,16 +563,31 @@ class ProxyHandler(BaseHTTPRequestHandler):
             )
             try:
                 response = urllib.request.urlopen(request, timeout=300)
+                self.diagnostic("upstream_response", protocol=protocol, status=response.status,
+                                content_type=response.headers.get("Content-Type", "-"))
             except urllib.error.HTTPError as exc:
                 if exc.code == 401 and self.state.client.refresh():
                     return self.forward_chat(body, protocol, original)
                 detail = exc.read().decode("utf-8", errors="replace")
+                self.state.write_body_log("upstream_response", detail.encode("utf-8"),
+                                          protocol=protocol, method="POST",
+                                          path="/v2/chat/completions", status=exc.code)
+                self.diagnostic("upstream_error", protocol=protocol, status=exc.code,
+                                detail_length=len(detail))
                 raise CodeBuddyError(f"upstream HTTP {exc.code}: {detail[:1000]}") from exc
         with response:
             if stream:
                 self.stream_response(response, protocol, original)
             else:
-                data = collect_chat_stream(response)
+                raw_response = response.read()
+                self.state.write_body_log("upstream_response", raw_response, protocol=protocol,
+                                          status=getattr(response, "status", 200),
+                                          method="POST", path="/v2/chat/completions")
+                data = collect_chat_stream(io.BytesIO(raw_response))
+                content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+                self.diagnostic("response", protocol=protocol, stream=False,
+                                model=data.get("model"), finish_reason=((data.get("choices") or [{}])[0].get("finish_reason")),
+                                **self.text_summary(content))
                 self.send_json(200, self.convert_nonstream(data, protocol, original))
 
     def stream_response(self, response: Any, protocol: str, original: dict[str, Any] | None) -> None:
@@ -471,17 +606,25 @@ class ProxyHandler(BaseHTTPRequestHandler):
         emitted_response_created = False
         response_text = ""
         response_text_started = False
+        chunk_count = 0
+        done_seen = False
+        raw_chunks: list[bytes] = []
         for raw in response:
+            raw_chunks.append(raw)
             line = raw.decode("utf-8", errors="replace").strip()
             if not line.startswith("data:"):
                 continue
             data = line[5:].strip()
             if data == "[DONE]":
+                done_seen = True
                 break
             try:
                 chunk = json.loads(data)
             except json.JSONDecodeError:
                 continue
+            chunk_count += 1
+            if protocol == "openai":
+                response_text += str(((chunk.get("choices") or [{}])[0].get("delta") or {}).get("content") or "")
             events: list[tuple[str, dict[str, Any]]] = []
             if protocol == "responses":
                 if not emitted_response_created:
@@ -534,6 +677,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
         if protocol == "openai":
             self.wfile.write(b"data: [DONE]\n\n")
         self.wfile.flush()
+        raw_response = b"".join(raw_chunks)
+        self.state.write_body_log("upstream_response", raw_response, protocol=protocol,
+                                  status=getattr(response, "status", 200),
+                                  method="POST", path="/v2/chat/completions")
+        logged_text = anthropic_state.text if anthropic_state is not None else response_text
+        self.diagnostic("response", protocol=protocol, stream=True, chunk_count=chunk_count,
+                        upstream_done=done_seen, **self.text_summary(logged_text))
 
     @staticmethod
     def convert_nonstream(data: dict[str, Any], protocol: str, original: dict[str, Any] | None) -> dict[str, Any]:
@@ -603,14 +753,24 @@ def main() -> int:
     parser.add_argument("--session-file", type=pathlib.Path)
     parser.add_argument("--mock-dir", type=pathlib.Path,
                         help="只使用指定目录中的真实响应 fixture，不访问 CodeBuddy 后端")
+    parser.add_argument("--log-file", type=pathlib.Path,
+                        default=pathlib.Path(os.getenv("CODEBUDDY_PROXY_LOG_FILE", "logs/codebuddy-proxy.jsonl")),
+                        help="记录完整请求/响应的 JSONL 文件（默认 logs/codebuddy-proxy.jsonl）")
+    parser.add_argument("--desensitize", action="store_true",
+                        help="启用脱敏处理，对 system 消息中的敏感词插入零宽空格（缓解审核误拦）")
+    parser.add_argument("--optimize-context", action="store_true",
+                        help="启用消息压缩优化（仅 /v1/responses），大幅减少 token 使用（适用于 Codex CLI 等长上下文场景）")
     parser.add_argument("--login", action="store_true", help="启动时执行浏览器登录/账户查询")
-    parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
     client = CodeBuddyClient(args.endpoint, session_file=args.session_file)
     if args.login:
         client.login(open_browser=not args.no_browser)
     server = ThreadingHTTPServer((args.host, args.port), ProxyHandler)
-    server.proxy_state = ProxyState(client, args.mock_dir)  # type: ignore[attr-defined]
+    server.proxy_state = ProxyState(
+        client, args.mock_dir, args.log_file,
+        enable_desensitize=args.desensitize,
+        enable_optimize_context=args.optimize_context
+    )  # type: ignore[attr-defined]
     print(f"CodeBuddy proxy listening on http://{args.host}:{args.port}")
     print("Endpoints: /v1/models /v1/chat/completions /v1/responses /v1/messages /health")
     try:
