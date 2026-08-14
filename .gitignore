@@ -225,3 +225,5 @@ codebuddy-session.json
 
 # Original plugin bundle contains embedded environment credentials.
 coding-copilot-latest.vsix
+logs/
+*.log
