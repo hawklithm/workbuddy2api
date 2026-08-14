@@ -121,6 +121,41 @@ SENSITIVE_TERMS: list[str] = [
     "Anthropic",
     "Co-Authored-By",
     "noreply@anthropic.com",
+    # AI 助手身份特征词（避免暴露使用 Claude Code / Oh My Pi）
+    "Oh My Pi",
+    "omp",
+    "Kiro",
+    "Codex CLI",
+    "coding harness",
+    "harness",
+    "subagent",
+    "subagents",
+    "MCP Server",
+    "MCP tool",
+    "tool call",
+    "function call",
+    "antml:invoke",
+    "antml:function_calls",
+    # 内部协议/URI（暴露内部实现）
+    "skill://",
+    "agent://",
+    "artifact://",
+    "rule://",
+    "memory://",
+    "local://",
+    "history://",
+    "issue://",
+    "pr://",
+    "xd://",
+    # 工具/插件名称
+    "AutoImprove",
+    "CodeGraph",
+    "codegraph_explore",
+    "Rust Token Killer",
+    # 配置文件特征
+    "AGENTS.md",
+    "CLAUDE.md",
+    ".cursorrules",
 ]
 
 # 编译成一个大正则，按词长降序，避免短词先吃掉长词。

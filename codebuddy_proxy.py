@@ -543,6 +543,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.diagnostic("upstream_request", protocol=protocol, **self.body_summary(body))
         stream = bool(body.get("stream"))
         upstream_body = dict(body)
+        # 应用脱敏处理
+        if self.state.enable_desensitize:
+            upstream_body = desensitize_body(upstream_body, compact_harness=True)
         # The CodeBuddy endpoint is SSE-oriented.  Match codebuddy2api:
         # always request a stream and aggregate it for non-stream clients.
         upstream_body["stream"] = True
@@ -761,6 +764,7 @@ def main() -> int:
     parser.add_argument("--optimize-context", action="store_true",
                         help="启用消息压缩优化（仅 /v1/responses），大幅减少 token 使用（适用于 Codex CLI 等长上下文场景）")
     parser.add_argument("--login", action="store_true", help="启动时执行浏览器登录/账户查询")
+    parser.add_argument("--no-browser", action="store_true", help="登录时不自动打开浏览器")
     args = parser.parse_args()
     client = CodeBuddyClient(args.endpoint, session_file=args.session_file)
     if args.login:
