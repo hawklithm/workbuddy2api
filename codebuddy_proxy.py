@@ -831,13 +831,22 @@ async def collect_upstream(
                             # 使用 DSML 缓冲区处理
                             cleaned_content, detected_tool_calls = dsml_buffer.add_chunk(chunk_content)
                             
+                            # 调试日志：记录 DSML 解析结果
+                            if detected_tool_calls:
+                                diagnostic("dsml_detected", 
+                                          tool_count=len(detected_tool_calls),
+                                          tools=[tc["function"]["name"] for tc in detected_tool_calls])
+                            
                             # 累积清理后的 content
                             if cleaned_content:
                                 content += cleaned_content
                             
-                            # 如果检测到 tool_calls
+                            # 如果检测到 tool_calls，添加到 dict 中
                             if detected_tool_calls:
-                                tool_calls.extend(detected_tool_calls)
+                                for detected_call in detected_tool_calls:
+                                    # 找到下一个可用的 index
+                                    next_idx = len(tool_calls_dict)
+                                    tool_calls_dict[next_idx] = detected_call
                         
                         # 处理原生 tool_calls（使用 dict 累加，避免预填充）
                         if delta.get("tool_calls"):

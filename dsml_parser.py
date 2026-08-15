@@ -234,7 +234,6 @@ def consume_dsml_prefix(text: str, idx: int) -> Tuple[int, bool]:
     if idx + 8 < len(text):
         normalized = ""
         pos = idx
-        original_pos = pos
         for _ in range(8):
             ch, length = normalize_fullwidth_ascii(text, pos)
             normalized += ch
@@ -433,17 +432,17 @@ def parse_xml_attributes(attrs_text: str) -> Dict[str, str]:
 
 def parse_invoke_parameters(invoke_body: str) -> Dict[str, Any]:
     """
-    递归解析 <invoke> 内的参数（✅ 修复双层 while 循环问题）
+    递归解析 <invoke> 内的参数
     
     支持：
-    - <parameter name="cmd">pwd</parameter>
-    - <cmd>pwd</cmd>
+    - CDATA 块：<![CDATA[value]]> （优先级最高，不进行 HTML 解码）
+    - DSML 参数：<||DSML||parameter name="cmd">value</||DSML||parameter>
+    - 简单标签：<cmd>value</cmd>
     - 嵌套结构
     """
     params = {}
     i = 0
     
-    # ✅ 修复：外层循环不再有错误的条件
     while i < len(invoke_body):
         # 跳过空白
         while i < len(invoke_body) and invoke_body[i] in (' ', '\t', '\r', '\n'):
@@ -472,38 +471,60 @@ def parse_invoke_parameters(invoke_body: str) -> Dict[str, Any]:
         # 提取参数名和值
         param_name = None
         
-        # 方法 1: <parameter name="cmd">...</parameter>
+        # 方法 1: <||DSML||parameter name="cmd">...</||DSML||parameter> (优先级高)
         if tag.name == "parameter":
             attrs = parse_xml_attributes(tag.attributes)
             param_name = attrs.get("name")
-        else:
-            # 方法 2: <cmd>...</cmd> (✅ 现在支持任意标签名)
-            param_name = tag.name
-        
-        if param_name:
-            # 提取值
-            value_start = tag.end + 1
-            value_end = close_tag.start
-            value_text = invoke_body[value_start:value_end].strip()
             
-            # 递归解析（如果值包含子元素）
-            if '<' in value_text and '>' in value_text:
-                nested_params = parse_invoke_parameters(value_text)
-                if nested_params:
-                    params[param_name] = nested_params
+            if param_name:
+                value_start = tag.end + 1
+                value_end = close_tag.start
+                value_text = invoke_body[value_start:value_end].strip()
+                
+                # 优先检测 CDATA 块
+                if value_text.startswith("<![CDATA[") and value_text.endswith("]]>"):
+                    # CDATA 块：提取原始内容，不进行 HTML 解码
+                    params[param_name] = value_text[9:-3]
                 else:
                     params[param_name] = html.unescape(value_text)
-            else:
-                params[param_name] = html.unescape(value_text)
+        else:
+            # 方法 2: <cmd>...</cmd> (仅当参数名尚未存在时)
+            param_name = tag.name
+            
+            if param_name and param_name not in params:
+                value_start = tag.end + 1
+                value_end = close_tag.start
+                value_text = invoke_body[value_start:value_end].strip()
+                
+                # 优先检测 CDATA 块
+                if value_text.startswith("<![CDATA[") and value_text.endswith("]]>"):
+                    # CDATA 块：提取原始内容，不进行 HTML 解码
+                    params[param_name] = value_text[9:-3]
+                    i = close_tag.end + 1
+                    continue
+                
+                # 检查值是否包含 XML 子元素
+                has_complete_tags = False
+                if '<' in value_text and '>' in value_text:
+                    # 简单检测：查找是否有成对的标签
+                    test_tag, test_found = scan_tool_markup_tag_at(value_text, value_text.find('<'))
+                    if test_found and not test_tag.closing:
+                        test_close, test_close_found = find_matching_tool_markup_close(value_text, test_tag)
+                        has_complete_tags = test_close_found
+                
+                if has_complete_tags:
+                    nested_params = parse_invoke_parameters(value_text)
+                    if nested_params:
+                        params[param_name] = nested_params
+                    else:
+                        params[param_name] = html.unescape(value_text)
+                else:
+                    # 纯文本或不完整的 XML，作为字符串处理
+                    params[param_name] = html.unescape(value_text)
         
         i = close_tag.end + 1
     
     return params
-
-
-# ============================================================================
-# 工具调用解析
-# ============================================================================
 
 def parse_single_xml_tool_call(block: XMLElementBlock) -> Tuple[Optional[ParsedToolCall], bool]:
     """解析单个 XML 工具调用块"""
@@ -524,6 +545,45 @@ def parse_single_xml_tool_call(block: XMLElementBlock) -> Tuple[Optional[ParsedT
         }
     )
     
+    return tool_call, True
+
+
+# ============================================================================
+# 工具调用解析
+def find_invoke_blocks(text: str) -> List[XMLElementBlock]:
+    """查找所有 <invoke> 块（跳过忽略区域）"""
+    blocks = []
+    i = 0
+    
+    while i < len(text):
+        # 使用新的忽略区域检测
+        tag, found = find_tool_markup_tag_outside_ignored(text, i)
+        
+        if not found:
+            break
+        
+        if tag.name == "invoke" and not tag.closing:
+            close_tag, found_close = find_matching_tool_markup_close(text, tag)
+            
+            if found_close:
+                blocks.append(XMLElementBlock(
+                    start=tag.start,
+                    end=close_tag.end + 1,
+                    tag_name=tag.name,
+                    attrs=tag.attributes,
+                    body=text[tag.end + 1:close_tag.start]
+                ))
+                i = close_tag.end + 1
+                continue
+        
+    return OpenAIToolCall(
+        id=f"call_{tool_name}_{id(params)}",
+        type="function",
+        function={
+            "name": tool_name,
+            "arguments": json.dumps(params, ensure_ascii=False)
+        }
+    )
     return tool_call, True
 
 

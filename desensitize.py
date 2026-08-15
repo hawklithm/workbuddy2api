@@ -165,58 +165,7 @@ _PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# 预编译运行时块替换正则（避免每次调用 _prune_runtime_fragments 时重新编译）
-# 每个元组: (编译后的正则, 替换文本)
-_RUNTIME_BLOCK_PATTERNS: list[tuple[re.Pattern, str]] = [
-    (
-        re.compile(
-            r"\s*" + re.escape(start_tag) + r".*?" + re.escape(end_tag) + r"\s*",
-            re.DOTALL,
-        ),
-        replacement,
-    )
-    for start_tag, end_tag, replacement in _RUNTIME_BLOCK_REPLACEMENTS
-]
-
-# 预编译 Codex 节提取正则
-_CODEX_SECTION_PATTERNS: dict[str, re.Pattern] = {
-    heading: re.compile(
-        re.escape(heading) + r".*?(?=\n## |\n# |\Z)",
-        re.DOTALL,
-    )
-    for heading in ("## Personality", "# AGENTS.md spec")
-}
-
-# Codex CLI / Claude Code 会把大量运行时上下文包装进一条 user 消息里
-_HARUSER_MARKERS = (
-    "# AGENTS.md instructions",
-    "<environment_context>",
-    "<permissions instructions>",
-    "<collaboration_mode>",
-    "<skills_instructions>",
-    "<system-reminder>",
-    "# claudeMd",
-)
-
-_CODEX_SYSTEM_MARKERS = (
-    "You are a coding agent running in the Codex CLI",
-    "Within this context, Codex refers to",
-    "# How you work",
-    "You are Claude Code",
-)
-
-_PERMISSIONS_MARKERS = (
-    "<permissions instructions>",
-    "Filesystem sandboxing defines which files can be read or written.",
-    "## How to request escalation",
-)
-
-_SKILLS_MARKERS = (
-    "<skills_instructions>",
-    "### Available skills",
-    "### How to use skills",
-)
-
+# 块替换元组定义（必须在使用前定义）
 _RUNTIME_BLOCK_REPLACEMENTS = (
     (
         "<environment_context>",
@@ -246,11 +195,33 @@ _RUNTIME_BLOCK_REPLACEMENTS = (
         "</plugins_instructions>",
         "Runtime plugin metadata is available when relevant.",
     ),
+)
+
+# 预编译运行时块替换正则（避免每次调用 _prune_runtime_fragments 时重新编译）
+# 每个元组: (编译后的正则, 替换文本)
+_RUNTIME_BLOCK_PATTERNS: list[tuple[re.Pattern, str]] = [
     (
-        "<system-reminder>",
-        "</system-reminder>",
-        "Runtime reminder context is provided by the harness.",
-    ),
+        re.compile(
+            r"\s*" + re.escape(start_tag) + r".*?" + re.escape(end_tag) + r"\s*",
+            re.DOTALL,
+        ),
+        replacement,
+    )
+    for start_tag, end_tag, replacement in _RUNTIME_BLOCK_REPLACEMENTS
+]
+
+# 预编译 Codex 节提取正则
+_CODEX_SECTION_PATTERNS: dict[str, re.Pattern] = {
+    heading: re.compile(
+        re.escape(heading) + r".*?(?=\n## |\n# |\Z)",
+        re.DOTALL,
+    )
+    for heading in ("## Personality", "# AGENTS.md spec")
+}
+
+_SKILLS_MARKERS = (
+    "<skills>",
+    "</skills>",
 )
 
 _RUNTIME_TAIL_MARKERS = (
@@ -258,6 +229,30 @@ _RUNTIME_TAIL_MARKERS = (
     "Available agent types for the Agent tool:",
     "The following sk​ills are available for use with the Sk​ill tool:",
     "## MCP Server Instructions",
+)
+
+_CODEX_SYSTEM_MARKERS = (
+    "You are a coding agent running in the Codex CLI",
+    "Within this context, Codex refers to",
+    "# How you work",
+    "You are Claude Code",
+)
+
+_PERMISSIONS_MARKERS = (
+    "<permissions instructions>",
+    "Filesystem sandboxing defines which files can be read or written.",
+    "## How to request escalation",
+)
+
+_SKILLS_MARKERS = (
+    "<skills_instructions>",
+    "### Available skills",
+    "### How to use skills",
+)
+
+_HARNESS_USER_MARKERS = (
+    "Project files updated:",
+    "Confirmed edits:",
 )
 
 _RUNTIME_TAIL_SUMMARY = (
