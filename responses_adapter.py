@@ -43,30 +43,48 @@ def _extract_text(value: Any) -> str:
 
 
 def _convert_tools_for_chat(tools: list[dict]) -> list[dict]:
-    """将Responses工具格式转换为Chat格式
+    """将Responses工具格式转换为Chat格式,清理CodeBuddy后端不兼容的字段
     
-    Responses: {name, description, parameters, strict}
-    Chat: {type: "function", function: {name, description, parameters, strict}}
+    Responses: {type, name, description, parameters, strict}
+    Chat: {type: "function", function: {name, description, parameters}}
+    
+    清理不兼容字段:
+    - additionalProperties (CodeBuddy 后端不支持)
+    - strict (OpenAI 扩展,其他后端不认识)
     """
     result = []
     for tool in tools:
+        # 提取工具定义的核心字段
         if tool.get("type") == "function" and tool.get("function"):
-            # 已经是Chat格式
-            result.append(tool)
+            # 已经是Chat格式: {type: "function", function: {...}}
+            func = tool["function"]
+            name = func.get("name", "")
+            description = func.get("description", "")
+            parameters = func.get("parameters", {})
         elif tool.get("name"):
-            # Responses格式 → Chat格式
-            result.append({
-                "type": "function",
-                "function": {
-                    "name": tool["name"],
-                    "description": tool.get("description", ""),
-                    "parameters": tool.get("parameters", {}),
-                    **({"strict": tool["strict"]} if "strict" in tool else {}),
-                },
-            })
+            # Responses格式: {type, name, description, parameters, strict}
+            name = tool["name"]
+            description = tool.get("description", "")
+            parameters = tool.get("parameters", {})
         else:
-            # 未知格式，原样保留
+            # 未知格式,原样保留
             result.append(tool)
+            continue
+        
+        # 清理 parameters,移除 additionalProperties
+        cleaned_params = dict(parameters) if isinstance(parameters, dict) else {}
+        cleaned_params.pop("additionalProperties", None)
+        
+        # 构造干净的 Chat 格式工具定义(不包含 strict)
+        result.append({
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": description,
+                "parameters": cleaned_params,
+            }
+        })
+    
     return result
 
 
