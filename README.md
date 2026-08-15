@@ -110,6 +110,8 @@ codex --profile codebuddy "你的任务"
 --optimize-context       启用消息压缩优化（Codex CLI 推荐）
 --login                  启动时执行浏览器登录
 --no-browser             登录时不打开浏览器
+--verbose-llm            log full LLM request/response content 
+                        (default: summary only, saves 98% space)
 --mock-dir DIR           使用 mock 数据（测试用）
 ```
 
