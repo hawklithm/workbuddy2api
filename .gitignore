@@ -21,6 +21,9 @@ logs/
 *.log
 *.jsonl
 
+# Mock data (may contain sensitive info)
+fixtures/
+
 # IDE
 .vscode/
 .idea/

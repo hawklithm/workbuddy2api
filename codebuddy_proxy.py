@@ -129,7 +129,17 @@ class ProxyState:
         log_file: pathlib.Path | None,
         enable_desensitize: bool = False,
         enable_optimize_context: bool = False,
+        verbose_llm: bool = False,
         logger: logging.Logger | None = None,
+    ):
+        self.client = client
+        self.mock_dir = mock_dir
+        self.log_file = log_file
+        self.enable_desensitize = enable_desensitize
+        self.enable_optimize_context = enable_optimize_context
+        self.verbose_llm = verbose_llm
+        self.logger = logger
+        self.started_at = time.time()
     ):
         self.client = client
         self.mock_dir = mock_dir
