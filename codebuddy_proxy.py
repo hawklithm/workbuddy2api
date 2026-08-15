@@ -659,9 +659,22 @@ async def stream_upstream(
                 
                 diagnostic("upstream_response", protocol=protocol, status=resp.status_code)
                 
+                # 【配置】最大流式响应时长（秒）
+                MAX_STREAM_DURATION = 60  # 60秒适合交互式对话，180秒适合复杂任务
+                
                 # 异步迭代行（自动处理超时和分块）
                 async for line in resp.aiter_lines():
-                    # 【日志】进度记录
+                    # 【保护】检查总时长，防止流无限期运行
+                    elapsed = time.time() - stream_start_time
+                    if elapsed > MAX_STREAM_DURATION:
+                        diagnostic("stream_duration_exceeded", protocol=protocol,
+                                  chunks=chunk_count, elapsed=round(elapsed, 2),
+                                  max_duration=MAX_STREAM_DURATION)
+                        state.write_log("stream_duration_exceeded", protocol=protocol, 
+                                       chunks=chunk_count, elapsed=round(elapsed, 2))
+                        break  # 强制结束流
+                    
+                    # 【日志】进度记录（每10个chunk且间隔5秒）
                     if chunk_count > 0 and chunk_count % 10 == 0:
                         now = time.time()
                         if now - last_progress_log >= 5:
@@ -669,7 +682,6 @@ async def stream_upstream(
                                 chunks=chunk_count,
                                 elapsed=round(now - stream_start_time, 2))
                             last_progress_log = now
-                    
                     line = line.strip()
                     raw_chunks.append(line.encode("utf-8"))
                     
