@@ -953,6 +953,26 @@ def convert_nonstream(data: dict[str, Any], protocol: str, original: dict[str, A
         }
     
     elif protocol == "responses":
+        # 构建 content 数组（文本 + 工具调用）
+        content_parts = []
+        if content:
+            content_parts.append({"type": "output_text", "text": content})
+        
+        # 处理工具调用
+        for call in message.get("tool_calls") or []:
+            fn = call.get("function") or {}
+            try:
+                arguments = json.loads(fn.get("arguments", "{}"))
+            except json.JSONDecodeError:
+                arguments = fn.get("arguments", "")
+            
+            content_parts.append({
+                "type": "function_call",
+                "id": call.get("id", ""),
+                "name": fn.get("name", ""),
+                "arguments": arguments
+            })
+        
         return {
             "id": "resp_" + uuid.uuid4().hex,
             "object": "response",
@@ -961,7 +981,7 @@ def convert_nonstream(data: dict[str, Any], protocol: str, original: dict[str, A
             "output": [{
                 "type": "message",
                 "role": "assistant",
-                "content": [{"type": "output_text", "text": content}]
+                "content": content_parts
             }]
         }
     
