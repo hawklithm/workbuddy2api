@@ -493,7 +493,7 @@ async def stream_upstream(
     
     
     response_id = "resp_" + uuid.uuid4().hex
-    anthropic_state = AnthropicStreamState(
+    anthropic_state = AnthropicStreamConverter(
         (original or {}).get("model", "default")
     ) if protocol == "anthropic" and AnthropicStreamConverter else None
     
