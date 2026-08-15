@@ -45,4 +45,9 @@ build/
 *.tmp
 .DS_Store
 # 将 CODE_REVIEW md 文档添加到 .gitignore
-CODE_REVIEW_*.md
+# 文档（除了 README.md）
+*.md
+!README.md
+
+# VS Code 扩展文件
+*.vsix
