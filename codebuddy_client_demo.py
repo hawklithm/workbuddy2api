@@ -109,7 +109,7 @@ class CodeBuddyClient:
         except json.JSONDecodeError as exc:
             raise CodeBuddyError(f"{path} 返回的不是 JSON: {raw[:300]!r}") from exc
 
-    def _auth_headers(self, *, access: bool = True, refresh: bool = False) -> dict[str, str]:
+    def auth_headers(self, *, access: bool = True, refresh: bool = False) -> dict[str, str]:
         account = self.session.get("account") or {}
         auth = self.session.get("auth") or {}
         headers: dict[str, str] = {}
@@ -208,7 +208,7 @@ class CodeBuddyClient:
                 "POST",
                 f"/v2{self.prefix}/auth/token/refresh",
                 headers={
-                    **self._auth_headers(access=False, refresh=True),
+                    **self.auth_headers(access=False, refresh=True),
                     "X-Auth-Refresh-Source": "plugin",
                 },
                 body={},
@@ -250,7 +250,7 @@ class CodeBuddyClient:
             f"{self.endpoint}/v2/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
             headers={
-                **self._auth_headers(),
+                **self.auth_headers(),
                 "Content-Type": "application/json",
                 "Accept": "text/event-stream",
             },

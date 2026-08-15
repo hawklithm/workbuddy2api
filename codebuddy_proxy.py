@@ -448,7 +448,7 @@ async def forward_chat(
     
     url = state.client.endpoint + "/v2/chat/completions"
     headers = {
-        **state.client._auth_headers(),
+        **state.client.auth_headers(),
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
     }

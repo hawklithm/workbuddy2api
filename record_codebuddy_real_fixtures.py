@@ -58,7 +58,7 @@ def write_fixture(path: pathlib.Path, *, request: dict[str, Any], status: int,
 def direct_request(client: CodeBuddyClient, method: str, path: str,
                    body: Any = None, *, accept: str = "application/json") -> tuple[int, Any, bytes, str]:
     headers = {
-        **client._auth_headers(),
+        **client.auth_headers(),
         "Accept": accept,
         "X-Product": "SaaS",
         # The VSIX sends a CodeBuddy IDE UA. The config service rejects a
