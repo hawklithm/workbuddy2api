@@ -702,7 +702,7 @@ async def stream_upstream(
         diagnostic("response", protocol=protocol, stream=True, chunk_count=chunk_count,
             upstream_done=done_seen, duration=stream_duration, **text_summary(logged_text))
         state.write_log("stream_completed", protocol=protocol, chunks=chunk_count,
-                       duration=stream_duration, done_seen=done_seen)
+            duration=stream_duration, done_seen=done_seen)
 
 
 # ============================================================================
