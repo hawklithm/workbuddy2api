@@ -973,6 +973,7 @@ def main():
         log_file=args.log_file,
         enable_desensitize=args.desensitize,
         enable_optimize_context=args.optimize_context,
+        verbose_llm=args.verbose_llm,
         logger=logger
     )
     
