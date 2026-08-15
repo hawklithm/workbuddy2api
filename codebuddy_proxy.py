@@ -336,11 +336,49 @@ async def list_models():
     state.ensure_auth()
     
     # 完整的 Codex ModelInfo 格式(基于 codex-rs/protocol/src/openai_models.rs)
+    # 从 CodeBuddy 扩展 product.json 提取的真实模型列表（2026-07-13 版本）
+    # 共 25 个模型，涵盖 DeepSeek、GLM、Kimi、Hunyuan、Claude 等
     models = [
-        {"id": "deepseek-v4-flash", "name": "DeepSeek V4 Flash", "vendor": "deepseek"},
-        {"id": "glm-5.2", "name": "GLM-5.2", "vendor": "zhipu"},
-        {"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro", "vendor": "deepseek"},
-        {"id": "auto", "name": "Auto", "vendor": "codebuddy"},
+        # 默认模型
+        {"id": "default", "name": "Default", "vendor": "codebuddy", "max_input": 168000, "max_output": 32000, "tool_call": True, "images": False},
+        
+        # GLM 系列
+        {"id": "glm-4.7", "name": "GLM-4.7", "vendor": "zhipu", "max_input": 200000, "max_output": 48000, "tool_call": True, "images": False, "reasoning": True, "desc": "GLM-4.7 model, Well-rounded model for everyday use"},
+        {"id": "glm-4.6", "name": "GLM-4.6", "vendor": "zhipu", "max_input": 168000, "max_output": 32000, "tool_call": True, "images": False, "desc": "Advanced language model with strong reasoning capabilities"},
+        
+        # DeepSeek 系列
+        {"id": "deepseek-v3-2-volc", "name": "DeepSeek-V3.2", "vendor": "deepseek", "max_input": 96000, "max_output": 32000, "tool_call": True, "images": False, "reasoning": True, "desc": "DeepSeek-V3.2, good for daily use"},
+        {"id": "deepseek-v3-1-volc", "name": "DeepSeek-V3-1-Terminus", "vendor": "deepseek", "max_input": 96000, "max_output": 32000, "tool_call": True, "images": False, "desc": "DeepSeek's flagship model, good for planning, debugging, coding, and more"},
+        {"id": "deepseek-v3-1-lkeap", "name": "DeepSeek-V3-1", "vendor": "deepseek", "max_input": 96000, "max_output": 32000, "tool_call": True, "images": False, "desc": "DeepSeek's flagship model. Good for planning, debugging, coding, and more"},
+        {"id": "deepseek-v3-1", "name": "DeepSeek-V3.1", "vendor": "deepseek", "max_input": 96000, "max_output": 32000, "tool_call": True, "images": False, "desc": "DeepSeek's flagship model. Good for planning, debugging, coding, and more"},
+        {"id": "deepseek-v3-0324-lkeap", "name": "DeepSeek-V3-0324", "vendor": "deepseek", "max_input": 112000, "max_output": 16000, "tool_call": True, "images": False, "desc": "DeepSeek's flagship model, good for planning, debugging, coding, and more"},
+        {"id": "deepseek-r1-0528-lkeap", "name": "DeepSeek-R1-0528", "vendor": "deepseek", "max_input": 96000, "max_output": 16000, "tool_call": True, "images": False, "desc": "Open-source reasoning model from DeepSeek, optimised for logic & math"},
+        
+        # Kimi 系列
+        {"id": "kimi-k2-instruct-taiji", "name": "Kimi-K2", "vendor": "moonshot", "max_input": 31000, "max_output": 8192, "tool_call": True, "images": False},
+        
+        # Hunyuan (混元) 系列 - 对话模型
+        {"id": "completion-gf", "name": "completion-gf", "vendor": "tencent", "max_input": 200000, "max_output": 8192, "tool_call": True, "images": False},
+        {"id": "hunyuan-chat", "name": "Hunyuan-Turbos", "vendor": "tencent", "max_input": 200000, "max_output": 8192, "tool_call": True, "images": False, "desc": "Tencent's lightweight, fast general-purpose model"},
+        {"id": "hunyuan-2.0-instruct", "name": "Hunyuan-2.0-Instruct", "vendor": "tencent", "max_input": 128000, "max_output": 16000, "tool_call": True, "images": False, "reasoning": True},
+  
+        # Claude 系列
+        {"id": "default-1.1", "name": "Claude-3.7-Sonnet", "vendor": "anthropic", "max_input": None, "max_output": 8192, "tool_call": True, "images": True},
+        {"id": "default-1.2", "name": "Claude-4.0-Sonnet", "vendor": "anthropic", "max_input": 200000, "max_output": 24000, "tool_call": True, "images": True, "desc": "Great for daily use. Good at most things"},
+        
+        # Hunyuan 视觉模型
+        {"id": "hunyuan-turbos-vision", "name": "hunyuan-turbos-vision", "vendor": "tencent", "max_input": 16000, "max_output": 16000, "tool_call": True, "images": True},
+        {"id": "hunyuan-t1-vision", "name": "hunyuan-turbos-vision", "vendor": "tencent", "max_input": 16000, "max_output": 24000, "tool_call": True, "images": True},
+        
+        # 补全模型（仅用于代码补全，不适合对话）
+        {"id": "hunyuan-3b", "name": "hunyuan-3b", "vendor": "tencent", "max_input": None, "max_output": 256, "tool_call": False, "images": False},
+        {"id": "hunyuan-7b-dense", "name": "hunyuan-7b", "vendor": "tencent", "max_input": None, "max_output": 256, "tool_call": False, "images": False},
+        {"id": "codewise-7b-021", "name": "codewise-7b-021", "vendor": "anthropic", "max_input": None, "max_output": 256, "tool_call": False, "images": False},
+        {"id": "codewise-completions", "name": "codewise-completions", "vendor": "anthropic", "max_input": None, "max_output": 256, "tool_call": False, "images": False},
+        {"id": "deepseek-r1-0528", "name": "deepseek-r1", "vendor": "tencent", "max_input": None, "max_output": 256, "tool_call": False, "images": False},
+        {"id": "deepseek-v3-0324-taco-completion", "name": "deepseek-v3-0324", "vendor": "tencent", "max_input": None, "max_output": 256, "tool_call": False, "images": False},
+        {"id": "deepseek-v3-0324", "name": "deepseek-v3", "vendor": "tencent", "max_input": None, "max_output": 8192, "tool_call": False, "images": False},
+        {"id": "codewise-navi-v1-2-taco", "name": "codewise-navi-v1-2-taco", "vendor": "tencent", "max_input": None, "max_output": 256, "tool_call": False, "images": False},
     ]
     
     data = [
@@ -349,14 +387,14 @@ async def list_models():
             "id": m["id"],
             "slug": m["id"],
             "display_name": m.get("name", m["id"]),
-            "description": None,
+            "description": m.get("desc"),
             "object": "model",
-            "created": 0,
+            "created": 1720872952,  # 2026-07-13 的时间戳
             "owned_by": m.get("vendor", "codebuddy"),
             
             # Reasoning 支持
             "default_reasoning_level": None,
-            "supported_reasoning_levels": [],
+            "supported_reasoning_levels": ["extended"] if m.get("reasoning") else [],
             "default_reasoning_summary": "auto",
             "supports_reasoning_summary_parameter": True,
             
@@ -365,7 +403,7 @@ async def list_models():
             "apply_patch_tool_type": None,
             "web_search_tool_type": "text",
             "experimental_supported_tools": [],
-            "supports_parallel_tool_calls": True,
+            "supports_parallel_tool_calls": m.get("tool_call", False),
             
             # 可见性和优先级
             "visibility": "list",
@@ -373,8 +411,8 @@ async def list_models():
             "priority": 1,
             
             # 上下文窗口
-            "context_window": None,
-            "max_context_window": None,
+            "context_window": m.get("max_input"),
+            "max_context_window": m.get("max_output"),
             "auto_compact_token_limit": None,
             "effective_context_window_percent": 95,
             
@@ -385,7 +423,7 @@ async def list_models():
             },
             
             # 多模态支持
-            "input_modalities": ["text"],
+            "input_modalities": ["text", "image"] if m.get("images") else ["text"],
             "supports_image_detail_original": False,
             
             # Verbosity
