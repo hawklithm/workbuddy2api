@@ -528,6 +528,15 @@ async def stream_upstream(
                     error_body = await resp.aread()
                     error_text = error_body.decode("utf-8", "replace")
                     
+                    
+                    # 【诊断】记录 400 错误时的工具定义
+                    if resp.status_code == 400:
+                        tools = body.get("tools", [])
+                        diagnostic("upstream_400_error",
+                                   status=resp.status_code,
+                                   error_preview=error_text[:200],
+                                   tool_count=len(tools),
+                                   sample_tools=tools[:2] if tools else [])
                     diagnostic("upstream_error", protocol=protocol,
                         status=resp.status_code,
                         detail=error_text[:500])
@@ -634,14 +643,49 @@ async def stream_upstream(
                         yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode()
                     
                     elif protocol == "responses" and responses_state:
-                        # 使用 ResponsesStreamConverter 转换事件
+                        # 【修复】提取 content 并通过 DSML 缓冲区处理
+                        chunk_content = str(
+                            ((chunk.get("choices") or [{}])[0].get("delta") or {}).get("content") or ""
+                        )
+                        
+                        if chunk_content:
+                            # 使用 DSML 缓冲区处理（清理标记，检测工具调用）
+                            cleaned_content, chunk_tool_calls = dsml_buffer.add_chunk(chunk_content)
+                            
+                            # 累积清理后的文本
+                            if cleaned_content:
+                                response_text += cleaned_content
+                            
+                            # 记录检测到的工具调用
+                            if chunk_tool_calls:
+                                detected_tool_calls.extend(chunk_tool_calls)
+                            
+                            # 修改 chunk 中的 content 为清理后的内容
+                            if "choices" in chunk and len(chunk["choices"]) > 0:
+                                if "delta" not in chunk["choices"][0]:
+                                    chunk["choices"][0]["delta"] = {}
+                                chunk["choices"][0]["delta"]["content"] = cleaned_content
+                            
+                            # 如果检测到工具调用，添加 tool_calls 字段
+                            if chunk_tool_calls and dsml_buffer.should_emit_tool_calls():
+                                if "choices" in chunk and len(chunk["choices"]) > 0:
+                                    chunk["choices"][0]["finish_reason"] = "tool_calls"
+                                    chunk["choices"][0]["delta"]["tool_calls"] = [
+                                        {
+                                            "index": idx,
+                                            "id": f"call_{uuid.uuid4().hex[:24]}",
+                                            "type": "function",
+                                            "function": {
+                                                "name": tc["name"],
+                                                "arguments": json.dumps(tc["input"], ensure_ascii=False)
+                                            }
+                                        }
+                                        for idx, tc in enumerate(detected_tool_calls)
+                                    ]
+                        
+                        # 使用 ResponsesStreamConverter 转换事件（此时 chunk 已经被清理）
                         events = responses_state.feed_chunk(chunk)
                         for event_name, event_data in events:
-                            # 【修复】从 output_text.delta 事件中提取文本累积到 response_text
-                            if event_name == "response.output_text.delta":
-                                delta_text = event_data.get("delta", "")
-                                response_text += delta_text
-                            
                             yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
                     elif protocol == "anthropic" and anthropic_state:
                         # 提取 content 并通过 DSML 缓冲区处理
