@@ -502,9 +502,9 @@ async def stream_upstream(
         (original or {}).get("model", "default")
     ) if protocol == "anthropic" and AnthropicStreamConverter else None
     
-    # Responses 协议转换器
+    # Responses 协议转换器（使用传入的 body 参数）
     responses_state = ResponsesStreamConverter(
-        model=upstream_body.get("model", "auto")
+        model=body.get("model", "auto")
     ) if protocol == "responses" and ResponsesStreamConverter else None
     
     # DSML 缓冲区（用于处理可能的文本标记格式工具调用）
@@ -637,6 +637,11 @@ async def stream_upstream(
                         # 使用 ResponsesStreamConverter 转换事件
                         events = responses_state.feed_chunk(chunk)
                         for event_name, event_data in events:
+                            # 【修复】从 output_text.delta 事件中提取文本累积到 response_text
+                            if event_name == "response.output_text.delta":
+                                delta_text = event_data.get("delta", "")
+                                response_text += delta_text
+                            
                             yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
                     elif protocol == "anthropic" and anthropic_state:
                         # 提取 content 并通过 DSML 缓冲区处理
@@ -686,43 +691,10 @@ async def stream_upstream(
                             yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
                 
                 # 发送结束事件
-                if protocol == "responses" and response_text_started:
-                    for event_name, payload in [
-                        ("response.output_text.done", {
-                            "type": "response.output_text.done",
-                            "item_id": response_id,
-                            "output_index": 0,
-                            "content_index": 0,
-                            "text": response_text
-                        }),
-                        ("response.content_part.done", {
-                            "type": "response.content_part.done",
-                            "item_id": response_id,
-                            "output_index": 0,
-                            "content_index": 0,
-                            "part": {"type": "output_text", "text": response_text, "annotations": []}
-                        }),
-                        ("response.output_item.done", {
-                            "type": "response.output_item.done",
-                            "output_index": 0,
-                            "item": {
-                                "id": response_id,
-                                "type": "message",
-                                "role": "assistant",
-                                "content": [{"type": "output_text", "text": response_text, "annotations": []}]
-                            }
-                        }),
-                        ("response.completed", {
-                            "type": "response.completed",
-                            "response": {
-                                "id": response_id,
-                                "object": "response",
-                                "status": "completed",
-                                "output_text": response_text
-                            }
-                        }),
-                    ]:
-                        yield f"event: {event_name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
+                if protocol == "responses" and responses_state:
+                    # 使用 ResponsesStreamConverter 的 finish() 方法发出完整事件序列
+                    for event_name, event_data in responses_state.finish():
+                        yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
                 
                 elif protocol == "anthropic" and anthropic_state:
                     for event_name, event_data in anthropic_state.finish():
@@ -764,7 +736,11 @@ async def stream_upstream(
             state.write_body_log("upstream_response", raw_response, protocol=protocol,
                                 status=200, method="POST", path="/v2/chat/completions")
         
-        logged_text = anthropic_state.text if anthropic_state else response_text
+        logged_text = (
+            anthropic_state.text if anthropic_state
+            else responses_state.text if responses_state
+            else response_text
+        )
         stream_duration = round(time.time() - stream_start_time, 2)
         
         log_upstream_response(protocol, logged_text, stream=True,

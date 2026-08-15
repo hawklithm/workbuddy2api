@@ -125,6 +125,13 @@ def _convert_input_items(items: list) -> list[dict]:
                 messages.append({"role": mapped_role, "content": content})
             continue
 
+        # input_text - Responses API 的简化输入格式
+        if item_type == "input_text":
+            _flush_assistant()
+            content = item.get("text", "")
+            messages.append({"role": "user", "content": content})
+            continue
+
         # function_call — 合并到前面的assistant消息
         if item_type == "function_call":
             if pending_assistant_content is None:
@@ -393,6 +400,15 @@ class ResponsesStreamConverter:
 
         # 关闭各个function_call item
         for index, call in sorted(self.function_calls.items()):
+            # 1. 先发出 arguments.done 事件（参数接收完成）
+            events.append(("response.function_call_arguments.done", {
+                "type": "response.function_call_arguments.done",
+                "item_id": call["id"],
+                "call_id": call["id"],
+                "arguments": call["arguments"],
+            }))
+            
+            # 2. 再发出 output_item.done 事件（工具调用项完成）
             events.append(("response.output_item.done", {
                 "type": "response.output_item.done",
                 "item": {
