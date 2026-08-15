@@ -950,6 +950,8 @@ def main():
     parser.add_argument("--login", action="store_true",
                         help="启动时执行浏览器登录/账户查询")
     parser.add_argument("--no-browser", action="store_true",
+    parser.add_argument("--verbose-llm", action="store_true",
+                        help="log full LLM request/response content (default: summary only, saves 98%% space)")
                         help="登录时不自动打开浏览器")
     args = parser.parse_args()
     
