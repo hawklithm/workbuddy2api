@@ -5,14 +5,12 @@
 ## ✨ 核心特性
 
 - **协议转换** - 支持 OpenAI Chat Completions、Anthropic Messages API 和 Responses 三种标准格式
-- **零依赖** - 基于 Python 标准库 `http.server` 实现，无需安装第三方依赖
 - **脱敏处理** - 内置智能脱敏模块，自动过滤敏感信息（账号、密码、密钥、品牌词、路径等），有效缓解审核误拦
 - **消息压缩** - 智能压缩历史消息，大幅降低 token 使用量（适用于 Codex CLI 等长上下文场景）
 - **工具调用支持** - 完整支持 function calling 和 tool use 特性
 - **DSML 解析** - 自动识别和转换 DeepSeek 标记语言（DSML）格式的工具调用
 - **流式响应** - 支持 SSE 流式输出，实时返回生成内容
 - **多账号管理** - 支持多个登录态隔离，方便工作/个人账号切换
-
 ---
 
 ## 安装
