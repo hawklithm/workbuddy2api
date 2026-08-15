@@ -335,7 +335,7 @@ async def list_models():
     log_client_request("GET", "/v1/models", None)
     state.ensure_auth()
     
-    # 简化版：直接返回常用模型
+    # 完整的 Codex ModelInfo 格式(基于 codex-rs/protocol/src/openai_models.rs)
     models = [
         {"id": "deepseek-v4-flash", "name": "DeepSeek V4 Flash", "vendor": "deepseek"},
         {"id": "glm-5.2", "name": "GLM-5.2", "vendor": "zhipu"},
@@ -345,16 +345,73 @@ async def list_models():
     
     data = [
         {
+            # 基础标识
             "id": m["id"],
+            "slug": m["id"],
+            "display_name": m.get("name", m["id"]),
+            "description": None,
             "object": "model",
             "created": 0,
             "owned_by": m.get("vendor", "codebuddy"),
-            "name": m.get("name", m["id"]),
+            
+            # Reasoning 支持
+            "default_reasoning_level": None,
+            "supported_reasoning_levels": [],
+            "default_reasoning_summary": "auto",
+            "supports_reasoning_summary_parameter": True,
+            
+            # Shell 和工具能力
+            "shell_type": "default",
+            "apply_patch_tool_type": None,
+            "web_search_tool_type": "text",
+            "experimental_supported_tools": [],
+            "supports_parallel_tool_calls": True,
+            
+            # 可见性和优先级
+            "visibility": "list",
+            "supported_in_api": True,
+            "priority": 1,
+            
+            # 上下文窗口
+            "context_window": None,
+            "max_context_window": None,
+            "auto_compact_token_limit": None,
+            "effective_context_window_percent": 95,
+            
+            # 输出截断策略
+            "truncation_policy": {
+                "mode": "bytes",
+                "limit": 10000
+            },
+            
+            # 多模态支持
+            "input_modalities": ["text"],
+            "supports_image_detail_original": False,
+            
+            # Verbosity
+            "support_verbosity": False,
+            "default_verbosity": None,
+            
+            # 其他功能开关
+            "include_skills_usage_instructions": False,
+            "include_plugin_usage_instructions": False,
+            "include_apps_usage_instructions": True,
+            
+            # 速度层级和服务层级
+            "additional_speed_tiers": [],
+            "service_tiers": [],
+            "default_service_tier": None,
+            
+            # 可选元数据
+            "availability_nux": None,
+            "model_messages": None,
+            
+            # 向后兼容的 base_instructions (遗留字段)
+            "base_instructions": "You are a helpful AI assistant.",
         }
         for m in models
     ]
-    
-    return {"object": "list", "data": data}
+    return {"object": "list", "models": data}
 
 
 # ============================================================================
@@ -391,8 +448,42 @@ async def create_response(request: Request):
         chat_body, proj_stats = project_responses_chat_body(chat_body)
         diagnostic("projection_applied", protocol="responses", **proj_stats)
     
-    diagnostic("request", protocol="responses", **body_summary(chat_body))
+    # 过滤无效的工具定义
+    tools = chat_body.get("tools", [])
+    if tools:
+        original_count = len(tools)
+        filtered_tools = []
+        filtered_names = []
+        
+        for tool in tools:
+            # 1. 过滤非 function 类型
+            if tool.get("type") != "function":
+                filtered_names.append(f"{tool.get('type', 'unknown')} (非function类型)")
+                continue
+            
+            # 2. 过滤空 parameters
+            func = tool.get("function", {})
+            params = func.get("parameters", {})
+            if not params or not isinstance(params, dict) or len(params) == 0:
+                filtered_names.append(f"{func.get('name', 'unknown')} (空parameters)")
+                continue
+            
+            # 3. 检查 parameters 是否有 type 字段
+            if "type" not in params:
+                filtered_names.append(f"{func.get('name', 'unknown')} (缺少type)")
+                continue
+            
+            filtered_tools.append(tool)
+        
+        chat_body["tools"] = filtered_tools
+        
+        if filtered_names:
+            diagnostic("tools_filtered", 
+                      original=original_count, 
+                      kept=len(filtered_tools), 
+                      filtered=filtered_names)
     
+    diagnostic("request", protocol="responses", **body_summary(chat_body))
     return await forward_chat(chat_body, "responses", original=body)
 
 
