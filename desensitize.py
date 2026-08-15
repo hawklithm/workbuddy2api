@@ -400,20 +400,18 @@ def _compact_harness_message(role: str, content) -> str | None:
     return None
 
 
-def _desensitize_tool_value(value: Any, strip_metadata: bool = False):
-    """递归处理 tool 定义，必要时移除高风险描述字段。"""
+def _desensitize_tool_value(value: Any):
+    """递归处理 tool 定义的描述字段，插入零宽空格。"""
     if isinstance(value, dict):
         new_value = {}
         for key, item in value.items():
             if key in ("description", "title") and isinstance(item, str):
-                if strip_metadata:
-                    continue
                 new_value[key] = desensitize_text(item)
             else:
-                new_value[key] = _desensitize_tool_value(item, strip_metadata=strip_metadata)
+                new_value[key] = _desensitize_tool_value(item)
         return new_value
     if isinstance(value, list):
-        return [_desensitize_tool_value(item, strip_metadata=strip_metadata) for item in value]
+        return [_desensitize_tool_value(item) for item in value]
     return value
 
 
@@ -461,27 +459,29 @@ def desensitize_messages(messages: Iterable[dict],
 
 def desensitize_body(body: dict, roles: tuple[str, ...] = ("system",),
                      desensitize_harness_user: bool = False,
-                     desensitize_tools: bool = False,
-                     compact_harness: bool = False,
-                     strip_tool_metadata: bool = False) -> dict:
-    """对请求体里的 messages / tools 做脱敏，返回新的 body（浅拷贝）。"""
-    changed = False
-    nb = dict(body)
+                     compact_harness: bool = False) -> dict:
+    """对请求体里的 messages 做脱敏，返回新的 body（浅拷贝）。
     
+    Args:
+        body: 请求体字典
+        roles: 需要脱敏的角色元组（默认只脱敏 system）
+        desensitize_harness_user: 是否脱敏 harness 用户消息
+        compact_harness: 是否压缩超长 harness 提示为短摘要
+    
+    Returns:
+        脱敏后的请求体（如有修改则为新字典，否则返回原字典）
+    """
     if body.get("messages"):
+        nb = dict(body)
         nb["messages"] = desensitize_messages(
             body["messages"],
             roles=roles,
             desensitize_harness_user=desensitize_harness_user,
             compact_harness=compact_harness,
         )
-        changed = True
+        return nb
     
-    if desensitize_tools and body.get("tools"):
-        nb["tools"] = _desensitize_tool_value(body["tools"], strip_metadata=strip_tool_metadata)
-        changed = True
-    
-    return nb if changed else body
+    return body
 
 
 # ---------------------------------------------------------------------------
