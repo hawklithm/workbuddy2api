@@ -433,55 +433,6 @@ class AnthropicStreamConverter:
         
         return events
     
-    def get_nonstream_response(self) -> dict:
-        """用于非流式模式：返回完整message对象"""
-        content_blocks = []
-        
-        # 添加text块
-        if self.text:
-            content_blocks.append({"type": "text", "text": self.text})
-        
-        # 添加tool_use块
-        for chat_index, slot in sorted(self.tool_blocks.items()):
-            try:
-                input_obj = json.loads(slot["arguments"]) if slot["arguments"] else {}
-            except json.JSONDecodeError:
-                input_obj = slot["arguments"]
-            
-            content_blocks.append({
-                "type": "tool_use",
-                "id": slot["id"] or f"toolu_{self.message_id}_{chat_index}",
-                "name": slot["name"] or "",
-                "input": input_obj,
-            })
-        
-        # 映射finish_reason
-        stop_reason_map = {
-            "stop": "end_turn",
-            "tool_calls": "tool_use",
-            "length": "max_tokens",
-        }
-        stop_reason = stop_reason_map.get(self.finish_reason or "stop", "end_turn")
-        
-        # 映射usage
-        usage_out = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-        }
-        if self.usage:
-            usage_out["input_tokens"] = self.usage.get("prompt_tokens", 0)
-            usage_out["output_tokens"] = self.usage.get("completion_tokens", 0)
-        
-        return {
-            "id": self.message_id,
-            "type": "message",
-            "role": "assistant",
-            "content": content_blocks,
-            "model": self.model,
-            "stop_reason": stop_reason,
-            "stop_sequence": None,
-            "usage": usage_out,
-        }
 
 
 # 向后兼容别名
