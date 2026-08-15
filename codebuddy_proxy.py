@@ -525,7 +525,7 @@ async def stream_upstream(
                                         "type": "function",
                                         "function": {
                                             "name": tc["name"],
-                                   "arguments": json.dumps(tc["input"], ensure_ascii=False)
+                                            "arguments": json.dumps(tc["input"], ensure_ascii=False)
                                         }
                                     }
                                     for idx, tc in enumerate(detected_tool_calls)
@@ -667,7 +667,7 @@ async def stream_upstream(
     except httpx.TimeoutException as exc:
         # 【日志】超时
         diagnostic("stream_timeout", protocol=protocol, chunks=chunk_count,
-                  elapsed=round(time.time() - stream_start_time, 2), error=str(exc))
+            elapsed=round(time.time() - stream_start_time, 2), error=str(exc))
         state.write_log("stream_timeout", protocol=protocol, chunks=chunk_count, error=str(exc))
         error_chunk = {
             "error": {
@@ -680,7 +680,7 @@ async def stream_upstream(
     except Exception as exc:
         # 【日志】其他错误
         diagnostic("stream_error", protocol=protocol, chunks=chunk_count,
-                  elapsed=round(time.time() - stream_start_time, 2), error=str(exc))
+            elapsed=round(time.time() - stream_start_time, 2), error=str(exc))
         state.write_log("stream_error", protocol=protocol, chunks=chunk_count, error=str(exc))
         error_chunk = {
             "error": {
@@ -700,7 +700,7 @@ async def stream_upstream(
         stream_duration = round(time.time() - stream_start_time, 2)
         
         diagnostic("response", protocol=protocol, stream=True, chunk_count=chunk_count,
-                  upstream_done=done_seen, duration=stream_duration, **text_summary(logged_text))
+            upstream_done=done_seen, duration=stream_duration, **text_summary(logged_text))
         state.write_log("stream_completed", protocol=protocol, chunks=chunk_count,
                        duration=stream_duration, done_seen=done_seen)
 

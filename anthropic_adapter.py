@@ -152,10 +152,10 @@ def anthropic_request_to_chat(body: dict) -> dict:
     """将Anthropic Messages API请求体转换为Chat Completions请求体
     
     关键映射：
-      system → system message（置顶）
-      messages → messages（展开content blocks）
-      tools → Chat格式tools
-      tool_choice → Chat格式
+        system → system message（置顶）
+        messages → messages（展开content blocks）
+        tools → Chat格式tools
+        tool_choice → Chat格式
     """
     messages: list[dict] = []
     
@@ -228,12 +228,12 @@ def _convert_tool_choice(tool_choice: Any) -> Any:
     """转换tool_choice格式
     
     Anthropic支持：
-      - "auto" / "any" / "required" (字符串)
-      - {"type": "tool", "name": "..."} (指定工具)
+        - "auto" / "any" / "required" (字符串)
+        - {"type": "tool", "name": "..."} (指定工具)
     
     Chat支持：
-      - "auto" / "none" / "required" (字符串)
-      - {"type": "function", "function": {"name": "..."}}
+        - "auto" / "none" / "required" (字符串)
+        - {"type": "function", "function": {"name": "..."}}
     """
     if isinstance(tool_choice, str):
         # Anthropic的"any" → Chat的"required"
@@ -263,15 +263,15 @@ class AnthropicStreamConverter:
     """将Chat SSE流转换为Anthropic Messages API事件流
     
     事件序列：
-      1. message_start
-      2. content_block_start (text)
-      3. content_block_delta (text_delta，多次)
-      4. content_block_stop
-      5. content_block_start (tool_use)
-      6. content_block_delta (input_json_delta，多次)
-      7. content_block_stop
-      8. message_delta (stop_reason + usage)
-      9. message_stop
+        1. message_start
+        2. content_block_start (text)
+        3. content_block_delta (text_delta，多次)
+        4. content_block_stop
+        5. content_block_start (tool_use)
+        6. content_block_delta (input_json_delta，多次)
+        7. content_block_stop
+        8. message_delta (stop_reason + usage)
+        9. message_stop
     """
     
     def __init__(self, model: str):
