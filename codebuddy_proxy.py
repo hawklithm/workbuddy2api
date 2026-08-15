@@ -240,6 +240,55 @@ def diagnostic(event: str, **kwargs) -> None:
         state.logger.info(f"{event}: {json.dumps(kwargs, ensure_ascii=False)}")
 
 
+def log_upstream_request(protocol: str, body: dict[str, Any]) -> None:
+    """Log upstream request with verbosity control."""
+    state = get_state()
+    
+    if state.verbose_llm:
+        state.write_log("upstream_request", protocol=protocol,
+                       method="POST", path="/v2/chat/completions", body=body)
+        diagnostic("upstream_request", protocol=protocol, **body_summary(body))
+    else:
+        messages = body.get("messages", [])
+        total_chars = sum(
+            len(str(m.get("content", "")))
+            for m in messages
+            if isinstance(m, dict)
+        )
+        summary = {
+            "model": body.get("model"),
+            "message_count": len(messages),
+            "tool_count": len(body.get("tools", [])),
+            "stream": bool(body.get("stream")),
+            "total_chars": total_chars
+        }
+        state.write_log("upstream_request_summary", protocol=protocol, **summary)
+        diagnostic("upstream_request_summary", protocol=protocol, **summary)
+
+
+def log_upstream_response(protocol: str, text: str, **stats) -> None:
+    """Log upstream response with verbosity control."""
+    state = get_state()
+    
+    common = {
+        "protocol": protocol,
+        "content_length": len(text),
+        "content_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()[:16],
+        "safety_message_detected": any(
+            marker in text for marker in ("sensitive", "cannot respond")
+        ),
+        **stats
+    }
+    
+    if state.verbose_llm:
+        common["content_preview"] = text[:200] if text else ""
+    
+    diagnostic("response", **common)
+    state.write_log("stream_completed" if stats.get("stream") else "response",
+                   **{k: v for k, v in common.items() 
+                      if k not in ("content_preview",)})
+
+
 # ============================================================================
 # 端点：/health
 # ============================================================================
