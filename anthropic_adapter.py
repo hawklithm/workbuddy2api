@@ -3,8 +3,8 @@ anthropic_adapter.py — Anthropic Messages API ↔ Chat Completions API 适配�
 
 Claude Code / CC Switch 使用 Anthropic Messages API，而 CodeBuddy 后端只支持
 Chat Completions 协议。本模块做双向转换：
-  请求：Anthropic system/messages/tools → Chat messages/tools
-  响应：Chat SSE delta → Anthropic SSE 事件流（message_start / content_block_delta / …）
+    请求：Anthropic system/messages/tools → Chat messages/tools
+    响应：Chat SSE delta → Anthropic SSE 事件流（message_start / content_block_delta / …）
 """
 
 from __future__ import annotations
@@ -44,8 +44,8 @@ def _convert_anthropic_message(msg: dict) -> list[dict]:
     """将单条Anthropic消息转换为Chat消息（可能返回多条）
     
     Anthropic的content可能包含：
-      - 字符串（纯文本）
-      - [{"type": "text", "text": "..."}, {"type": "tool_result", ...}]
+        - 字符串（纯文本）
+        - [{"type": "text", "text": "..."}, {"type": "tool_result", ...}]
     
     tool_result块需要分离成独立的tool消息
     """

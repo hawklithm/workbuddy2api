@@ -443,8 +443,9 @@ async def stream_upstream(
             async with client.stream("POST", url, headers=headers, json=body) as resp:
                 if resp.status_code != 200:
                     error_body = await resp.aread()
-                    diagnostic("upstream_error", protocol=protocol, status=resp.status_code,
-                              detail=error_body.decode("utf-8", "replace")[:200])
+                    diagnostic("upstream_error", protocol=protocol,
+                        status=resp.status_code,
+                        detail=error_body.decode("utf-8", "replace")[:200])
                     # 返回错误事件
                     error_chunk = {
                         "error": {
@@ -464,8 +465,9 @@ async def stream_upstream(
                     if chunk_count > 0 and chunk_count % 10 == 0:
                         now = time.time()
                         if now - last_progress_log >= 5:
-                            diagnostic("stream_progress", protocol=protocol, chunks=chunk_count,
-                                      elapsed=round(now - stream_start_time, 2))
+                            diagnostic("stream_progress", protocol=protocol,
+                                chunks=chunk_count,
+                                elapsed=round(now - stream_start_time, 2))
                             last_progress_log = now
                     
                     line = line.strip()
