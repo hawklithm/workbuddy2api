@@ -807,7 +807,11 @@ if __name__ == "__main__":
         try:
             result = parse_tool_calls(test_input)
             if result:
-                args = json.loads(result[0]['function']['arguments'])
+                try:
+                    # ✅ P1-2: JSON 解析异常处理
+                    args = json.loads(result[0]['function']['arguments'])
+                except (json.JSONDecodeError, KeyError, TypeError, IndexError):
+                    args = {}
                 if args:
                     print(f"✅ {name}: {result[0]['function']['name']} - {list(args.keys())}")
                     passed += 1

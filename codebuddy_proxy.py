@@ -136,12 +136,21 @@ class ProxyState:
         self.log_file = log_file
         self.enable_desensitize = enable_desensitize
         self.enable_optimize_context = enable_optimize_context
-        self.logger = logger
+        self.lock = None  # ✅ P1-5: 预留异步锁接口
         self.started_at = time.time()
     
     def ensure_auth(self) -> None:
+        """✅ P1-3: 确保认证,失败时抛异常"""
         if self.mock_dir is None:
-            self.client.ensure_authenticated()
+            try:
+                self.client.ensure_authenticated()
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(f"Authentication failed: {e}")
+                raise HTTPException(
+                    status_code=401,
+                    detail={"error": {"message": "Authentication failed", "type": "auth_error"}}
+                )
     
     def write_log(self, event: str, **kwargs) -> None:
         if self.log_file is None:
