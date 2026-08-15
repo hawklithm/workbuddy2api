@@ -394,7 +394,7 @@ async def list_models():
             
             # Reasoning 支持
             "default_reasoning_level": None,
-            "supported_reasoning_levels": ["extended"] if m.get("reasoning") else [],
+            "supported_reasoning_levels": [{"effort": "High", "description": "High"}] if m.get("reasoning") else [],
             "default_reasoning_summary": "auto",
             "supports_reasoning_summary_parameter": True,
             
