@@ -62,24 +62,23 @@ except ImportError:
     def project_responses_chat_body(body):
         return body, {}
 
-# 从旧版导入转换器
+# 导入协议转换器
 try:
-    from responses_adapter import (
-        responses_to_chat, response_events_from_chunk,
-        collect_chat_stream, ResponsesStreamState
-    )
+    from responses_adapter import responses_request_to_chat, ResponsesStreamConverter
+    HAS_RESPONSES_ADAPTER = True
 except ImportError:
-    def responses_to_chat(body): return body
-    def response_events_from_chunk(chunk, rid): return []
-    def collect_chat_stream(stream): return {}
-    ResponsesStreamState = None
+    HAS_RESPONSES_ADAPTER = False
+    def responses_request_to_chat(body): 
+        raise RuntimeError("responses_adapter not available - cannot convert /v1/responses requests")
+    ResponsesStreamConverter = None
 
 try:
     from anthropic_adapter import anthropic_to_chat, AnthropicStreamConverter
-    AnthropicStreamState = AnthropicStreamConverter  # 别名兼容
+    HAS_ANTHROPIC_ADAPTER = True
 except ImportError:
-    def anthropic_to_chat(body): return body
-    AnthropicStreamState = None
+    HAS_ANTHROPIC_ADAPTER = False
+    def anthropic_to_chat(body): 
+        raise RuntimeError("anthropic_adapter not available - cannot convert /v1/messages requests")
     AnthropicStreamConverter = None
 
 
@@ -289,7 +288,8 @@ def log_upstream_response(protocol: str, text: str, **stats) -> None:
         "content_length": len(text),
         "content_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()[:16],
         "safety_message_detected": any(
-            marker in text for marker in ("sensitive", "cannot respond")
+            marker in text.lower() for marker in 
+            ("sensitive", "cannot respond", "敏感内容", "无法响应", "unable to")
         ),
         **stats
     }
@@ -372,7 +372,7 @@ async def chat_completions(request: Request):
 # ============================================================================
 
 @app.post("/v1/responses")
-async def creaesponse(request: Request):
+async def create_response(request: Request):
     state = get_state()
     body = await request.json()
     
