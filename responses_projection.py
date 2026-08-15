@@ -331,10 +331,11 @@ def _shrink_json_value(value: Any, depth: int = 0, key: str = "") -> Any:
         return out
 
     if isinstance(value, list):
-        trimmed = [_shrink_json_value(item, depth + 1, key) for item in value[:6]]
-        if len(value) > 6:
-            trimmed.append(f"<omitted {len(value) - 6} items>")
-        return trimmed
+        # 截断长列表，但不添加字符串占位符（保持类型一致）
+        max_list = 6
+        if len(value) > max_list:
+            return [_shrink_json_value(item, depth + 1, key) for item in value[:max_list]]
+        return [_shrink_json_value(item, depth + 1, key) for item in value]
 
     if isinstance(value, str):
         limit = 240 if key in {"cmd", "chars", "patch", "content", "text", "question"} else 120
