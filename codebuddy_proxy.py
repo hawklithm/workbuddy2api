@@ -240,6 +240,20 @@ def diagnostic(event: str, **kwargs) -> None:
         state.logger.info(f"{event}: {json.dumps(kwargs, ensure_ascii=False)}")
 
 
+def log_client_request(method: str, path: str, body: dict[str, Any] | None) -> None:
+    """Log client request with verbosity control."""
+    state = get_state()
+    
+    if state.verbose_llm:
+        state.write_log("client_request", method=method, path=path, body=body)
+    else:
+        if body:
+            summary = body_summary(body)
+            state.write_log("client_request_summary", method=method, path=path, **summary)
+        else:
+            state.write_log("client_request_summary", method=method, path=path)
+
+
 def log_upstream_request(protocol: str, body: dict[str, Any]) -> None:
     """Log upstream request with verbosity control."""
     state = get_state()
@@ -313,7 +327,7 @@ async def health():
 @app.get("/v1/models")
 async def list_models():
     state = get_state()
-    state.write_log("client_request", method="GET", path="/v1/models", body=None)
+    log_client_request("GET", "/v1/models", None)
     state.ensure_auth()
     
     # 简化版：直接返回常用模型
@@ -347,7 +361,7 @@ async def chat_completions(request: Request):
     state = get_state()
     body = await request.json()
     
-    state.write_log("client_request", method="POST", path="/v1/chat/completions", body=body)
+    log_client_request("POST", "/v1/chat/completions", body)
     diagnostic("request", protocol="openai", **body_summary(body))
     
     return await forward_chat(body, "openai")
@@ -362,7 +376,7 @@ async def creaesponse(request: Request):
     state = get_state()
     body = await request.json()
     
-    state.write_log("client_request", method="POST", path="/v1/responses", body=body)
+    log_client_request("POST", "/v1/responses", body)
     
     # 转换 Responses → Chat
     chat_body = responses_to_chat(body)
@@ -386,7 +400,7 @@ async def create_message(request: Request):
     state = get_state()
     body = await request.json()
     
-    state.write_log("client_request", method="POST", path="/v1/messages", body=body)
+    log_client_request("POST", "/v1/messages", body)
     
     # 转换 Anthropic → Chat
     chat_body = anthropic_to_chat(body)
@@ -431,8 +445,6 @@ async def forward_chat(
     upstream_body["stream"] = True
     upstream_body.setdefault("stream_options", {"include_usage": True})
     
-    state.write_log("upstream_request", protocol=protocol,
-                    method="POST", path="/v2/chat/completions", body=upstream_body)
     
     url = state.client.endpoint + "/v2/chat/completions"
     headers = {
@@ -770,17 +782,17 @@ async def stream_upstream(
     
     finally:
         # 【日志】流完成
-        raw_response = b"\n".join(raw_chunks)
-        state.write_body_log("upstream_response", raw_response, protocol=protocol,
-                            status=200, method="POST", path="/v2/chat/completions")
+        if state.verbose_llm:
+            raw_response = b"\n".join(raw_chunks)
+            state.write_body_log("upstream_response", raw_response, protocol=protocol,
+                                status=200, method="POST", path="/v2/chat/completions")
         
         logged_text = anthropic_state.text if anthropic_state else response_text
         stream_duration = round(time.time() - stream_start_time, 2)
         
-        diagnostic("response", protocol=protocol, stream=True, chunk_count=chunk_count,
-            upstream_done=done_seen, duration=stream_duration, **text_summary(logged_text))
-        state.write_log("stream_completed", protocol=protocol, chunks=chunk_count,
-            duration=stream_duration, done_seen=done_seen)
+        log_upstream_response(protocol, logged_text, stream=True,
+                            chunk_count=chunk_count, duration=stream_duration,
+                            upstream_done=done_seen)
 
 
 # ============================================================================
@@ -872,6 +884,13 @@ async def collect_upstream(
     if tool_calls and dsml_buffer.should_emit_tool_calls():
         finish_reason = "tool_calls"
     
+    
+    # 【日志】收集完成
+    if state.verbose_llm:
+        # collect_upstream 没有保存原始响应，只记录聚合后的内容
+        pass
+    
+    log_upstream_response(protocol, content, stream=False)
     return {
         "id": "chatcmpl-" + uuid.uuid4().hex,
         "object": "chat.completion",
