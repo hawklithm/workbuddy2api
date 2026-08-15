@@ -224,11 +224,19 @@ def body_summary(body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# 安全词检测统一关键词（中英混合）
+_SAFETY_KEYWORDS = ("sensitive", "cannot respond", "敏感内容", "无法响应", "unable to")
+
+def is_policy_blocked(text: str) -> bool:
+    """检测文本是否包含安全策略拦截标记"""
+    return any(marker in text.lower() for marker in _SAFETY_KEYWORDS)
+
+
 def text_summary(value: str) -> dict[str, Any]:
     return {
         "content_length": len(value),
         "content_sha256": hashlib.sha256(value.encode("utf-8")).hexdigest()[:16],
-        "safety_message_detected": any(marker in value for marker in ("敏感内容", "无法响应")),
+        "safety_message_detected": is_policy_blocked(value),
     }
 
 
@@ -287,10 +295,7 @@ def log_upstream_response(protocol: str, text: str, **stats) -> None:
         "protocol": protocol,
         "content_length": len(text),
         "content_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()[:16],
-        "safety_message_detected": any(
-            marker in text.lower() for marker in 
-            ("sensitive", "cannot respond", "敏感内容", "无法响应", "unable to")
-        ),
+        "safety_message_detected": is_policy_blocked(text),
         **stats
     }
     
@@ -379,7 +384,7 @@ async def create_response(request: Request):
     log_client_request("POST", "/v1/responses", body)
     
     # 转换 Responses → Chat
-    chat_body = responses_to_chat(body)
+    chat_body = responses_request_to_chat(body)
     
     # 消息压缩优化（如果启用）
     if state.enable_optimize_context and HAS_PROJECTION:
@@ -628,43 +633,10 @@ async def stream_upstream(
                         
                         yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode()
                     
-                    elif protocol == "responses":
-                        if not emitted_response_created:
-                            emitted_response_created = True
-                            event = {
-                                "type": "response.created",
-                                "response": {
-                                    "id": response_id,
-                                    "object": "response",
-                                    "status": "in_progress",
-                                    "created_at": now_s(),
-                                    "output": []
-                                }
-                            }
-                            yield f"event: response.created\ndata: {json.dumps(event, ensure_ascii=False)}\n\n".encode()
-                        
-                        chunk_content = ((chunk.get("choices") or [{}])[0].get("delta") or {}).get("content") or ""
-                        
-                        if chunk_content:
-                            # 使用 DSML 缓冲区处理
-                            cleaned_content, chunk_tool_calls = dsml_buffer.add_chunk(chunk_content)
-                            
-                            # 累积清理后的文本
-                            response_text += cleaned_content
-                            
-                            # 记录检测到的工具调用
-                            if chunk_tool_calls:
-                                detected_tool_calls.extend(chunk_tool_calls)
-                            
-                            # 首次有内容时发送 output_item.added 和 content_part.added
-                            if cleaned_content and not response_text_started:
-                                response_text_started = True
-                                # 发送 output_item.added 和 content_part.added
-                                yield f"event: response.output_item.added\ndata: {json.dumps({'type': 'response.output_item.added', 'output_index': 0, 'item': {'id': response_id, 'type': 'message', 'role': 'assistant'}}, ensure_ascii=False)}\n\n".encode()
-                                yield f"event: response.content_part.added\ndata: {json.dumps({'type': 'response.content_part.added', 'item_id': response_id, 'output_index': 0, 'content_index': 0, 'part': {'type': 'output_text', 'text': '', 'annotations': []}}, ensure_ascii=False)}\n\n".encode()
-                        
-                        # 发送 delta 事件
-                        for event_name, event_data in response_events_from_chunk(chunk, response_id):
+                    elif protocol == "responses" and responses_state:
+                        # 使用 ResponsesStreamConverter 转换事件
+                        events = responses_state.feed_chunk(chunk)
+                        for event_name, event_data in events:
                             yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
                     elif protocol == "anthropic" and anthropic_state:
                         # 提取 content 并通过 DSML 缓冲区处理

@@ -44,3 +44,5 @@ build/
 # 临时文件
 *.tmp
 .DS_Store
+# 将 CODE_REVIEW md 文档添加到 .gitignore
+CODE_REVIEW_*.md
