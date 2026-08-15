@@ -497,6 +497,11 @@ async def stream_upstream(
         (original or {}).get("model", "default")
     ) if protocol == "anthropic" and AnthropicStreamState else None
     
+    # Responses 协议转换器
+    responses_state = ResponsesStreamConverter(
+        model=upstream_body.get("model", "auto")
+    ) if protocol == "responses" and ResponsesStreamConverter else None
+    
     # DSML 缓冲区（用于处理可能的文本标记格式工具调用）
     dsml_buffer = DSMLStreamBuffer()
     
