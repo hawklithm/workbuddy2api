@@ -1,96 +1,164 @@
-# workbuddy2api
+# CodeBuddy API 代理
 
-一个基于 Python 标准库实现的 CodeBuddy API 兼容代理。它复用了 `coding-copilot-latest.vsix` 中的登录认证流程，并将 CodeBuddy 的底层接口转换为常见的 OpenAI、Responses 和 Anthropic API 格式。
+> 一个轻量级的 API 代理服务，将 CodeBuddy 底层接口转换为标准的 OpenAI、Anthropic 和 Responses 协议格式。
 
-项目同时提供离线 mock 模式，并内置**脱敏处理**和**消息压缩优化**两个高级功能模块，用于缓解审核误拦和大幅降低 token 使用。
+## ✨ 核心特性
 
-## 目录
-
-- [环境要求](#环境要求)
-- [快速开始](#快速开始)
-- [API 接口](#api-接口)
-- [高级功能](#高级功能)
-  - [脱敏处理](#脱敏处理---desensitize)
-  - [消息压缩优化](#消息压缩优化---optimize-context)
-- [离线 mock 模式](#离线-mock-模式)
-- [项目结构](#项目结构)
-- [安全注意事项](#安全注意事项)
-- [故障排除](#故障排除)
+- **协议转换** - 支持 OpenAI Chat Completions、Anthropic Messages API 和 Responses 三种标准格式
+- **零依赖** - 基于 Python 标准库 `http.server` 实现，无需安装第三方依赖
+- **脱敏处理** - 内置智能脱敏模块，自动过滤敏感信息（账号、密码、密钥、品牌词、路径等），有效缓解审核误拦
+- **消息压缩** - 智能压缩历史消息，大幅降低 token 使用量（适用于 Codex CLI 等长上下文场景）
+- **工具调用支持** - 完整支持 function calling 和 tool use 特性
+- **DSML 解析** - 自动识别和转换 DeepSeek 标记语言（DSML）格式的工具调用
+- **流式响应** - 支持 SSE 流式输出，实时返回生成内容
+- **多账号管理** - 支持多个登录态隔离，方便工作/个人账号切换
 
 ---
 
-## 环境要求
+## 安装
 
-- Python 3.10+
-- 浏览器（首次登录时使用）
-- 运行时无需安装第三方 Python 依赖
+推荐使用 [uv](https://docs.astral.sh/uv/)：
 
----
+```bash
+# 安装 uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 直接运行（uv 会自动安装依赖）
+uv run codebuddy_proxy.py
+```
+
+或传统方式：
+
+```bash
+pip install -r requirements.txt
+python codebuddy_proxy.py
+```
 
 ## 快速开始
 
-### 1. 登录认证
-
-首次使用需要登录 CodeBuddy：
+### 1. 启动 proxy
 
 ```bash
-python3 codebuddy_proxy.py --login
+# 使用 uv（推荐）
+uv run codebuddy_proxy.py --desensitize
+
+# 或传统方式
+python codebuddy_proxy.py --desensitize
 ```
 
-浏览器会打开 CodeBuddy 登录页面。登录完成后，认证信息会保存到 `~/.codebuddy-session.json`（权限 `0600`）。
+默认监听 `http://127.0.0.1:8787`
 
-### 2. 启动代理
+### 2. 验证
 
 ```bash
-# 基础启动
-python3 codebuddy_proxy.py
-
-# 启用高级功能（推荐用于 Codex CLI / Claude Code）
-python3 codebuddy_proxy.py --desensitize --optimize-context
-```
-
-启动成功后，终端会显示：
-
-```text
-CodeBuddy proxy listening on http://127.0.0.1:8787
-Endpoints: /v1/models /v1/chat/completions /v1/responses /v1/messages /health
-```
-
-### 3. 测试连接
-
-```bash
-# 健康检查
 curl http://127.0.0.1:8787/health
-
-# 查看可用模型
 curl http://127.0.0.1:8787/v1/models
-
-# 发送一条消息
-curl http://127.0.0.1:8787/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "model": "deepseek-v4-flash",
-    "messages": [{"role": "user", "content": "hi"}]
-  }'
 ```
 
-### 配置选项
+### 3. 接入客户端
+
+#### Codex CLI
+
+编辑 `~/.codex/config.toml`：
+
+```toml
+[model_providers.codebuddy]
+name = "CodeBuddy (via local proxy)"
+base_url = "http://127.0.0.1:8787/v1"
+wire_api = "responses"
+
+[profiles.codebuddy]
+model = "glm-5.2"
+model_provider = "codebuddy"
+```
+
+使用：
 
 ```bash
-# 使用环境变量
-export CODEBUDDY_ENDPOINT=https://copilot.tencent.com
-export CODEBUDDY_PROXY_HOST=127.0.0.1
-export CODEBUDDY_PROXY_PORT=8787
-
-# 或使用命令行参数
-python3 codebuddy_proxy.py \
-  --host 127.0.0.1 \
-  --port 8787 \
-  --endpoint https://copilot.tencent.com \
-  --session-file ~/.codebuddy-session.json
+codex --profile codebuddy "你的任务"
 ```
 
----
+#### Claude Code + CC Switch
+
+在 CC Switch 配置中添加：
+
+```json
+{
+  "DeepSeek-V4": {
+    "base_url": "http://127.0.0.1:8787/v1/messages",
+    "api_key": "",
+    "model": "deepseek-v4-pro"
+  }
+}
+```
+
+#### 其他 OpenAI 兼容客户端
+
+- Base URL: `http://127.0.0.1:8787/v1`
+- API Key: 留空（或填你启动时用 `--api-key` 设置的值）
+- 模型名: `glm-5.2` / `deepseek-v4-pro` / `kimi-k2.7` / `auto` 等
+
+## 命令行参数
+
+```bash
+--host HOST              监听地址（默认 127.0.0.1）
+--port PORT              监听端口（默认 8787）
+--endpoint ENDPOINT      CodeBuddy 后端地址
+--session-file PATH      会话文件路径（默认 ~/.codebuddy-session.json）
+--log-file PATH          JSONL 日志文件（默认 logs/codebuddy-proxy.jsonl）
+--desensitize            启用脱敏处理（推荐）
+--optimize-context       启用消息压缩优化（Codex CLI 推荐）
+--login                  启动时执行浏览器登录
+--no-browser             登录时不打开浏览器
+--mock-dir DIR           使用 mock 数据（测试用）
+```
+
+### 环境变量
+
+```bash
+CODEBUDDY_PROXY_HOST      # 等同 --host
+CODEBUDDY_PROXY_PORT      # 等同 --port
+CODEBUDDY_ENDPOINT        # 等同 --endpoint
+CODEBUDDY_PROXY_LOG_FILE  # 等同 --log-file
+```
+
+## 常见场景
+
+### 首次使用（需要登录）
+
+```bash
+uv run codebuddy_proxy.py --login
+```
+
+浏览器打开后登录，成功后 proxy 自动启动。
+
+### 日常使用（自动读取登录态）
+
+```bash
+uv run codebuddy_proxy.py --desensitize
+```
+
+### Codex CLI 场景（启用压缩优化）
+
+```bash
+uv run codebuddy_proxy.py --desensitize --optimize-context
+```
+
+### 多账号切换
+
+```bash
+# 账号 1
+uv run codebuddy_proxy.py --session-file ~/.codebuddy-work.json --login
+
+# 账号 2
+uv run codebuddy_proxy.py --session-file ~/.codebuddy-personal.json --login
+```
+
+### 监听所有网卡（局域网共享）
+
+```bash
+uv run codebuddy_proxy.py --host 0.0.0.0 --desensitize
+```
 
 ## API 接口
 
@@ -116,7 +184,8 @@ curl http://127.0.0.1:8787/health
 {
   "status": "ok",
   "uptime_seconds": 123.45,
-  "authenticated": true
+  "authenticated": true,
+  "token_valid": true
 }
 ```
 
@@ -126,7 +195,7 @@ curl http://127.0.0.1:8787/health
 curl http://127.0.0.1:8787/v1/models
 ```
 
-返回 OpenAI 格式的模型列表，`data[].id` 就是后续请求中的 `model` 值（如 `deepseek-v4-flash`）。
+返回 OpenAI 格式的模型列表，`data[].id` 就是后续请求中的 `model` 值（如 `deepseek-v4-flash`、`glm-5.2`）。
 
 ### `/v1/chat/completions` - OpenAI Chat
 
@@ -147,7 +216,7 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 curl -N http://127.0.0.1:8787/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "default",
+    "model": "glm-5.2",
     "stream": true,
     "messages": [{"role": "user", "content": "hi"}]
   }'
@@ -180,15 +249,13 @@ curl http://127.0.0.1:8787/v1/responses \
 curl http://127.0.0.1:8787/v1/messages \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "default",
-    "max_tokens": 256,
+    "model": "deepseek-v4-pro",
+    "max_tokens": 4096,
     "messages": [{"role": "user", "content": "hi"}]
   }'
 ```
 
 设置 `"stream": true` 时返回 Anthropic SSE 事件流。
-
----
 
 ## 高级功能
 
@@ -235,18 +302,17 @@ curl http://127.0.0.1:8787/v1/messages \
 
 ```bash
 # 必须启用 --desensitize，否则几乎每次都被拦截
-python3 codebuddy_proxy.py --desensitize --port 8787
+uv run codebuddy_proxy.py --desensitize
 
 # 在 Claude Code / CC Switch 中配置
-# Base URL: http://127.0.0.1:8787/v1
-# API Key: (留空或任意值)
+# Base URL: http://127.0.0.1:8787/v1/messages
 ```
 
 **案例 2: 对接 Codex CLI**
 
 ```bash
 # 同时启用脱敏和消息压缩（最佳配置）
-python3 codebuddy_proxy.py --desensitize --optimize-context
+uv run codebuddy_proxy.py --desensitize --optimize-context
 
 # 在 Codex CLI 配置文件中
 # base_url: http://127.0.0.1:8787/v1/responses
@@ -256,13 +322,13 @@ python3 codebuddy_proxy.py --desensitize --optimize-context
 
 ```bash
 # 启用脱敏以避免合规术语被误拦
-python3 codebuddy_proxy.py --desensitize
+uv run codebuddy_proxy.py --desensitize
 
 # 示例请求
 curl http://127.0.0.1:8787/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "default",
+    "model": "deepseek-v4-pro",
     "messages": [
       {
         "role": "system",
@@ -294,7 +360,7 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 - ✅ developer 角色消息
 - ✅ Codex CLI / Claude Code 注入的 harness user 消息
 - ✅ tools 的 description 字段
-保持原样，不影响正常对话）
+- ❌ user/assistant 消息（保持原样，不影响正常对话）
 
 #### 敏感词表
 
@@ -322,7 +388,7 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 
 - ✅ 使用 Codex CLI / Claude Code 等 agentic 工具（长历史）
 - ✅ Token 使用量很大（>100k/天）
-- ✅ 经常触发 "contextoo long" 错误
+- ✅ 经常触发 "context " 错误
 - ✅ 每次请求都发送完整历史记录
 - ❌ 不用于短对话/简单请求
 
@@ -330,10 +396,10 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 
 ```bash
 # 启用消息压缩
-python3 codebuddy_proxy.py --optimize-context
+uv run codebuddy_proxy.py --optimize-context
 
 # 同时启用两个功能（推荐用于 Codex CLI）
-python3 codebuddy_proxy.py --desensitize --optimize-context
+uv run codebuddy_proxy.py --desensitize --optimize-context
 ```
 
 #### 工作原理
@@ -350,7 +416,8 @@ python3 codebuddy_proxy.py --desensitize --optimize-context
 
 自动检测 agentic 请求（tools 包含 `exec_command`、`apply_patch` 等，或消息含 harness 标记），重构成最小语义闭包：
 
-1. **丢弃 harness 消息** — 删除所有 Codex/Claude Code 注入的 system/user**保留最近上下文** — 从后往前保留 ≤8 条消息 / ≤7000 字符
+1. **丢弃 harness 消息** — 删除所有 Codex/Claude Code 注入的 system/user 消息
+2. **保留最近上下文** — 从后往前保留 ≤8 条消息 / ≤7000 字符
 3. **历史摘要化** — 更早的历史压缩为规则摘要（每条一行）
 4. **Schema 收敛** — 只保留结构字段，删除 description（最占空间）
 5. **Tool 输出/参数压缩** — 保留关键部分，其余省略
@@ -385,7 +452,7 @@ grep projection_applied logs/codebuddy-proxy.jsonl | jq .
 {
   "event": "projection_applied",
   "protocol": "responses",
-  "mode": "aggressive",
+  "mode""aggressive",
   "original_messages": 50,
   "projected_messages": 12,
   "original_message_chars": 120000,
@@ -404,125 +471,24 @@ grep projection_applied logs/codebuddy-proxy.jsonl | jq .
 
 ---
 
-## 离线 mock 模式
+### 日志
 
-使用已记录的真实响应启动代理，完全离线运行：
+日志包含：
+- 文本日志：`logs/proxy.log`（按天滚动，保留 30 天）
+- 结构化日志：`logs/codebuddy-proxy.jsonl`（完整请求/响应，包含流式细节）
 
-```bash
-python3 codebuddy_proxy.py --mock-dir fixtures/codebuddy-real
-```
-
-此模式下：
-
-- `/v1/models` 读取 `fixtures/codebuddy-real/models.v3-config.json`
-- `/v1/chat/completions`、`/v1/responses`、`/v1/messages` 读取 `fixtures/codebuddy-real/chat-hi.sse.json`
-- 不读取本地认证状态，不执行登录或 token 刷新
-- 不访问 CodeBuddy 或任何其他后端地址
-
-### 运行测试
+查看日志：
 
 ```bash
-# 运行离线接口测试
-python3 -m unittest -v test_codebuddy_proxy_mock.py
+# 实时查看
+tail -f logs/codebuddy-proxy.jsonl
 
-# 测试脱敏模块
-python3 desensitize.py
+# 查看流式事件
+tail -100 logs/codebuddy-proxy.jsonl | jq 'select(.event | startswith("stream"))'
 
-# 测试高级功能（mock 模式）
-python3 codebuddy_proxy.py --desensitize --optimize-context --mock-dir fixtures/codebuddy-real
-```
+# 统计超时
+jq 'select(.event=="stream_timeout")' logs/codebuddy-proxy.jsonl | wc -l
 
-### 记录真实响应
-
-如果需要更新 mock 数据，确保已有有效登录 session 后运行：
-
-```bash
-python3 record_codebuddy_real_fixtures.py
-```
-
----
-
-## 项目结构
-
-```text
-核心代理:
-  codebuddy_client_demo.py          登录、token 刷新和底层客户端
-  codebuddy_proxy.py                本地 API 转发代理（主程序）
-
-基础适配器:
-  responses_adapter.py              Responses API → Chat Completions 转换
-  anthropic_adapter.py              Anthropic Messages → Chat Completions 转换
-
-高级功能模块（可选）:
-  desensitize.py                    脱敏处理（缓解审核误拦）
-  responses_projection.py           消息压缩优化（减少 token 使用）
-
-测试与工具:
-  test_codebuddy_proxy_mock.py      离线接口测试
-  record_codebuddy_real_fixtures.py 记录真实响应
-  fixtures/codebuddy-real/          mock 使用的真实响应
-
-文档:
-  README.md                         本文档
-```
-
-### 模块依赖
-
-两个高级功能模块都是**可选的**，主程序会自动检测：
-
-```python
-try:
-    from desensitize import desensitize_body
-    HAS_DESENSITIZE = True
-except ImportError:
-    HAS_DESENSITIZE = False  # 功能不可用但不会报错
-```
-
-模块文件已包含在项目中，无需额外安装：
-```
-desensitize.py           (17KB, 485行)
-responses_projection.py  (22KB, 690行)
-```
-
----
-
-## 安全注意事项
-
-- ❌ **不要提交** `~/.codebuddy-session.json`，其中包含 refresh token
-- ❌ **不要提交** `logs/codebuddy-proxy.jsonl`，其中包含完整 prompt 和模型输出
-- ❌ **不要将代理暴露到公网**；默认只监听本机地址 `127.0.0.1`
-- ✅ `coding-copilot-latest.vsix` 仅用于本地分析，已在 `.gitignore` 中排除
-- ✅ Mock 模式适合开发和测试，不能代表实时模型能力或实时模型列表
-- ✅ 脱敏只处理合规声明，不绕过对有害输入的审核
-
----
-
-## 故障排除
-
-### Q1: 启动时提示 "未找到认证文件"
-
-**A:** 首次使用需要登录：
-
-```bash
-python3 codebuddy_proxy.py --login
-```
-
-### Q2: 启用 `--desensitiz
-**A:** 可能是用户输入触发审核（不被脱敏）。检查日志中的 `desensitize_applied` 事件：
-
-```bash
-grep desensitize_applied logs/codebuddy-proxy.jsonl
-```
-
-### Q3: 启用 `--optimize-context` 后响应质量下降
-
-**A:** 尝试只用于 agentic 场景。普通对话不需要压缩。
-
-### Q4: 如何验证高级功能生效？
-
-**A:** 查看日志文件，搜索相关事件：
-
-```bash
 # 验证脱敏
 grep desensitize_applied logs/codebuddy-proxy.jsonl
 
@@ -530,63 +496,70 @@ grep desensitize_applied logs/codebuddy-proxy.jsonl
 grep projection_applied logs/codebuddy-proxy.jsonl | jq .
 ```
 
-### Q5: Token 过期后无法自动刷新
+### 找不到 session 文件
 
-**A:** 检查 session 文件权限和 refresh token 是否有效：
-
-```bash
-ls -l ~/.codebuddy-session.json
-# 应该是 -rw------- (0600)
-
-# 如果失效，重新登录
-python3 codebuddy_proxy.py --login
-```
-
-### Q6: 可以单独使用高级功能模块吗？
-
-**A:** 可以！两个模块都是独立的，可以在其他项目中导入使用：
-
-```python
-from desensitize import desensitize_body
-from responses_projection import project_responses_chat_body
-
-# 脱敏处理
-body = desensitize_body(
-    body,
-    roles=("system", "developer"),
-    desensitize_harness_user=True,
-    desensitize_tools=True,
-)
-
-# 消息压缩
-projected_body, stats = project_responses_chat_body(body)
-```
-
----
-
-## 完整日志
-
-代理默认将完整的请求/响应日志写入 `logs/codebuddy-proxy.jsonl`：
+首次使用需要登录：
 
 ```bash
-# 查看最近10条日志
-tail -10 logs/codebuddy-proxy.jsonl | jq .
-
-# 自定义日志文件
-python3 codebuddy_proxy.py --log-file /tmp/proxy.jsonl
+uv run codebuddy_proxy.py --login
 ```
 
-**⚠️ 日志包含完整 prompt 和模型输出，请妥善保护。** 认证头、refresh token 和 Cookie 等敏感信息不会写入日志。
+### 401 认证失败
 
----
+Token 过期，重新登录：
 
-## 参考资料
+```bash
+uv run codebuddy_proxy.py --login
+```
 
-- **脱敏词表**: `desensitize.py` 中的 `SENSITIVE_TERMS`
-- **压缩参数配置**: `responses_projection.py` 中的常量（`MAX_TAIL_MESSAGES` 等）
+### 审核拦截
 
----
+启用脱敏：
 
-## 许可证
+```bash
+uv run codebuddy_proxy.py --desensitize
+```
 
-本项目仅供学习和研究使用。请遵守 CodeBuddy 的服务条款。
+如果仍然被拦截，尝试压缩优化（仅 `/v1/responses`）：
+
+```bash
+uv run codebuddy_proxy.py --desensitize --optimize-context
+```
+
+### 端口被占用
+
+```bash
+lsof -i :8787
+uv run codebuddy_proxy.py --port 8788
+```
+
+### SOCKS proxy 错误
+
+依赖已自动安装 `httpx[socks]`。如果仍有问题，检查环境变量：
+
+```bash
+env | grep -i proxy
+```
+
+临时禁用代理：
+
+```bash
+unset http_proxy https_proxy all_proxy
+uv run codebuddy_proxy.py
+```
+
+## 技术细节
+
+- **架构**: FastAPI + httpx（异步）
+- **并发**: 支持 1000+ 并发请求
+- **超时**: 连接 10 秒，读取 30 秒
+- **流式**: 完整的流式日志（started / progress / completed / timeout）
+
+## 免责声明
+
+**本项目仅供学习和研究使用。请遵守 CodeBuddy 的服务条款。**
+
+- 本项目不提供任何形式的担保
+- 使用本项目产生的任何后果由使用者自行承担
+- 请勿将本项目用于任何违反 CodeBuddy 服务条款的用途
+- 请勿将本项目用于商业用途

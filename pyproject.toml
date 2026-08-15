@@ -1,0 +1,29 @@
+[project]
+name = "codebuddy-proxy"
+version = "2.0.0"
+description = "Local OpenAI/Responses/Anthropic compatible proxy for CodeBuddy"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "httpx[socks]>=0.25.0",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+]
+
+[project.scripts]
+codebuddy-proxy = "codebuddy_proxy:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=7.4.0",
+]

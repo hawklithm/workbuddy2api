@@ -482,3 +482,7 @@ class AnthropicStreamConverter:
             "stop_sequence": None,
             "usage": usage_out,
         }
+
+
+# 向后兼容别名
+anthropic_to_chat = anthropic_request_to_chat
