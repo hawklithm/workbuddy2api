@@ -504,18 +504,35 @@ async def stream_upstream(
             async with client.stream("POST", url, headers=headers, json=body) as resp:
                 if resp.status_code != 200:
                     error_body = await resp.aread()
+                    error_text = error_body.decode("utf-8", "replace")
+                    
                     diagnostic("upstream_error", protocol=protocol,
                         status=resp.status_code,
-                        detail=error_body.decode("utf-8", "replace")[:200])
-                    # 返回错误事件
-                    error_chunk = {
-                        "error": {
-                            "message": f"upstream HTTP {resp.status_code}",
-                            "type": "upstream_error",
-                            "code": resp.status_code
+                        detail=error_text[:500])
+                    
+                    # 返回结构化错误（包含详细信息）
+                    if protocol == "anthropic":
+                        # Anthropic error format
+                        error_event = {
+                            "type": "error",
+                            "error": {
+                                "type": "api_error",
+                                "message": f"Upstream API error (HTTP {resp.status_code}): {error_text[:200]}"
+                            }
                         }
-                    }
-                    yield f"data: {json.dumps(error_chunk, ensure_ascii=False)}\n\n".encode()
+                        yield f"event: error\ndata: {json.dumps(error_event, ensure_ascii=False)}\n\n".encode()
+                    else:
+                        # OpenAI error format
+                        error_chunk = {
+                            "error": {
+                                "message": f"Upstream API error (HTTP {resp.status_code})",
+                                "type": "upstream_error",
+                                "code": resp.status_code,
+                                "details": error_text[:500]
+                            }
+                        }
+                        yield f"data: {json.dumps(error_chunk, ensure_ascii=False)}\n\n".encode()
+                    
                     return
                 
                 diagnostic("upstream_response", protocol=protocol, status=resp.status_code)
