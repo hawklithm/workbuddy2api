@@ -811,8 +811,7 @@ async def collect_upstream(
     usage = None
     finish_reason = None
     content = ""
-    tool_calls = []
-    
+    tool_calls_dict: dict[int, dict] = {}  # 使用 dict 按 index 累加
     # DSML 缓冲区
     dsml_buffer = DSMLStreamBuffer()
     
@@ -863,22 +862,33 @@ async def collect_upstream(
                             if detected_tool_calls:
                                 tool_calls.extend(detected_tool_calls)
                         
-                        # 处理原生 tool_calls（合并）
+                        # 处理原生 tool_calls（使用 dict 累加，避免预填充）
                         if delta.get("tool_calls"):
                             for tc in delta["tool_calls"]:
                                 idx = tc.get("index", 0)
-                                while len(tool_calls) <= idx:
-                                    tool_calls.append({"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                                if idx not in tool_calls_dict:
+                                    tool_calls_dict[idx] = {
+                                        "id": "", 
+                                        "type": "function", 
+                                        "function": {"name": "", "arguments": ""}
+                                    }
+                                
                                 if tc.get("id"):
-                                    tool_calls[idx]["id"] = tc["id"]
+                                    tool_calls_dict[idx]["id"] = tc["id"]
                                 if tc.get("function", {}).get("name"):
-                                    tool_calls[idx]["function"]["name"] = tc["function"]["name"]
+                                    tool_calls_dict[idx]["function"]["name"] = tc["function"]["name"]
                                 if tc.get("function", {}).get("arguments"):
-                                    tool_calls[idx]["function"]["arguments"] += tc["function"]["arguments"]
+                                    tool_calls_dict[idx]["function"]["arguments"] += tc["function"]["arguments"]
     
     except httpx.HTTPError as exc:
         diagnostic("upstream_error", protocol=protocol, error=str(exc))
         raise HTTPException(status_code=502, detail={"error": {"message": f"upstream error: {exc}", "type": "upstream_error"}})
+    
+    # 转换为 list 并过滤掉无效的 tool_calls（name 为空的）
+    tool_calls = [
+        v for k, v in sorted(tool_calls_dict.items()) 
+        if v["function"]["name"]
+    ]
     
     # 如果检测到 DSML tool_calls，修改 finish_reason
     if tool_calls and dsml_buffer.should_emit_tool_calls():
