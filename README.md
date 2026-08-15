@@ -7,9 +7,9 @@
 - **协议转换** - 支持 OpenAI Chat Completions、Anthropic Messages API 和 Responses 三种标准格式
 - **脱敏处理** - 内置智能脱敏模块，自动过滤敏感信息（账号、密码、密钥、品牌词、路径等），有效缓解审核误拦
 - **消息压缩** - 智能压缩历史消息，大幅降低 token 使用量（适用于 Codex CLI 等长上下文场景）
-- **工具调用支持** - 完整支持 function calling 和 tool use 特性
+- **工具调用支持** - 完整支持 function calling 和 tool use 特性，自动过滤无效工具定义
 - **DSML 解析** - 自动识别和转换 DeepSeek 标记语言（DSML）格式的工具调用
-- **流式响应** - 支持 SSE 流式输出，实时返回生成内容
+- **流式响应** - 支持 SSE 流式输出，实时返回生成内容，内置 60 秒超时保护
 - **多账号管理** - 支持多个登录态隔离，方便工作/个人账号切换
 ---
 
@@ -297,6 +297,60 @@ curl http://127.0.0.1:8787/v1/messages \
 - ✅ 纯粹的代码生成（无品牌词/安全声明）
 
 #### 典型使用案例
+
+
+## 🔧 技术细节
+
+### 工具调用兼容性
+
+代理自动过滤不兼容的工具定义，确保上游 API 接受：
+
+**过滤规则**：
+- ❌ 非 `type: "function"` 的工具（如 `web_search`）
+- ❌ `parameters` 为空对象 `{}` 的工具
+- ❌ `parameters` 缺少 `type` 字段的工具
+- ✅ 清理 `additionalProperties` 和 `strict` 字段（CodeBuddy 后端不支持）
+
+**日志事件**：`tools_filtered` 记录过滤详情
+
+### 流式响应保护
+
+**超时配置**：
+- **连接超时**：30 秒
+- **读取超时**：300 秒（两次数据接收间隔）
+- **总时长限制**：60 秒（防止流无限期运行）
+
+**为什么需要总时长限制**：
+- httpx 的 `read timeout` 只限制两次数据间隔，不限制总时长
+- 上游持续发送数据时，流可能无限期运行（观察到 6+ 分钟，2000+ chunks 的异常流）
+- 60 秒适合交互式对话，可根据场景调整（代码中修改 `MAX_STREAM_DURATION`）
+
+**日志事件**：`stream_duration_exceeded` 记录超时截断
+
+### DSML 解析
+
+自动识别三种工具调用标记格式：
+
+1. **DeepSeek DSML**：`<||DSML||tool_calls>` / `<||DSML||invoke name="...">`
+2. **Claude 风格**：`<tool_call><invoke name="exec_command"><cmd>...</cmd></invoke></tool_call>`
+3. **简化格式**：`<tool_call><toolName>bash</toolName>...</tool_call>`
+
+解析后转换为标准 OpenAI `tool_calls` 格式，并从响应内容中清理标记。
+
+### 协议适配
+
+| 源协议 | 目标协议 | 转换器 | 说明 |
+|--------|----------|--------|------|
+| CodeBuddy Chat | OpenAI Chat | 直接透传 | 添加 DSML 解析 |
+| CodeBuddy Chat | Responses API | `ResponsesStreamConverter` | 事件序列转换 |
+| CodeBuddy Chat | Anthropic Messages | `AnthropicStreamConverter` | 流式事件映射 |
+
+**流式事件映射**（Responses API）：
+```
+upstream chunk → response.output_text.delta
+工具调用 → response.output_item.added (function_call)
+完成 → response.completed
+```
 
 **案例 1: 对接 Claude Code**
 
