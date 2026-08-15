@@ -14,8 +14,39 @@ Codex CLI 会把大量运行时提示、完整工具 schema、长历史、以及
 - 保留最新用户意图
 - 保留最近一段真实 assistant/tool 链路
 - 把更早历史压缩成规则摘要
-- 把 tool schema 收敛成结构字段
 - 把超长 tool output / tool arguments 压缩成可继续推理的摘要
+
+截断标记格式
+------------
+本模块在截断/压缩文本时会插入人类可读的标记字符串，客户端解析时需要识别这些格式：
+
+1. **工具输出行截断** (超过 24 行):
+   - 格式: `"... [omitted N lines] ..."`
+   - 位置: 工具输出摘要中，头部和尾部之间
+   - 示例: `"Key output:\nline1\n... [omitted 100 lines] ...\nRecent tail:\nlast_line"`
+
+2. **自由文本字符截断**:
+   - 格式: `"... [N chars omitted] ..."`
+   - 位置: 长文本的头部和尾部之间
+   - 示例: `"start text...\n... [500 chars omitted] ...\n...end text"`
+
+3. **文本硬截断**:
+   - 格式: `" ... [truncated N chars]"`
+   - 位置: 文本末尾
+   - 示例: `"long text content ... [truncated 200 chars]"`
+
+4. **JSON 深度限制**:
+   - 格式: `"<omitted>"` (字符串)
+   - 位置: JSON 嵌套深度超过 4 层时
+   - 示例: `{"a": {"b": {"c": {"d": {"e": "<omitted>"}}}}}`
+
+5. **JSON 键数量限制**:
+   - 格式: `{"_omitted_keys": N}` (结构化字段)
+   - 位置: 字典超过 12 个键时
+   - 示例: `{"key1": "val1", ..., "key12": "val12", "_omitted_keys": 5}`
+
+注意: 这些标记是设计特性，确保在上下文受限时仍能传递关键语义信息。
+客户端通常只展示这些文本，无需特殊解析。未来版本可能提供结构化元数据替代方案。
 """
 
 from __future__ import annotations
@@ -554,7 +585,16 @@ def _merge_guidance_messages(messages: list[str]) -> str:
 
 
 def _summarize_tool_output(text: str) -> str:
-    text = (text or "").strip()
+    """
+    压缩工具输出到 MAX_TOOL_OUTPUT_CHARS (1024) 字符以内。
+    
+    截断策略:
+    - 保留前 10 行 + 后 6 行
+    - 中间省略部分插入: "... [omitted N lines] ..."
+    - 如果最终仍超长，再用 _truncate_text 硬截断
+    
+    客户端解析: 这些标记字符串是人类可读的语义提示，通常直接展示即可。
+    """
     if not text:
         return ""
     if len(text) <= MAX_TOOL_OUTPUT_CHARS and text.count("\n") <= 24:
@@ -607,7 +647,15 @@ def _tool_output_inline_summary(text: str) -> str:
 
 
 def _summarize_free_text(text: str, limit: int) -> str:
-    text = (text or "").strip()
+    """
+    压缩自由文本到指定字符限制。
+    
+    截断策略:
+    - 保留前 limit//2 字符 + 后 limit//3 字符
+    - 中间插入: "... [N chars omitted] ..."
+    
+    客户端解析: 标记字符串是人类可读的，直接展示即可。
+    """
     if not text:
         return ""
     if len(text) <= limit:
@@ -620,7 +668,15 @@ def _summarize_free_text(text: str, limit: int) -> str:
 
 
 def _truncate_text(text: str, limit: int) -> str:
-    text = (text or "").strip()
+    """
+    硬截断文本到指定字符限制。
+    
+    截断策略:
+    - 保留前 (limit - 24) 字符
+    - 末尾追加: " ... [truncated N chars]"
+    
+    客户端解析: 标记字符串是人类可读的，直接展示即可。
+    """
     if not text:
         return ""
     if len(text) <= limit:

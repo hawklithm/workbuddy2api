@@ -165,6 +165,28 @@ _PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# 预编译运行时块替换正则（避免每次调用 _prune_runtime_fragments 时重新编译）
+# 每个元组: (编译后的正则, 替换文本)
+_RUNTIME_BLOCK_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (
+        re.compile(
+            r"\s*" + re.escape(start_tag) + r".*?" + re.escape(end_tag) + r"\s*",
+            re.DOTALL,
+        ),
+        replacement,
+    )
+    for start_tag, end_tag, replacement in _RUNTIME_BLOCK_REPLACEMENTS
+]
+
+# 预编译 Codex 节提取正则
+_CODEX_SECTION_PATTERNS: dict[str, re.Pattern] = {
+    heading: re.compile(
+        re.escape(heading) + r".*?(?=\n## |\n# |\Z)",
+        re.DOTALL,
+    )
+    for heading in ("## Personality", "# AGENTS.md spec")
+}
+
 # Codex CLI / Claude Code 会把大量运行时上下文包装进一条 user 消息里
 _HARUSER_MARKERS = (
     "# AGENTS.md instructions",
@@ -304,11 +326,8 @@ def _prune_runtime_fragments(role: str, text: str) -> str:
     pruned = text
     
     # 替换运行时块
-    for start_tag, end_tag, replacement in _RUNTIME_BLOCK_REPLACEMENTS:
-        pattern = re.compile(
-            r"\s*" + re.escape(start_tag) + r".*?" + re.escape(end_tag) + r"\s*",
-            re.DOTALL,
-        )
+    # 替换运行时块（使用预编译正则）
+    for pattern, replacement in _RUNTIME_BLOCK_PATTERNS:
         pruned = pattern.sub("\n\n" + replacement + "\n\n", pruned)
     
     # 截断运行时尾部
@@ -331,11 +350,9 @@ def _prune_runtime_fragments(role: str, text: str) -> str:
             if intro:
                 keep_sections.append(intro)
         
+        # 提取 Codex 重要节（使用预编译正则）
         for heading in ("## Personality", "# AGENTS.md spec"):
-            pattern = re.compile(
-                re.escape(heading) + r".*?(?=\n## |\n# |\Z)",
-                re.DOTALL,
-            )
+            pattern = _CODEX_SECTION_PATTERNS[heading]
             match = pattern.search(pruned)
             if match:
                 section = match.group(0).strip()
