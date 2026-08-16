@@ -332,7 +332,7 @@ class RemoteConfigCache:
             
             # 构造请求头（包含认证信息）
             headers = state.client.auth_headers()
-            headers["User-Agent"] = "CodeBuddy-Proxy/2.0"
+            headers["User-Agent"] = "Mozilla/5.0 (compatible; Genie-IDE/1.0)"
             headers["Accept"] = "application/json"
             
             # 发起请求（超时 5 秒，匹配插件）

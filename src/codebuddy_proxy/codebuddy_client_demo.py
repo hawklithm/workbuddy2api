@@ -81,7 +81,7 @@ class CodeBuddyClient:
         body: Any = None,
         timeout: float = 30,
     ) -> Any:
-        request_headers = {"User-Agent": "CodeBuddyClientDemo/1.0"}
+        request_headers = {"User-Agent": "Mozilla/5.0 (compatible; Genie-IDE/1.0)"}
         request_headers.update(headers or {})
         data = None
         if body is not None:
@@ -110,9 +110,14 @@ class CodeBuddyClient:
             raise CodeBuddyError(f"{path} 返回的不是 JSON: {raw[:300]!r}") from exc
 
     def auth_headers(self, *, access: bool = True, refresh: bool = False) -> dict[str, str]:
+        """构造认证 headers，模拟插件行为"""
         account = self.session.get("account") or {}
         auth = self.session.get("auth") or {}
-        headers: dict[str, str] = {}
+        headers: dict[str, str] = {
+            # 🔥 关键标识：所有请求都需要这个 header
+            "X-Product-Code": "codebuddy"
+        }
+        
         if account.get("uid"):
             headers["X-User-Id"] = str(account["uid"])
         if access and auth.get("accessToken"):
@@ -122,6 +127,9 @@ class CodeBuddyClient:
         if account.get("enterpriseId"):
             headers["X-Enterprise-Id"] = str(account["enterpriseId"])
             headers["X-Tenant-Id"] = str(account["enterpriseId"])
+        if account.get("departmentInfo"):
+            # 🔥 新增：部门信息（如果有）
+            headers["X-Department-Info"] = str(account["departmentInfo"])
         if auth.get("domain"):
             # The extension calls this the domain header.  The server accepts
             # X-Domain for the plugin protocol.
