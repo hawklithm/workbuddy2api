@@ -54,3 +54,4 @@ build/
 
 # 归档的临时文件和分析文档
 archive/
+.codegraph/
