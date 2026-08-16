@@ -1166,6 +1166,11 @@ async def stream_upstream(
                     # 使用 ResponsesStreamConverter 的 finish() 方法发出完整事件序列
                     for event_name, event_data in responses_state.finish():
                         yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
+                    
+                    # 【修复】发送SSE流结束标记，防止客户端持续等待
+                    # 症状：最后一段内容不显示，超时后才能完整显示
+                    # 原因：缺少明确的流结束标记，客户端一直等待更多事件
+                    yield b"data: [DONE]\n\n"
                 
                 elif protocol == "anthropic" and anthropic_state:
                     for event_name, event_data in anthropic_state.finish():
