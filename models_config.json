@@ -1,0 +1,464 @@
+{
+  "models": [
+    {
+      "descriptionEn": "Balances quality and speed. Automatically selects the best model for each task, with a variable credit multiplier.",
+      "descriptionZh": "平衡效果与速度。自动为每个任务匹配最优模型,积分倍率随之浮动",
+      "disabledMultimodal": false,
+      "id": "auto",
+      "isDefault": true,
+      "maxAllowedSize": 168000,
+      "maxInputTokens": 168000,
+      "maxOutputTokens": 32000,
+      "name": "Auto",
+      "onlyReasoning": true,
+      "reasoning": {
+        "effort": "high",
+        "summary": "auto"
+      },
+      "supportsImages": true,
+      "supportsReasoning": true,
+      "supportsToolCall": true,
+      "tags": ["craft"],
+      "temperature": 1,
+      "vendor": "f"
+    },
+    {
+      "credits": "x0.00 credits",
+      "descriptionEn": "Hunyuan's thinking model with enhanced reasoning capabilities",
+      "descriptionZh": "混元思考模型,具有增强的推理能力",
+      "disabledMultimodal": false,
+      "iconUrl": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNyIgaGVpZ2h0PSIxNiIgdmlld0JveD0iLTAuNDM3NSAwIDMxLjg3NSAzMCIgZmlsbD0ibm9uZSI+CiAgPHBhdGggZD0iTTE1LjIyODcgMzBDMjMuNDYwMyAzMCAzMC4xMzMzIDIzLjI4NDMgMzAuMTMzMyAxNUMzMC4xMzMzIDYuNzE1NzMgMjMuNDYwMyAwIDE1LjIyODcgMEM2Ljk5NzIgMCAwLjMyNDIxOSA2LjcxNTczIDAuMzI0MjE5IDE1QzAuMzI0MjE5IDIzLjI4NDMgNi45OTcyIDMwIDE1LjIyODcgMzBaIiBmaWxsPSIjQjNEREYyIi8+CiAgPHBhdGggZD0iTTE1LjIzMTggMjkuOTk2NkMxOS4zNDY3IDI5Ljk5NjYgMjIuNjgyNCAyNi42Mzk1IDIyLjY4MjQgMjIuNDk4M0MyMi42ODI0IDE4LjM1NzEgMTkuMzQ2NyAxNSAxNS4yMzE4IDE1QzExLjExNyAxNSA3Ljc4MTI1IDE4LjM1NzEgNy43ODEyNSAyMi40OTgzQzcuNzgxMjUgMjYuNjM5NSAxMS4xMTcgMjkuOTk2NiAxNS4yMzE4IDI5Ljk5NjZaIiBmaWxsPSIjMDA1M0UwIi8+CiAgPG1hc2sgaWQ9Im1hc2swXzYyMV8zMTE1IiBzdHlsZT0ibWFzay10eXBlOmx1bWluYW5jZSIgbWFza1VuaXRzPSJ1c2VyU3BhY2VPblVzZSIgeD0iMCIgeT0iMCIgd2lkdGg9IjMxIiBoZWlnaHQ9IjMwIj4KICAgIDxwYXRoIGQ9Ik0xNS4yMzI2IDMwQzIzLjQ2NDIgMzAgMzAuMTM3MiAyMy4yODQzIDMwLjEzNzIgMTVDMzAuMTM3MiA2LjcxNTczIDIzLjQ2NDIgMCAxNS4yMzI2IDBDNy4wMDExMSAwIDAuMzI4MTI1IDYuNzE1NzMgMC4zMjgxMjUgMTVDMC4zMjgxMjUgMjMuMjg0MyA3LjAwMTExIDMwIDE1LjIzMjYgMzBaIiBmaWxsPSJ3aGl0ZSIvPgogIDwvbWFzaz4KICA8ZyBtYXNrPSJ1cmwoI21hc2swXzYyMV8zMTE1KSI+CiAgICA8cGF0aCBkPSJNMTUuMjMyNCAzMEwzMC4xMzcgMzBMMzAuMTM3IDBMMTUuMjMyNCAwTDE1LjIzMjQgMzBaIiBmaWxsPSIjMDA1M0UwIi8+CiAgPC9nPgogIDxwYXRoIGQ9Ik0xNS4yMzE4IDE0Ljk5NjZDMTkuMzQ2NyAxNC45OTY2IDIyLjY4MjQgMTEuNjM5NSAyMi42ODI0IDcuNDk4MzFDMjIuNjgyNCAzLjM1NzExIDE5LjM0NjcgMCAxNS4yMzE4IDBDMTEuMTE3IDAgNy43ODEyNSAzLjM1NzExIDcuNzgxMjUgNy40OTgzMUM3Ljc4MTI1IDExLjYzOTUgMTEuMTE3IDE0Ljk5NjYgMTUuMjMxOCAxNC45OTY2WiIgZmlsbD0iI0IzRERGMiIvPgogIDxwYXRoIGQ9Ik0xNS4zNzEyIDAuMDA2NzRDMTguNTA2OSAwLjA4NDI5IDIxLjAyMjggMi42NjAxNSAyMS4wMjI4IDUuODMyNzdDMjEuMDIyOCA4LjUwOTc3IDE5LjIyNzEgMTAuODMyOCAxNi42MDA3IDExLjUwMzdDMTQuNDA5NyAxMS45NzU3IDEyLjcyNDYgMTMuOTg1MiAxMi43MjQ2IDE2LjM5MjRDMTIuNzI0NiAxOS4xNjA1IDE0Ljk1MjQgMjEuNDAyNiAxNy43MDI4IDIxLjQwMjZDMTguNDE2NCAyMS40MDI2IDE5LjM4NzkgMjEuMjM0IDIwLjAwMSAyMC45NjA5QzIzLjk2NzUgMTkuMzQ5MyAyNi40NyAxNS40NTUyIDI2LjQ3IDEwLjg4NjdDMjYuNDcgNC44NzE4OCAyMS42MjU4IDAgMTUuNjU1OSAwQzE1LjU1ODggMCAxNS40NjUgMC4wMDMzNyAxNS4zNzEyIDAuMDA2NzRaIiBmaWxsPSIjMkFCOUZGIi8+CiAgPHBhdGggZD0iTTQuMjAyMjIgMTguOTAyOEM0LjIwMjIyIDE1Ljg3MTggNS40MTE2IDEzLjEyNCA3LjM2ODA1IDExLjEyMTNDNy44NzcyNiAxMC41NTQ5IDguMTkyMTcgOS44MTMxMyA4LjE5MjE3IDguOTkzODRDOC4xOTIxNyA3LjI1NzUgNi43OTUxOCA1Ljg1MTU2IDUuMDY5ODkgNS44NTE1NkMzLjg3MDU2IDUuODUxNTYgMi44Mjg2OCA2LjUzNTk5IDIuMzA2MDcgNy41MzczM0MxLjA0OTc5IDkuzMjYxNzIgMTIuMjgxMSAwLjMyNjE3MiAxNS4wMDE5QzAuMzI2MTcyIDIzLjA5MzYgNi42OTQ2OCAyOS42ODUgMTQuNjY0NSAyOS45ODg0QzguODM4NzMgMjkuNjkxNyA0LjIwMjIyIDI0Ljg0MzUgNC4yMDIyMiAxOC45MDI4WiIgZmlsbD0iIzAwNTNFMCIvPgogIDxwYXRoIGQ9Ik0xNC42NjggMjkuOTg0NEMxNC44NTU2IDI5Ljk5NDUgMTUuMDQ2NSAyOS45OTc5IDE1LjIzNDEgMjkuOTk3OUMxNS4wNDMyIDI5Ljk5NzkgMTQuODU1NiAyOS45OTExIDE0LjY2OCAyOS45ODQ0WiIgZmlsbD0iIzAwNTNFMCIvPgogIDxwYXRoIGQ9Ik0xNS4zNzU2IDAuMDA3ODEyNUMxOC41MTEzIDAuMDg1MzU4IDIxLjAyNzIgMi42NjEyMiAyMS4wMjcyIDUuODMzODRDMjEuMDI3MiA4LjUxMDg0IDE5LjIwMTQgMTAuODM3MiAxNi42MDUxIDExLjUwNDhDMTQuNjI4NSAxMS45NjY3IDEzLjE2NzkgMTMuNTM0NCAxMi44MjYyIDE1LjQwMjNDMTMuODk0OCAxDQ0IDE1LjIzMTUgMTUuMDA0NCAxNS4yMzE1IDE1LjAwNDRDMTkuMzQ4OCAxNS4wMDQ0IDIyLjY4MjEgMTEuNjQ2NCAyMi42ODIxIDcuNTA2MTJDMjIuNjgyMSAzLjM2NTg3IDE5LjQyMjUgMC4wODUzNTggMTUuMzc1NiAwLjAwNzgxMjVaIiBmaWxsPSIjRUNFQ0VFIi8+Cjwvc3ZnPgo=",
+      "id": "hy3",
+      "maxAllowedSize": 192000,
+      "maxInputTokens": 192000,
+      "maxOutputTokens": 64000,
+      "name": "Hy3",
+      "onlyReasoning": true,
+      "reasoning": {
+        "effort": "high",
+        "summary": "auto"
+      },
+      "relatedModels": {
+        "lite": "hy3",
+        "reasoning": "hy3"
+      },
+      "repetition_penalty": 1.05,
+      "supportsImages": true,
+      "supportsReasoning": true,
+      "supportsToolCall": true,
+      "tags": ["craft", "badge:限时免费:#FF0000"],
+      "temperature": 0.7,
+      "top_k": 20,
+      "top_p": 0.8,
+      "vendor": "j"
+    },
+    {
+      "credits": "x2.20 credits",
+      "id": "default",
+      "maxAllowedSize": 56000,
+      "maxInputTokens": 200000,
+      "maxOutputTokens": 24000,
+      "name": "Default",
+      "supportsImages": false,
+      "supportsToolCall": true,
+      "vendor": "v"
+    },
+    {
+      "credits": "x0.95 credits",
+      "descriptionEn": "Native Multimodal Model",
+      "descriptionZh": "原生多模态模型",
+      "id": "glm-5v-turbo",
+      "maxAllowedSize": 200000,
+      "maxInputTokens": 200000,
+      "maxOutputTokens": 64000,
+      "name": "GLM-5v-Turbo",
+      "onlyReasoning": true,
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto"
+      },
+      "relatedModels": {
+        "lite": "glm-5v-turbo",
+        "reasoning": "glm-5v-turbo"
+      },
+      "supportsImages": true,
+      "supportsReasoning": true,
+      "supportsToolCall": true,
+      "tags": ["craft"],
+      "temperature": 1,
+      "vendor": "e"
+    },
+    {
+      "credits": "x0.79 credits",
+      "descriptionEn": "1M context, built for long-horizon tasks.",
+      "descriptionZh": "1M 上下文,擅长长程任务",
+      "id": "glm-5.2",
+      "maxAllowedSize": 1000000,
+      "maxInputTokens": 1000000,
+      "maxOutputTokens": 48000,
+      "name": "GLM-5.2",
+      "onlyReasoning": true,
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto"
+      },
+      "relatedModels": {
+        "lite": "glm-5.2",
+        "reasoning": "glm-5.2"
+      },
+      "supportsImages": true,
+      "supportsReasoning": true,
+      "supportsToolCall": true,
+      "tags": ["craft", "badge:夜间折扣:#1E90FF"],
+      "temperature": 1,
+      "vendor": "e"
+    },
+    {
+      "credits": "x0.79 credits",
+      "descriptionEn": "Great for daily use",
+      "descriptionZh": "能力均衡,适合日常使用",
+      "id": "glm-5.1",
+      "maxAllowedSize": 200000,
+      "maxInputTokens": 200000,
+      "maxOutputTokens": 48000,
+      "name": "GLM-5.1",
+      "onlyReasoning": true,
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto"
+      },
+      "relatedModels": {
+        "lite": "glm-5.1",
+        "reasoning": "glm-5.1"
+      },
+      "supportsImages": false,
+      "supportsReasoning": true,
+      "supportsToolCall": true,
+      "temperature": 1,
+      "vendor": "e"
+    },
+    {
+      "credits": "x0.80 credits",
+      "disabledMultimodal": true,
+      "id": "glm-5.0",
+      "maxAllowedSize": 200000,
+      "maxInputTokens": 200000,
+      "maxOutputTokens": 48000,
+      "name": "GLM-5.0",
+      "relatedModels": {
+        "lite": "glm-5.0",
+        "reasoning": "glm-5.0"
+      },
+      "supportsImages": false,
+      "supportsReasoning": true,
+      "supportsToolCall": true,
+      "temperature": 1,
+      "vendor": "e"
+    },
+    {
+      "credits": "x0.23 credits",
+      "disabledMultimodal": true,
+      "id": "glm-4.7",
+      "maxAllowedSize": 200000,
+      "maxInputTokens": 200000,
+      "maxOutputTokens": 48000,
+      "name": "GLM-4.7",
+      "supportsImages": false,
+      "supportsReasoning": true,
+      "supportsToolCall": true,
+      "temperature": 1,
+      "vendor": "f"
+    },
+    {
+      "credits": "x0.23 credits",
+      "disabledMultimodal": true,
+      "id": "glm-4.6",
+      "maxAllowedSize": 168000,
+      "maxInputTokens": 168000,
+      "maxOutputTokens": 32000,
+      "name": "GLM-4.6",
+      "supportsImages": false,
+      "supportsReasoning": true,
+      "supportsToolCall": true,
+      "temperature": 1,
+      "vendor": "f"
+    },
+    {
+      "credits": "x0.11 credits",
+      "id": "glm-4.6v",
+      "maxAllowedSize": 128000,
+      "maxInputTokens": 128000,
+      "maxOutputTokens": 32000,
+      "name": "GLM-4.6V",
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto"
+      },
+      "supportsImages": true,
+      "supportsReasoning": true,
+      "supportsToolCall": true,
+      "temperature": 1,
+      "vendor": "e"
+    },
+    {
+      "credits": "x0.25 credits",
+      "descriptionEn": "Native multimodal model for coding and agents tasks",
+      "descriptionZh": "原生多模态,擅长代码、智能体任务",
+      "disabledMultimodal": false,
+      "id": "minimax-m3",
+      "maxAllowedSize": 512000,
+      "maxInputTokens": 512000,
+      "maxOutputTokens": 128000,
+      "name": "MiniMax-M3",
+      "onlyReasoning": true,
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto"
+      },
+      "relatedModels": {
+        "lite": "minimax-m3",
+        "reasoning": "minimax-m3"
+      },
+      "supportsImages": true,
+      "supportsReasoning": true,
+      "supportsToolCall": true,
+      "temperature": 1,
+      "vendor": "f"
+    },
+    {
+      "credits": "x0.18 credits",
+      "id": "minimax-m2.5",
+      "maxAllowedSize": 200000,
+      "maxInputTokens": 200000,
+      "maxOutputTokens": 48000,
+      "name": "MiniMax-M2.5",
+      "onlyReasoning": true,
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto"
+      },
+      "supportsImages": false,
+      "supportsReasoning": true,
+      "supportsToolCall": true,
+      "temperature": 1,
+      "vendor": "e"
+    },
+    {
+      "credits": "x1.62 credits",
+      "descriptionEn": "Excels at complex, long-horizon autonomous tasks, with standout front-end skills and strong knowledge work and scientific reasoning",
+      "descriptionZh": "擅长处理复杂的长程自主任务,前端开发能力突出,同时在知识工作与科研推理上表现出色。",
+      "id": "kimi-k3-1",
+      "maxAllowedSize": 1000000,
+      "maxInputTokens": 1000000,
+      "maxOutputTokens": 32000,
+      "name": "Kimi-K3",
+      "onlyReasoning": true,
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto"
+      },
+      "supportsImages": true,
+      "supportsReasoning": true,
+      "supportsToolCall": true,
+      "temperature": 1,
+      "vendor": "f"
+    },
+    {
+      "credits": "x0.57 credits",
+      "descriptionEn": "A multimodal model, good for daily use.",
+      "descriptionZh": "多模态模型,适合日常任务",
+      "id": "kimi-k2.7",
+      "maxAllowedSize": 256000,
+      "maxInputTokens": 256000,
+      "maxOutputTokens": 32000,
+      "name": "Kimi-K2.7-Code",
+      "onlyReasoning": true,
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto"
+      },
+      "relatedModels": {
+        "lite": "kimi-k2.7",
+        "reasoning": "kimi-k2.7"
+      },
+      "supportsImages": true,
+      "supportsReasoning": true,
+      "supportsToolCall": true,
+      "temperature": 1,
+      "vendor": "f"
+    },
+    {
+      "credits": "x0.52 credits",
+      "descriptionEn": "A multimodal model, good for daily use.",
+      "descriptionZh": "多模态模型,适合日常任务",
+      "id": "kimi-k2.6",
+      "maxAllowedSize": 256000,
+      "maxInputTokens": 256000,
+      "maxOutputTokens": 32000,
+      "name": "Kimi-K2.6",
+      "onlyReasoning": true,
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto"
+      },
+      "relatedModels": {
+        "lite": "kimi-k2.6",
+        "reasoning": "kimi-k2.6"
+      },
+      "supportsImages": true,
+      "supportsReasoning": true,
+      "supportsToolCall": true,
+      "tags": ["craft"],
+      "temperature": 1,
+      "vendor": "f"
+    },
+    {
+      "credits": "x0.45 credits",
+      "id": "kimi-k2.5",
+      "maxAllowedSize": 164000,
+      "maxInputTokens": 164000,
+      "maxOutputTokens": 32000,
+      "name": "Kimi-K2.5",
+      "onlyReasoning": true,
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto"
+      },
+      "relatedModels": {
+        "lite": "kimi-k2.5",
+        "reasoning": "kimi-k2.5"
+      },
+      "supportsImages": true,
+      "supportsReasoning": true,
+      "supportsToolCall": true,
+      "temperature": 1,
+      "vendor": "f"
+    },
+    {
+      "credits": "x0.54 credits",
+      "id": "kimi-k2-thinking",
+      "maxAllowedSize": 164000,
+      "maxInputTokens": 164000,
+      "maxOutputTokens": 32000,
+      "name": "Kimi-K2-Thinking",
+      "onlyReasoning": true,
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto"
+      },
+      "supportsImages": false,
+      "supportsReasoning": true,
+      "supportsToolCall": true,
+      "temperature": 1,
+      "vendor": "f"
+    },
+    {
+      "credits": "x0.05 credits",
+      "descriptionEn": "DeepSeek flagship model, supporting 1M context window",
+      "descriptionZh": "DeepSeek 旗舰模型,支持 1M 上下文窗口",
+      "id": "deepseek-v4-flash",
+      "maxAllowedSize": 1000000,
+      "maxInputTokens": 1000000,
+      "maxOutputTokens": 50000,
+      "name": "Deepseek-V4-Flash",
+      "onlyReasoning": true,
+      "reasoning": {
+        "effort": "high",
+        "summary": "auto"
+      },
+      "relatedModels": {
+        "lite": "deepseek-v4-flash",
+        "reasoning": "deepseek-v4-flash"
+      },
+      "supportsImages": true,
+      "supportsReasoning": true,
+      "supportsToolCall": true,
+      "temperature": 1,
+      "vendor": "f"
+    },
+    {
+      "credits": "x0.13 credits",
+      "descriptionEn": "DeepSeek flagship model, supporting 1M context window",
+      "descriptionZh": "DeepSeek 旗舰模型,支持 1M 上下文窗口",
+      "id": "deepseek-v4-pro",
+      "maxAllowedSize": 1000000,
+      "maxInputTokens": 1000000,
+      "maxOutputTokens": 50000,
+      "name": "Deepseek-V4-Pro",
+      "onlyReasoning": true,
+      "reasoning": {
+        "effort": "high",
+        "summary": "auto"
+      },
+      "relatedModels": {
+        "lite": "deepseek-v4-pro",
+        "reasoning": "deepseek-v4-pro"
+      },
+      "supportsImages": true,
+      "supportsReasoning": true,
+      "supportsToolCall": true,
+      "temperature": 1,
+      "vendor": "f"
+    },
+    {
+      "credits": "x0.29 credits",
+      "disabledMultimodal": true,
+      "id": "deepseek-v3-2-volc",
+      "maxAllowedSize": 96000,
+      "maxInputTokens": 96000,
+      "maxOutputTokens": 32000,
+      "name": "DeepSeek-V3.2",
+      "onlyReasoning": true,
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto"
+      },
+      "relatedModels": {
+        "lite": "deepseek-v3-2-volc",
+        "reasoning": "deepseek-v3-2-volc"
+      },
+      "supportsImages": false,
+      "supportsReasoning": true,
+      "supportsToolCall": true,
+      "temperature": 1,
+      "vendor": "e"
+    },
+    {
+      "credits": "x0.04 credits",
+      "disabledMultimodal": true,
+      "id": "hunyuan-2.0-thinking",
+      "maxAllowedSize": 128000,
+      "maxInputTokens": 128000,
+      "maxOutputTokens": 24000,
+      "name": "Hunyuan-2.0-Thinking",
+      "onlyReasoning": true,
+      "reasoning": {
+        "effort": "medium",
+        "summary": "auto"
+      },
+      "repetition_penalty": 1.05,
+      "supportsImages": false,
+      "supportsReasoning": true,
+      "supportsToolCall": true,
+      "temperature": 0.7,
+      "top_k": 20,
+      "top_p": 0.8,
+      "vendor": "e"
+    },
+    {
+      "disabledMultimodal": true,
+      "id": "hunyuan-chat",
+      "maxInputTokens": 200000,
+      "maxOutputTokens": 8192,
+      "name": "Hunyuan-Turbos",
+      "supportsImages": false,
+      "supportsTll": true,
+      "vendor": "j"
+    },
+    {
+      "id": "hunyuan-image-v3.0",
+      "name": "Hunyuan Image V3",
+      "tags": ["text-to-image"]
+    }
+  ]
+}
