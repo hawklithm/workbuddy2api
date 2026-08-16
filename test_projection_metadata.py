@@ -10,7 +10,7 @@
 
 import pytest
 
-from projection_metadata import (
+from codebuddy_proxy.projection_metadata import (
     MetadataCollector,
     TruncationLocation,
     TruncationMetadata,

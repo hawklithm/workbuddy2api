@@ -15,7 +15,7 @@ def test_response_format():
     sys.path.insert(0, str(Path(__file__).parent))
     
     # 导入必要的模块
-    from codebuddy_proxy import load_models_from_local_config, model_to_codex_format
+    from codebuddy_proxy.__main__ import load_models_from_local_config, model_to_codex_format
     
     # 1. 加载模型配置
     print("\n1. 加载本地模型配置...")
@@ -151,7 +151,7 @@ def main():
             print("✓ 返回格式: {\"models\": [...]}")
             print("✓ Codex 客户端兼容")
             print("\n可以启动服务器测试:")
-            print("  ./codebuddy_proxy.py --desensitize --verbose-llm")
+            print("  workbuddy2api --desensitize --verbose-llm")
             return 0
         else:
             print("\n❌ 部分测试失败")

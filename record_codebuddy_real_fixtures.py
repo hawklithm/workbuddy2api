@@ -23,7 +23,7 @@ import urllib.request
 import uuid
 from typing import Any
 
-from codebuddy_client_demo import CodeBuddyClient, CodeBuddyError
+from codebuddy_proxy.codebuddy_client_demo import CodeBuddyClient, CodeBuddyError
 
 
 def safe_headers(headers: Any) -> dict[str, str]:

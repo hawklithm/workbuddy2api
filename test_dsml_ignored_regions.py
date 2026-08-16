@@ -2,7 +2,7 @@
 
 import pytest
 import json
-from dsml_parser import parse_tool_calls, find_tool_markup_tag_outside_ignored
+from codebuddy_proxy.dsml_parser import parse_tool_calls, find_tool_markup_tag_outside_ignored
 
 
 class TestMarkdownCodeBlockIgnore:

@@ -2,7 +2,7 @@
 
 import pytest
 import json
-from dsml_parser import parse_tool_calls, ToolCallStreamBuffer, remove_tool_call_markup
+from codebuddy_proxy.dsml_parser import parse_tool_calls, ToolCallStreamBuffer, remove_tool_call_markup
 
 
 class TestMixedFormatParsing:

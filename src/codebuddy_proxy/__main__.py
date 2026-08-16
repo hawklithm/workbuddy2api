@@ -1,13 +1,3 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.10"
-# dependencies = [
-#     "fastapi>=0.104.0",
-#     "uvicorn>=0.24.0",
-#     "httpx[socks]>=0.25.0",
-#     "requests>=2.31.0",
-# ]
-# ///
 """Local OpenAI/Responses/Anthropic compatible proxy for CodeBuddy.
 
 High-performance async implementation with FastAPI + httpx.
@@ -18,9 +8,9 @@ Features:
 - Robust timeout handling with async iterators
 
 Usage with uv:
-    uv run codebuddy_proxy.py
-    uv run codebuddy_proxy.py --desensitize
-    uv run codebuddy_proxy.py --host 0.0.0.0 --port 8787
+    uv run --with workbuddy2api python -m codebuddy_proxy
+    uv run --with workbuddy2api python -m codebuddy_proxy --desensitize
+    uv run --with workbuddy2api python -m codebuddy_proxy --host 0.0.0.0 --port 8787
 """
 
 import argparse
@@ -41,13 +31,13 @@ import httpx
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 import uvicorn
-from dsml_parser import DSMLStreamBuffer, parse_all_tool_calls, remove_all_tool_call_markers
+from codebuddy_proxy.dsml_parser import DSMLStreamBuffer, parse_all_tool_calls, remove_all_tool_call_markers
 
-from codebuddy_client_demo import CodeBuddyClient, CodeBuddyError
+from codebuddy_proxy.codebuddy_client_demo import CodeBuddyClient, CodeBuddyError
 
 # 尝试导入高级功能模块（可选）
 try:
-    from desensitize import desensitize_body
+    from codebuddy_proxy.desensitize import desensitize_body
     HAS_DESENSITIZE = True
 except ImportError:
     HAS_DESENSITIZE = False
@@ -55,7 +45,7 @@ except ImportError:
         return body
 
 try:
-    from responses_projection import project_responses_chat_body
+    from codebuddy_proxy.responses_projection import project_responses_chat_body
     HAS_PROJECTION = True
 except ImportError:
     HAS_PROJECTION = False
@@ -64,7 +54,7 @@ except ImportError:
 
 # 导入协议转换器
 try:
-    from responses_adapter import responses_request_to_chat, ResponsesStreamConverter
+    from codebuddy_proxy.responses_adapter import responses_request_to_chat, ResponsesStreamConverter
     HAS_RESPONSES_ADAPTER = True
 except ImportError:
     HAS_RESPONSES_ADAPTER = False
@@ -73,7 +63,7 @@ except ImportError:
     ResponsesStreamConverter = None
 
 try:
-    from anthropic_adapter import anthropic_to_chat, AnthropicStreamConverter
+    from codebuddy_proxy.anthropic_adapter import anthropic_to_chat, AnthropicStreamConverter
     HAS_ANTHROPIC_ADAPTER = True
 except ImportError:
     HAS_ANTHROPIC_ADAPTER = False

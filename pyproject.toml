@@ -1,6 +1,6 @@
 [project]
-name = "codebuddy-proxy"
-version = "2.0.0"
+name = "workbuddy2api"
+version = "2.0.1"
 description = "Local OpenAI/Responses/Anthropic compatible proxy for CodeBuddy"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -17,11 +17,14 @@ dev = [
 ]
 
 [project.scripts]
-codebuddy-proxy = "codebuddy_proxy:main"
+workbuddy2api = "codebuddy_proxy.__main__:main"
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [dependency-groups]
 dev = [
