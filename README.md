@@ -57,8 +57,10 @@ uv run python -m codebuddy_proxy --login --desensitize
 
 ```bash
 # 使用最新版本（推荐）
-uv run --with workbuddy2api python -m codebuddy_proxy --desensitize \
-  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
+uv run --with workbuddy2api python -m codebuddy_proxy --desensitize
+
+# 首次使用：登录并启动
+uv run --with workbuddy2api python -m codebuddy_proxy --login --desensitize
 ```
 
 默认监听 `http://127.0.0.1:8787`
