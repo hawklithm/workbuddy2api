@@ -1,6 +1,6 @@
 [project]
 name = "workbuddy2api"
-version = "2.0.1"
+version = "2.0.2"
 description = "Local OpenAI/Responses/Anthropic compatible proxy for CodeBuddy"
 readme = "README.md"
 requires-python = ">=3.10"
