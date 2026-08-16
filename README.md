@@ -23,15 +23,33 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # 运行最新可用版本（uv 会自动创建环境并安装依赖）
 uv run --with workbuddy2api python -m codebuddy_proxy \
-  --log-file "$HOME/.local/state/workbuddy2api/codebuddy-proxy.jsonl"
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 
 # 强制刷新缓存后运行最新版本
 uv run --refresh-package workbuddy2api --with workbuddy2api \
   python -m codebuddy_proxy \
-  --log-file "$HOME/.local/state/workbuddy2api/codebuddy-proxy.jsonl"
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
 后续启动无需手动激活虚拟环境，重复执行上述 `uv run` 命令即可。
+
+### 本地源码启动
+
+在项目根目录执行以下命令，使用当前工作区源码而不是 PyPI 中的已发布版本：
+
+```bash
+# 同步本地项目依赖
+uv sync
+
+# 启动本地源码
+uv run python -m codebuddy_proxy --desensitize
+```
+
+首次使用需要登录时：
+
+```bash
+uv run python -m codebuddy_proxy --login --desensitize
+```
 
 ## 快速开始
 
@@ -40,7 +58,7 @@ uv run --refresh-package workbuddy2api --with workbuddy2api \
 ```bash
 # 使用最新版本（推荐）
 uv run --with workbuddy2api python -m codebuddy_proxy --desensitize \
-  --log-file "$HOME/.local/state/workbuddy2api/codebuddy-proxy.jsonl"
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
 默认监听 `http://127.0.0.1:8787`
@@ -102,7 +120,7 @@ codex --profile codebuddy "你的任务"
 --port PORT              监听端口（默认 8787）
 --endpoint ENDPOINT      CodeBuddy 后端地址
 --session-file PATH      会话文件路径（默认 ~/.codebuddy-session.json）
---log-file PATH          JSONL 日志文件（默认 logs/codebuddy-proxy.jsonl）
+--log-file PATH          JSONL 日志文件（默认 ~/.workbuddy2api/codebuddy-proxy.jsonl）
 --desensitize            启用脱敏处理（推荐）
 --optimize-context       启用消息压缩优化（Codex CLI 推荐）
 --login                  启动时执行浏览器登录
@@ -127,7 +145,7 @@ CODEBUDDY_PROXY_LOG_FILE  # 等同 --log-file
 
 ```bash
 uv run --with workbuddy2api python -m codebuddy_proxy --login \
-  --log-file "$HOME/.local/state/workbuddy2api/codebuddy-proxy.jsonl"
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
 浏览器打开后登录，成功后 proxy 自动启动。
@@ -136,14 +154,14 @@ uv run --with workbuddy2api python -m codebuddy_proxy --login \
 
 ```bash
 uv run --with workbuddy2api python -m codebuddy_proxy --desensitize \
-  --log-file "$HOME/.local/state/workbuddy2api/codebuddy-proxy.jsonl"
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
 ### Codex CLI 场景（启用压缩优化）
 
 ```bash
 uv run --with workbuddy2api python -m codebuddy_proxy --desensitize --optimize-context \
-  --log-file "$HOME/.local/state/workbuddy2api/codebuddy-proxy.jsonl"
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
 ### 多账号切换
@@ -151,18 +169,18 @@ uv run --with workbuddy2api python -m codebuddy_proxy --desensitize --optimize-c
 ```bash
 # 账号 1
 uv run --with workbuddy2api python -m codebuddy_proxy --session-file ~/.codebuddy-work.json --login \
-  --log-file "$HOME/.local/state/workbuddy2api/codebuddy-proxy.jsonl"
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 
 # 账号 2
 uv run --with workbuddy2api python -m codebuddy_proxy --session-file ~/.codebuddy-personal.json --login \
-  --log-file "$HOME/.local/state/workbuddy2api/codebuddy-proxy.jsonl"
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
 ### 监听所有网卡（局域网共享）
 
 ```bash
 uv run --with workbuddy2api python -m codebuddy_proxy --host 0.0.0.0 --desensitize \
-  --log-file "$HOME/.local/state/workbuddy2api/codebuddy-proxy.jsonl"
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
 ## API 接口
@@ -362,7 +380,7 @@ upstream chunk → response.output_text.delta
 ```bash
 # 必须启用 --desensitize，否则几乎每次都被拦截
 uv run --with workbuddy2api python -m codebuddy_proxy --desensitize \
-  --log-file "$HOME/.local/state/workbuddy2api/codebuddy-proxy.jsonl"
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 
 # 在 Claude Code / CC Switch 中配置
 # Base URL: http://127.0.0.1:8787/v1/messages
@@ -373,7 +391,7 @@ uv run --with workbuddy2api python -m codebuddy_proxy --desensitize \
 ```bash
 # 同时启用脱敏和消息压缩（最佳配置）
 uv run --with workbuddy2api python -m codebuddy_proxy --desensitize --optimize-context \
-  --log-file "$HOME/.local/state/workbuddy2api/codebuddy-proxy.jsonl"
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 
 # 在 Codex CLI 配置文件中
 # base_url: http://127.0.0.1:8787/v1/responses
@@ -384,7 +402,7 @@ uv run --with workbuddy2api python -m codebuddy_proxy --desensitize --optimize-c
 ```bash
 # 启用脱敏以避免合规术语被误拦
 uv run --with workbuddy2api python -m codebuddy_proxy --desensitize \
-  --log-file "$HOME/.local/state/workbuddy2api/codebuddy-proxy.jsonl"
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 
 # 示例请求
 curl http://127.0.0.1:8787/v1/chat/completions \
@@ -459,11 +477,11 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 ```bash
 # 启用消息压缩
 uv run --with workbuddy2api python -m codebuddy_proxy --optimize-context \
-  --log-file "$HOME/.local/state/workbuddy2api/codebuddy-proxy.jsonl"
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 
 # 同时启用两个功能（推荐用于 Codex CLI）
 uv run --with workbuddy2api python -m codebuddy_proxy --desensitize --optimize-context \
-  --log-file "$HOME/.local/state/workbuddy2api/codebuddy-proxy.jsonl"
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
 #### 工作原理
@@ -507,7 +525,7 @@ uv run --with workbuddy2api python -m codebuddy_proxy --desensitize --optimize-c
 启用功能后，日志会记录压缩统计：
 
 ```bash
-grep projection_applied logs/codebuddy-proxy.jsonl | jq .
+grep projection_applied "$HOME/.workbuddy2api/codebuddy-proxy.jsonl" | jq .
 ```
 
 示例输出：
@@ -538,34 +556,36 @@ grep projection_applied logs/codebuddy-proxy.jsonl | jq .
 ### 日志
 
 日志包含：
-- 文本日志：`$HOME/.local/state/workbuddy2api/proxy.log`（按天滚动，保留 30 天）
-- 结构化日志：`$HOME/.local/state/workbuddy2api/codebuddy-proxy.jsonl`（完整请求/响应，包含流式细节）
+- 文本日志：`$HOME/.workbuddy2api/proxy.log`（按天滚动，保留 30 天）
+- 结构化日志：`$HOME/.workbuddy2api/codebuddy-proxy.jsonl`（按天滚动，保留 30 天，完整请求/响应）
+
+JSONL 每条记录包含 `app_version`、`system_version`、`python_version` 和 `machine` 字段；启动时还会记录 `startup` 事件。
 
 也可以指定日志文件的绝对路径：
 
 ```bash
 uv run --with workbuddy2api python -m codebuddy_proxy \
   --desensitize \
-  --log-file "$HOME/.local/state/workbuddy2api/codebuddy-proxy.jsonl"
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
 查看日志：
 
 ```bash
 # 实时查看
-tail -f logs/codebuddy-proxy.jsonl
+tail -f "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 
 # 查看流式事件
-tail -100 logs/codebuddy-proxy.jsonl | jq 'select(.event | startswith("stream"))'
+tail -100 "$HOME/.workbuddy2api/codebuddy-proxy.jsonl" | jq 'select(.event | startswith("stream"))'
 
 # 统计超时
-jq 'select(.event=="stream_timeout")' logs/codebuddy-proxy.jsonl | wc -l
+jq 'select(.event=="stream_timeout")' "$HOME/.workbuddy2api/codebuddy-proxy.jsonl" | wc -l
 
 # 验证脱敏
-grep desensitize_applied logs/codebuddy-proxy.jsonl
+grep desensitize_applied "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 
 # 验证压缩（查看统计数据）
-grep projection_applied logs/codebuddy-proxy.jsonl | jq .
+grep projection_applied "$HOME/.workbuddy2api/codebuddy-proxy.jsonl" | jq .
 ```
 
 ### 找不到 session 文件
@@ -574,7 +594,7 @@ grep projection_applied logs/codebuddy-proxy.jsonl | jq .
 
 ```bash
 uv run --with workbuddy2api python -m codebuddy_proxy --login \
-  --log-file "$HOME/.local/state/workbuddy2api/codebuddy-proxy.jsonl"
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
 ### 401 认证失败
@@ -583,7 +603,7 @@ Token 过期，重新登录：
 
 ```bash
 uv run --with workbuddy2api python -m codebuddy_proxy --login \
-  --log-file "$HOME/.local/state/workbuddy2api/codebuddy-proxy.jsonl"
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
 ### 审核拦截
@@ -592,14 +612,14 @@ uv run --with workbuddy2api python -m codebuddy_proxy --login \
 
 ```bash
 uv run --with workbuddy2api python -m codebuddy_proxy --desensitize \
-  --log-file "$HOME/.local/state/workbuddy2api/codebuddy-proxy.jsonl"
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
 如果仍然被拦截，尝试压缩优化（仅 `/v1/responses`）：
 
 ```bash
 uv run --with workbuddy2api python -m codebuddy_proxy --desensitize --optimize-context \
-  --log-file "$HOME/.local/state/workbuddy2api/codebuddy-proxy.jsonl"
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
 ### 端口被占用
@@ -607,7 +627,7 @@ uv run --with workbuddy2api python -m codebuddy_proxy --desensitize --optimize-c
 ```bash
 lsof -i :8787
 uv run --with workbuddy2api python -m codebuddy_proxy --port 8788 \
-  --log-file "$HOME/.local/state/workbuddy2api/codebuddy-proxy.jsonl"
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
 ### SOCKS proxy 错误
@@ -623,7 +643,7 @@ env | grep -i proxy
 ```bash
 unset http_proxy https_proxy all_proxy
 uv run --with workbuddy2api python -m codebuddy_proxy \
-  --log-file "$HOME/.local/state/workbuddy2api/codebuddy-proxy.jsonl"
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
 ## 技术细节

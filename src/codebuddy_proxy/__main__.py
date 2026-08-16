@@ -17,11 +17,13 @@ import argparse
 import base64
 import hashlib
 import io
+import importlib.metadata
 import json
 import logging
 import logging.handlers
 import os
 import pathlib
+import platform
 import sys
 import time
 import uuid
@@ -101,8 +103,38 @@ def setup_logging(log_dir: pathlib.Path) -> logging.Logger:
     return logger
 
 
+def setup_json_logging(log_file: pathlib.Path) -> logging.Logger:
+    """配置 JSONL 滚动日志：按天分片，保留30天。"""
+    logger = logging.getLogger("codebuddy_proxy.jsonl")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    logger.handlers.clear()
+
+    handler = logging.handlers.TimedRotatingFileHandler(
+        log_file, when="midnight", interval=1, backupCount=30, encoding="utf-8"
+    )
+    handler.suffix = "%Y-%m-%d"
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(handler)
+
+    return logger
+
+
 def now_s() -> int:
     return int(time.time())
+
+
+def get_runtime_info() -> dict[str, str]:
+    try:
+        app_version = importlib.metadata.version("workbuddy2api")
+    except importlib.metadata.PackageNotFoundError:
+        app_version = "unknown"
+    return {
+        "app_version": app_version,
+        "system_version": platform.platform(),
+        "python_version": platform.python_version(),
+        "machine": platform.machine(),
+    }
 
 
 # ============================================================================
@@ -121,6 +153,7 @@ class ProxyState:
         enable_optimize_context: bool = False,
         verbose_llm: bool = False,
         logger: logging.Logger | None = None,
+        json_logger: logging.Logger | None = None,
     ):
         self.client = client
         self.mock_dir = mock_dir
@@ -129,6 +162,8 @@ class ProxyState:
         self.enable_optimize_context = enable_optimize_context
         self.verbose_llm = verbose_llm
         self.logger = logger
+        self.json_logger = json_logger
+        self.runtime_info = get_runtime_info()
         self.started_at = time.time()
     
     def ensure_auth(self) -> None:
@@ -136,29 +171,33 @@ class ProxyState:
             self.client.ensure_authenticated()
     
     def write_log(self, event: str, **kwargs) -> None:
-        if self.log_file is None:
+        if self.json_logger is None:
             return
         try:
-            record = {"timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "event": event, **kwargs}
-            with open(self.log_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            record = {
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                "event": event,
+                **self.runtime_info,
+                **kwargs,
+            }
+            self.json_logger.info(json.dumps(record, ensure_ascii=False))
         except Exception:
             pass
     
     def write_body_log(self, event: str, body: bytes, **kwargs) -> None:
-        if self.log_file is None:
+        if self.json_logger is None:
             return
         try:
             text = body.decode("utf-8", errors="replace")
             record = {
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 "event": event,
+                **self.runtime_info,
                 "body_bytes": len(body),
                 "body_text": text,
                 **kwargs
             }
-            with open(self.log_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            self.json_logger.info(json.dumps(record, ensure_ascii=False))
         except Exception:
             pass
 
@@ -1500,9 +1539,18 @@ def main():
                         help="会话文件路径")
     parser.add_argument("--mock-dir", type=pathlib.Path,
                         help="只使用指定目录中的真实响应 fixture，不访问 CodeBuddy 后端")
-    parser.add_argument("--log-file", type=pathlib.Path,
-                        default=pathlib.Path(os.getenv("CODEBUDDY_PROXY_LOG_FILE", "logs/codebuddy-proxy.jsonl")),
-                        help="记录完整请求/响应的 JSONL 文件（默认 logs/codebuddy-proxy.jsonl）")
+    default_log_file = pathlib.Path(
+        os.getenv(
+            "CODEBUDDY_PROXY_LOG_FILE",
+            str(pathlib.Path.home() / ".workbuddy2api" / "codebuddy-proxy.jsonl"),
+        )
+    ).expanduser()
+    parser.add_argument(
+        "--log-file",
+        type=pathlib.Path,
+        default=default_log_file,
+        help="记录完整请求/响应的 JSONL 文件（默认 ~/.workbuddy2api/codebuddy-proxy.jsonl）",
+    )
     parser.add_argument("--desensitize", action="store_true",
                         help="启用脱敏处理，对 system 消息中的敏感词插入零宽空格（缓解审核误拦）")
     parser.add_argument("--optimize-context", action="store_true",
@@ -1518,10 +1566,12 @@ def main():
     parser.add_argument("--config-cache-ttl", type=int, default=int(os.getenv("CODEBUDDY_CONFIG_CACHE_TTL", "300")),
                         help="远程配置缓存 TTL（秒，默认 300）")
     args = parser.parse_args()
+    args.log_file = args.log_file.expanduser()
     
     # 设置日志
     log_dir = args.log_file.parent if args.log_file else pathlib.Path("logs")
     logger = setup_logging(log_dir)
+    json_logger = setup_json_logging(args.log_file)
     
     # 初始化客户端
     client = CodeBuddyClient(args.endpoint, session_file=args.session_file)
@@ -1538,7 +1588,20 @@ def main():
         enable_desensitize=args.desensitize,
         enable_optimize_context=args.optimize_context,
         verbose_llm=args.verbose_llm,
-        logger=logger
+        logger=logger,
+        json_logger=json_logger,
+    )
+    proxy_state.write_log(
+        "startup",
+        host=args.host,
+        port=args.port,
+    )
+    logger.info(
+        "Runtime: app_version=%s system_version=%s python_version=%s machine=%s",
+        proxy_state.runtime_info["app_version"],
+        proxy_state.runtime_info["system_version"],
+        proxy_state.runtime_info["python_version"],
+        proxy_state.runtime_info["machine"],
     )
     
     # 初始化远程配置缓存（默认启用动态模型列表）
