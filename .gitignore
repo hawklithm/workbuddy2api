@@ -51,3 +51,6 @@ build/
 
 # VS Code 扩展文件
 *.vsix
+
+# 归档的临时文件和分析文档
+archive/
