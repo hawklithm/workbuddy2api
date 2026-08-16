@@ -983,20 +983,54 @@ async def stream_upstream(
                 
                 diagnostic("upstream_response", protocol=protocol, status=resp.status_code)
                 
-                # 【配置】最大流式响应时长（秒）
-                MAX_STREAM_DURATION = 60  # 60秒适合交互式对话，180秒适合复杂任务
+                # 【配置】超时策略 - 双重超时机制
+                # 1. 空闲超时（idle timeout）：连续N秒没有新chunk → 超时
+                # 2. 总时长上限（total duration）：绝对时长限制，防止无限期占用
+                client_timeout = body.get("max_stream_duration")
+                client_idle_timeout = body.get("max_idle_duration")
+                
+                # 空闲超时：默认60秒，客户端可配置（10-300秒）
+                if client_idle_timeout is not None:
+                    MAX_IDLE_DURATION = min(max(int(client_idle_timeout), 10), 300)
+                else:
+                    MAX_IDLE_DURATION = 60  # 60秒没有新数据则超时
+                
+                # 总时长上限：默认30分钟，客户端可配置（最大2小时）
+                if client_timeout is not None:
+                    MAX_TOTAL_DURATION = min(max(int(client_timeout), 60), 7200)
+                else:
+                    MAX_TOTAL_DURATION = 1800  # 30分钟绝对上限
+                
+                last_chunk_time = time.time()  # 记录最后一次收到chunk的时间
                 
                 # 异步迭代行（自动处理超时和分块）
                 async for line in resp.aiter_lines():
-                    # 【保护】检查总时长，防止流无限期运行
-                    elapsed = time.time() - stream_start_time
-                    if elapsed > MAX_STREAM_DURATION:
-                        diagnostic("stream_duration_exceeded", protocol=protocol,
-                                  chunks=chunk_count, elapsed=round(elapsed, 2),
-                                  max_duration=MAX_STREAM_DURATION)
-                        state.write_log("stream_duration_exceeded", protocol=protocol, 
-                                       chunks=chunk_count, elapsed=round(elapsed, 2))
-                        break  # 强制结束流
+                    current_time = time.time()
+                    
+                    # 【保护1】检查空闲超时：距离上次chunk超过N秒
+                    idle_time = current_time - last_chunk_time
+                    if idle_time > MAX_IDLE_DURATION:
+                        diagnostic("stream_idle_timeout", protocol=protocol,
+                                  chunks=chunk_count, 
+                                  idle_time=round(idle_time, 2),
+                                  max_idle=MAX_IDLE_DURATION)
+                        state.write_log("stream_idle_timeout", protocol=protocol,
+                                       chunks=chunk_count, idle_time=round(idle_time, 2))
+                        break  # 空闲超时，结束流
+                    
+                    # 【保护2】检查总时长上限：防止无限期运行
+                    total_elapsed = current_time - stream_start_time
+                    if total_elapsed > MAX_TOTAL_DURATION:
+                        diagnostic("stream_total_duration_exceeded", protocol=protocol,
+                                  chunks=chunk_count, 
+                                  elapsed=round(total_elapsed, 2),
+                                  max_duration=MAX_TOTAL_DURATION)
+                        state.write_log("stream_total_duration_exceeded", protocol=protocol,
+                                       chunks=chunk_count, elapsed=round(total_elapsed, 2))
+                        break  # 总时长超限，结束流
+                    
+                    # 更新最后chunk时间
+                    last_chunk_time = current_time
                     
                     # 【日志】进度记录（每10个chunk且间隔5秒）
                     if chunk_count > 0 and chunk_count % 10 == 0:
@@ -1168,13 +1202,15 @@ async def stream_upstream(
                         yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
                     
                     # 【修复】发送SSE流结束标记，防止客户端持续等待
-                    # 症状：最后一段内容不显示，超时后才能完整显示
-                    # 原因：缺少明确的流结束标记，客户端一直等待更多事件
                     yield b"data: [DONE]\n\n"
                 
                 elif protocol == "anthropic" and anthropic_state:
                     for event_name, event_data in anthropic_state.finish():
                         yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
+                    
+                    # 【修复】发送SSE流结束标记，防止客户端持续等待（与Responses协议保持一致）
+                    # 虽然Anthropic有message_stop事件，但明确的[DONE]标记能确保客户端立即处理最后的内容
+                    yield b"data: [DONE]\n\n"
                 
                 elif protocol == "openai":
                     yield b"data: [DONE]\n\n"
@@ -1184,6 +1220,16 @@ async def stream_upstream(
         diagnostic("stream_timeout", protocol=protocol, chunks=chunk_count,
             elapsed=round(time.time() - stream_start_time, 2), error=str(exc))
         state.write_log("stream_timeout", protocol=protocol, chunks=chunk_count, error=str(exc))
+        
+        # 【防御性编程】确保发出完整的事件序列
+        if protocol == "responses" and responses_state:
+            for event_name, event_data in responses_state.finish():
+                yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
+        elif protocol == "anthropic" and anthropic_state:
+            for event_name, event_data in anthropic_state.finish():
+                yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
+        
+        # 发送错误事件
         error_chunk = {
             "error": {
                 "message": f"stream timeout after {chunk_count} chunks",
@@ -1197,6 +1243,16 @@ async def stream_upstream(
         diagnostic("stream_error", protocol=protocol, chunks=chunk_count,
             elapsed=round(time.time() - stream_start_time, 2), error=str(exc))
         state.write_log("stream_error", protocol=protocol, chunks=chunk_count, error=str(exc))
+        
+        # 【防御性编程】确保发出完整的事件序列
+        if protocol == "responses" and responses_state:
+            for event_name, event_data in responses_state.finish():
+                yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
+        elif protocol == "anthropic" and anthropic_state:
+            for event_name, event_data in anthropic_state.finish():
+                yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
+        
+        # 发送错误事件
         error_chunk = {
             "error": {
                 "message": f"stream error: {exc}",
