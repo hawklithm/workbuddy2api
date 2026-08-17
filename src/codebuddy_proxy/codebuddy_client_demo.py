@@ -81,8 +81,11 @@ class CodeBuddyClient:
         body: Any = None,
         timeout: float = 30,
     ) -> Any:
-        request_headers = {"User-Agent": "Mozilla/5.0 (compatible; Genie-IDE/1.0)"}
-        request_headers.update(headers or {})
+        # 🔥 所有请求都必须包含这两个基础标识（匹配插件行为）
+        request_headers = {
+            "User-Agent": "Mozilla/5.0 (compatible; Genie-IDE/1.0)",
+            "X-Product-Code": "codebuddy",
+        }
         data = None
         if body is not None:
             data = json.dumps(body).encode("utf-8")
@@ -258,6 +261,8 @@ class CodeBuddyClient:
             f"{self.endpoint}/v2/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
             headers={
+                "User-Agent": "Mozilla/5.0 (compatible; Genie-IDE/1.0)",
+                "X-Product-Code": "codebuddy",
                 **self.auth_headers(),
                 "Content-Type": "application/json",
                 "Accept": "text/event-stream",

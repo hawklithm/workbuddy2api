@@ -897,6 +897,7 @@ async def forward_chat(
     
     url = state.client.endpoint + "/v2/chat/completions"
     headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; Genie-IDE/1.0)",  # 👈 添加
         **state.client.auth_headers(),
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
