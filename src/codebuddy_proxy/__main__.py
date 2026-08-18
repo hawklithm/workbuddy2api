@@ -897,11 +897,17 @@ async def forward_chat(
     
     url = state.client.endpoint + "/v2/chat/completions"
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; Genie-IDE/1.0)",  # 👈 添加
+        "User-Agent": "Mozilla/5.0 (compatible; Genie-IDE/1.0)",
         **state.client.auth_headers(),
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
     }
+    
+    # 🔍 调试：输出实际发送的IDE识别headers
+    if state.logger:
+        ide_headers = {k: v for k, v in headers.items() 
+                      if k.startswith("X-IDE-") or k == "X-Product-Version" or k == "X-Machine-Id"}
+        diagnostic("upstream_ide_headers", **ide_headers)
     
     if stream:
         # 流式：直接转发
