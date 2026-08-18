@@ -961,6 +961,11 @@ async def stream_upstream(
     # DSML 缓冲区（用于处理可能的文本标记格式工具调用）
     dsml_buffer = DSMLStreamBuffer()
     
+    # 【修复 B1】原生流式 tool_calls name 缓存
+    # 上游首 chunk 带完整 name，后续 chunk name 为空但有 arguments 分片
+    # 维护 name 缓存防止空值覆盖
+    native_tool_name_by_index: dict[int, str] = {}
+    
     emitted_response_created = False
     response_text = ""
     response_text_started = False
@@ -1096,6 +1101,34 @@ async def stream_upstream(
                     
                     # 根据协议转换事件
                     if protocol == "openai":
+                        # 【修复 Bug 1】清理空字符串的 finish_reason
+                        # 上游可能返回 "finish_reason": ""，导致客户端序列化失败
+                        # 必须转换为 null 或删除该字段
+                        if "choices" in chunk:
+                            for choice in chunk["choices"]:
+                                if "finish_reason" in choice and choice["finish_reason"] == "":
+                                    choice["finish_reason"] = None
+                        
+                        # 【修复 Bug 2】原生流式 tool_calls name 缓存
+                        # 提取并回填 tool_calls 中的 name
+                        native_tool_calls = (
+                            ((chunk.get("choices") or [{}])[0].get("delta") or {}).get("tool_calls")
+                        )
+                        if native_tool_calls:
+                            for tc in native_tool_calls:
+                                idx = tc.get("index", 0)
+                                fn = tc.get("function") or {}
+                                nm = fn.get("name") or ""
+                                
+                                # 首次出现非空 name：记录到缓存
+                                if nm:
+                                    native_tool_name_by_index[idx] = nm
+                                # 后续空 name：从缓存回填
+                                elif idx in native_tool_name_by_index:
+                                    if "function" not in tc:
+                                        tc["function"] = {}
+                                    tc["function"]["name"] = native_tool_name_by_index[idx]
+                        
                         # 提取 content 并通过 DSML 缓冲区处理
                         chunk_content = str(
                             ((chunk.get("choices") or [{}])[0].get("delta") or {}).get("content") or ""
