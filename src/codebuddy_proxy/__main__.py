@@ -1152,8 +1152,10 @@ async def stream_upstream(
                                     chunk["choices"][0]["delta"] = {}
                                 chunk["choices"][0]["delta"]["content"] = cleaned_content
                         
-                        # 如果检测到工具调用，添加 tool_calls 字段
-                        if detected_tool_calls and dsml_buffer.should_emit_tool_calls():
+                        # 【修复 Bug B2】仅当 chunk 不含原生 tool_calls 时，才使用 DSML 解析的工具调用
+                        # DSML 用于兜底：处理上游以文本标记返回工具调用的场景
+                        # 如果 chunk 已有原生 delta.tool_calls，原样透传，绝不覆盖
+                        if detected_tool_calls and dsml_buffer.should_emit_tool_calls() and not native_tool_calls:
                             if "choices" in chunk and len(chunk["choices"]) > 0:
                                 chunk["choices"][0]["finish_reason"] = "tool_calls"
                                 # 将检测到的工具调用转换为 OpenAI 格式
@@ -1196,8 +1198,8 @@ async def stream_upstream(
                                     chunk["choices"][0]["delta"] = {}
                                 chunk["choices"][0]["delta"]["content"] = cleaned_content
                             
-                            # 如果检测到工具调用，添加 tool_calls 字段
-                            if chunk_tool_calls and dsml_buffer.should_emit_tool_calls():
+                            # 【修复 Bug B2】仅当 chunk 不含原生 tool_calls 时，才使用 DSML 解析的工具调用
+                            if chunk_tool_calls and dsml_buffer.should_emit_tool_calls() and not native_tool_calls:
                                 if "choices" in chunk and len(chunk["choices"]) > 0:
                                     chunk["choices"][0]["finish_reason"] = "tool_calls"
                                     chunk["choices"][0]["delta"]["tool_calls"] = [
@@ -1242,8 +1244,8 @@ async def stream_upstream(
                                 # 使用清理后的内容替换原始内容
                                 chunk["choices"][0]["delta"]["content"] = cleaned_content
                             
-                            # 如果检测到工具调用，添加 tool_calls 字段
-                            if chunk_tool_calls and dsml_buffer.should_emit_tool_calls():
+                            # 【修复 Bug B2】仅当 chunk 不含原生 tool_calls 时，才使用 DSML 解析的工具调用
+                            if chunk_tool_calls and dsml_buffer.should_emit_tool_calls() and not native_tool_calls:
                                 if "choices" in chunk and len(chunk["choices"]) > 0:
                                     chunk["choices"][0]["finish_reason"] = "tool_calls"
                                     chunk["choices"][0]["delta"]["tool_calls"] = [
