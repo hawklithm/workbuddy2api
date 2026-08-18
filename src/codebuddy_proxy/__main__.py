@@ -1101,13 +1101,13 @@ async def stream_upstream(
                     
                     # 根据协议转换事件
                     if protocol == "openai":
-                        # 【修复 Bug 1】清理空字符串的 finish_reason
-                        # 上游可能返回 "finish_reason": ""，导致客户端序列化失败
-                        # 必须转换为 null 或删除该字段
+                        # 【修复 Bug B3】删除空 finish_reason 字段
+                        # 上游可能返回 "finish_reason": "" 或 null，导致客户端序列化失败
+                        # 完全删除该字段，只保留真实的 stop/tool_calls/length/content_filter
                         if "choices" in chunk:
                             for choice in chunk["choices"]:
-                                if "finish_reason" in choice and choice["finish_reason"] == "":
-                                    choice["finish_reason"] = None
+                                if "finish_reason" in choice and (choice["finish_reason"] == "" or choice["finish_reason"] is None):
+                                    del choice["finish_reason"]
                         
                         # 【修复 Bug 2】原生流式 tool_calls name 缓存
                         # 提取并回填 tool_calls 中的 name
