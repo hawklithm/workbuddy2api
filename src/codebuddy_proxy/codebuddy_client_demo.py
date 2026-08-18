@@ -118,7 +118,13 @@ class CodeBuddyClient:
         auth = self.session.get("auth") or {}
         headers: dict[str, str] = {
             # 🔥 关键标识：所有请求都需要这个 header
-            "X-Product-Code": "codebuddy"
+            "X-Product-Code": "codebuddy",
+            # 🔥 IDE 识别信息（服务端用于识别客户端类型）
+            "X-IDE-Type": "vscode",
+            "X-IDE-Name": "Visual Studio Code",
+            "X-IDE-Version": "1.70.2",  # VSCode 最低版本要求
+            "X-Product-Version": "4.10.33259736",  # 插件版本
+            "X-Machine-Id": self._get_machine_id(),
         }
         
         if account.get("uid"):
@@ -138,6 +144,32 @@ class CodeBuddyClient:
             # X-Domain for the plugin protocol.
             headers["X-Domain"] = str(auth["domain"])
         return headers
+
+    def _get_machine_id(self) -> str:
+        """获取或生成机器ID（模拟VSCode的machineId）"""
+        import hashlib
+        import platform
+        import uuid
+        
+        # 尝试从session读取已保存的machineId
+        saved_machine_id = self.session.get("machineId")
+        if saved_machine_id:
+            return str(saved_machine_id)
+        
+        # 生成一个稳定的machineId（基于主机名和用户）
+        try:
+            hostname = platform.node()
+            username = os.environ.get("USER") or os.environ.get("USERNAME") or "unknown"
+            seed = f"{hostname}-{username}"
+            machine_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, seed))
+        except Exception:
+            # 如果失败，生成随机ID
+            machine_id = str(uuid.uuid4())
+        
+        # 保存到session
+        self.session["machineId"] = machine_id
+        self._save_session(self.session)
+        return machine_id
 
     def login(self, *, open_browser: bool = True, timeout: int = 300) -> None:
         no_auth = {
