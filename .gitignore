@@ -55,3 +55,8 @@ build/
 # 归档的临时文件和分析文档
 archive/
 .codegraph/
+
+# patch 产生的备份/原始/拒绝文件
+*.backup
+*.orig
+*.rej
