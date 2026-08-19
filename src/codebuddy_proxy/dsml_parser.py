@@ -776,7 +776,8 @@ class ToolCallStreamBuffer:
                         prefix = self.buffer[:tag.start]
                         suffix = self.buffer[close_tag.end + 1:]
                         
-                        self.buffer = ""
+                        # 【修复】保留闭标签之后的文本，避免同 chunk 内跟随的内容被丢弃
+                        self.buffer = suffix
                         
                         return prefix.strip(), calls
                 else:
@@ -806,7 +807,8 @@ class ToolCallStreamBuffer:
                         prefix = self.buffer[:tag.start]
                         suffix = self.buffer[close_tag.end + 1:]
                         
-                        self.buffer = ""
+                        # 【修复】保留闭标签之后的文本，避免同 chunk 内跟随的内容被丢弃
+                        self.buffer = suffix
                         
                         return prefix.strip(), calls
                 else:
@@ -815,14 +817,64 @@ class ToolCallStreamBuffer:
             
             i = tag.end + 1
         
-        # 如果 buffer 中没有任何 < 字符，可以安全输出
-        if '<' in self.buffer:
+        # 改进：不再「只要存在 '<' 就整段扣留」。当文本中出现工具调用标签的
+        # 示例（如架构文档里写的 `<tool_call><invoke>`）时，原逻辑会把其后
+        # 的全部内容永久扣留并在流结束时丢失。
+        # 新策略：只扣留「最后一个可能正在生成工具调用标签」的后缀，先吐出
+        # 此前的内容；若残留片段并非工具调用开头，则整段作为普通文本发出。
+        last_lt = self.buffer.rfind('<')
+        if last_lt == -1:
+            output = self.buffer
+            self.buffer = ""
+            return output, None
+
+        tail = self.buffer[last_lt:]
+        if self._is_tool_call_start(tail):
+            prefix = self.buffer[:last_lt]
+            self.buffer = tail
+            if prefix:
+                return prefix, None
             return "", None
-        
+
+        # 残留 '<' 不是工具调用开头，视为普通文本，整段发出
         output = self.buffer
         self.buffer = ""
         return output, None
-    
+
+    def _is_tool_call_start(self, tail: str) -> bool:
+        """
+        判断以 '<' 开头的 tail 是否可能是「正在流式生成的工具调用标签」开头。
+        仅对已知的块级标签（tool_calls / invoke 及其变体、DSML 前缀）做保守前缀
+        匹配，避免把 '<50%'、'a < b' 这类普通文本中的 '<' 误判为工具调用。
+        """
+        if not tail.startswith('<'):
+            return False
+        body = tail[1:]
+        # 去掉可选的 DSML 标记前缀（全角/半角变体）
+        for variant in DSML_VARIANTS:
+            if body.startswith(variant):
+                body = body[len(variant):]
+                break
+        body = body.lstrip().lower()
+        if not body:
+            # 形如 "<" 或 "<｜｜DSML｜｜>" 且标签名尚未到达：仍可能是工具调用开头
+            return True
+        for opener in ("tool", "invoke", "tool_calls", "tool-calls",
+                       "toolcalls", "tool_call", "tool-call"):
+            if opener.startswith(body) or body.startswith(opener):
+                return True
+        return False
+
+    def flush(self) -> str:
+        """
+        流结束时强制刷新残留缓冲区。
+        将仍留在 buffer 中的内容（可能是被误扣留的普通文本，或未完成/被截断的
+        工具调用片段）作为纯文本一次性吐出，避免内容永久丢失。
+        """
+        leftover = self.buffer
+        self.buffer = ""
+        return leftover
+
     def should_emit_tool_calls(self) -> bool:
         """是否应该发送 tool_calls"""
         return self.calls_emitted

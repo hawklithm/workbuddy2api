@@ -1268,6 +1268,13 @@ async def stream_upstream(
                 
                 # 发送结束事件
                 if protocol == "responses" and responses_state:
+                    # 【修复】流结束前强制刷新 DSML 缓冲区残留内容
+                    residual = dsml_buffer.flush()
+                    if residual:
+                        for event_name, event_data in responses_state.feed_chunk({
+                            "choices": [{"index": 0, "delta": {"content": residual}}]
+                        }):
+                            yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
                     # 使用 ResponsesStreamConverter 的 finish() 方法发出完整事件序列
                     for event_name, event_data in responses_state.finish():
                         yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
@@ -1276,6 +1283,13 @@ async def stream_upstream(
                     yield b"data: [DONE]\n\n"
                 
                 elif protocol == "anthropic" and anthropic_state:
+                    # 【修复】流结束前强制刷新 DSML 缓冲区残留内容
+                    residual = dsml_buffer.flush()
+                    if residual:
+                        for event_name, event_data in anthropic_state.feed_chunk({
+                            "choices": [{"index": 0, "delta": {"content": residual}}]
+                        }):
+                            yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
                     for event_name, event_data in anthropic_state.finish():
                         yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
                     
@@ -1284,6 +1298,18 @@ async def stream_upstream(
                     yield b"data: [DONE]\n\n"
                 
                 elif protocol == "openai":
+                    # 【修复】流结束前强制刷新 DSML 缓冲区残留内容，避免含 '<' 的
+                    # 普通文本（如文档中举例的工具调用标签）被永久扣留而截断输出
+                    residual = dsml_buffer.flush()
+                    if residual:
+                        response_text += residual
+                        final_chunk = {
+                            "choices": [{
+                                "index": 0,
+                                "delta": {"content": residual},
+                            }]
+                        }
+                        yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n".encode()
                     yield b"data: [DONE]\n\n"
     
     except httpx.TimeoutException as exc:
