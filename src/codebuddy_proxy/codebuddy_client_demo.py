@@ -25,6 +25,26 @@ class CodeBuddyError(RuntimeError):
     pass
 
 
+def _load_json_bytes(raw: bytes) -> Any:
+    """按 utf-8 → gbk → cp936 → latin-1 依次解码并解析 JSON。
+
+    兼容上游偶发返回非 UTF-8 字节（如 GBK）的情况，避免 `raw.decode("utf-8")`
+    抛 `UnicodeDecodeError`。若所有编码都无法解析为合法 JSON，最终以
+    latin-1 解码后抛 `json.JSONDecodeError`，交由调用方统一处理。
+    """
+    for encoding in ("utf-8", "gbk", "cp936", "latin-1"):
+        try:
+            text = raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            continue
+    # latin-1 能解码任意字节，故 decode 不会失败；走到这里仅当 JSON 结构非法。
+    return json.loads(raw.decode("latin-1"))
+
+
 class CodeBuddyClient:
     def __init__(
         self,
@@ -112,7 +132,7 @@ class CodeBuddyClient:
         if "json" not in content_type and not raw:
             return None
         try:
-            return json.loads(raw.decode("utf-8"))
+            return _load_json_bytes(raw)
         except json.JSONDecodeError as exc:
             raise CodeBuddyError(f"{path} 返回的不是 JSON: {raw[:300]!r}") from exc
 

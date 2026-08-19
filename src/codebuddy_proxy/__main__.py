@@ -768,13 +768,48 @@ async def list_models():
 
 
 # ============================================================================
+# 请求体解析（兼容非 UTF-8 编码，避免 UnicodeDecodeError 抛 500）
+# ============================================================================
+
+async def parse_request_body(request: Request) -> Any:
+    """解析 JSON 请求体，兼容 GBK/cp936/latin-1 等非 UTF-8 编码。
+
+    某些客户端（如 Pi）偶尔以 GBK 编码发送请求体，而 Starlette 的
+    `request.json()` 内部是 `json.loads(raw_bytes)`，默认按 UTF-8 解码，
+    遇非 UTF-8 字节会直接抛 `UnicodeDecodeError`（`ValueError` 子类，
+    非 `JSONDecodeError`），导致 500。此处改为按
+    utf-8 → gbk → cp936 → latin-1 依次解码再解析，彻底失败时返回 400。
+    """
+    raw = await request.body()
+    for encoding in ("utf-8", "gbk", "cp936", "latin-1"):
+        try:
+            text = raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            continue
+    # latin-1 能解码任意字节，故 decode 不会失败；走到这里仅当 JSON 结构非法。
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": {
+                "message": "请求体不是有效的 JSON（已尝试 utf-8/gbk/cp936/latin-1 解码）",
+                "type": "invalid_request_body",
+            }
+        },
+    )
+
+
+# ============================================================================
 # 端点：/v1/chat/completions
 # ============================================================================
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     state = get_state()
-    body = await request.json()
+    body = await parse_request_body(request)
     
     log_client_request("POST", "/v1/chat/completions", body)
     diagnostic("request", protocol="openai", **body_summary(body))
@@ -789,7 +824,7 @@ async def chat_completions(request: Request):
 @app.post("/v1/responses")
 async def create_response(request: Request):
     state = get_state()
-    body = await request.json()
+    body = await parse_request_body(request)
     
     log_client_request("POST", "/v1/responses", body)
     
@@ -847,7 +882,7 @@ async def create_response(request: Request):
 @app.post("/v1/messages")
 async def create_message(request: Request):
     state = get_state()
-    body = await request.json()
+    body = await parse_request_body(request)
     
     log_client_request("POST", "/v1/messages", body)
     
