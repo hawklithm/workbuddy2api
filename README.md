@@ -109,6 +109,36 @@ codex --profile codebuddy "你的任务"
 }
 ```
 
+#### OpenCode
+
+编辑项目根目录的 `opencode.json`：
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "codebuddy/glm-5.2",
+  "providers": {
+    "codebuddy": {
+      "name": "CodeBuddy (via local proxy)",
+      "package": "@opencode-ai/ai/providers/openai-compatible",
+      "settings": {
+        "baseURL": "http://127.0.0.1:8787/v1",
+        "apiKey": "noop"
+      },
+      "models": {
+        "glm-5.2": { "modelID": "glm-5.2", "name": "GLM-5.2" },
+        "deepseek-v4-pro": { "modelID": "deepseek-v4-pro", "name": "DeepSeek V4 Pro" },
+        "kimi-k2.7": { "modelID": "kimi-k2.7", "name": "Kimi K2.7" }
+      }
+    }
+  }
+}
+```
+
+启动 opencode 后，用 `/models` 命令在 `codebuddy` provider 下选择模型（如 `codebuddy/glm-5.2`）。
+
+> 说明：`baseURL` 指向本地代理；`apiKey` 填任意占位值即可（本地代理不校验密钥）。`models` 的 key 是 OpenCode 内的模型 ID（供选择），`modelID` 是发给代理的实际模型名。密钥字段请用 `apiKey`（而非某些旧模板里的 `env_key`），避免绑定错误的 provider 语义。
+
 #### 其他 OpenAI 兼容客户端
 
 - Base URL: `http://127.0.0.1:8787/v1`
