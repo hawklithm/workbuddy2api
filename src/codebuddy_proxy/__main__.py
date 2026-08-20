@@ -1188,6 +1188,13 @@ async def stream_upstream(
                     if chunk.get("model"):
                         last_chunk_model = chunk["model"]
                     
+                    # 提取当前 chunk 的原生 tool_calls（三种协议共享）。
+                    # 注意：必须在协议分支之前定义，responses/anthropic 分支
+                    # 的 B2 覆盖条件也会引用它（原生 tool_calls 存在时不覆盖）。
+                    native_tool_calls = (
+                        ((chunk.get("choices") or [{}])[0].get("delta") or {}).get("tool_calls")
+                    )
+                    
                     # 根据协议转换事件
                     if protocol == "openai":
                         # 【修复 Bug B3】删除空 finish_reason 字段
@@ -1199,10 +1206,8 @@ async def stream_upstream(
                                     del choice["finish_reason"]
                         
                         # 【修复 Bug 2】原生流式 tool_calls name 缓存
-                        # 提取并回填 tool_calls 中的 name
-                        native_tool_calls = (
-                            ((chunk.get("choices") or [{}])[0].get("delta") or {}).get("tool_calls")
-                        )
+                        # 首 chunk 带完整 name，后续 chunk name 为空但带 arguments 分片，
+                        # 这里按 index 缓存 name 并回填（native_tool_calls 已在协议分支前提取）
                         if native_tool_calls:
                             for tc in native_tool_calls:
                                 idx = tc.get("index", 0)
