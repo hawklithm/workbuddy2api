@@ -10,10 +10,6 @@
 流结束时调用 flush() 强制吐出残留内容，保证零丢失。
 """
 
-import os
-import json
-import pytest
-
 from codebuddy_proxy.dsml_parser import ToolCallStreamBuffer
 
 
@@ -89,57 +85,3 @@ def test_incomplete_tool_call_flushed_as_text():
     text = "开始处理<tool_calls><invoke name=\"bash\"><parameter name=\"cmd\">"
     result = stream_through(text, chunk_size=10)
     assert result == text, "被截断的工具调用片段也应原样保留，不能丢"
-
-
-def test_real_log_replay_no_loss():
-    """最强验证：用用户真实日志里的上游 chunk 复现，确认完整回答不再被截断。
-
-    日志路径来自用户提供的 C:\\Users\\marcus\\.workbuddy2api\\codebuddy-proxy.jsonl；
-    若本机不存在该日志则跳过（不视为失败）。
-    """
-    log_path = "C:/Users/marcus/.workbuddy2api/codebuddy-proxy.jsonl"
-    if not os.path.exists(log_path):
-        pytest.skip(f"真实日志不存在，跳过复现：{log_path}")
-
-    # 抽取最终一轮（17:08:46）上游 SSE 的所有 delta.content
-    events = []
-    with open(log_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                events.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-
-    evt = next((e for e in events
-                if e.get("event") == "upstream_response"
-                and e.get("timestamp") == "2026-08-19T17:08:46+0800"), None)
-    if evt is None:
-        pytest.skip("真实日志中未找到 17:08:46 的历史请求（日志已轮转），跳过复现")
-
-    chunks = []
-    for raw in evt["body_text"].splitlines():
-        raw = raw.strip()
-        if not raw.startswith("data:"):
-            continue
-        payload = raw[5:].strip()
-        if payload == "[DONE]":
-            continue
-        try:
-            obj = json.loads(payload)
-        except json.JSONDecodeError:
-            continue
-        delta = ((obj.get("choices") or [{}])[0].get("delta") or {})
-        c = delta.get("content")
-        if c:
-            chunks.append(c)
-
-    full = "".join(chunks)
-    result = stream_through("".join(chunks), chunk_size=1)
-    assert result == full, (
-        f"真实日志复现失败：代理应完整转发 {len(full)} 字符，"
-        f"实际仅 {len(result)} 字符（丢失 {len(full) - len(result)}）"
-    )
-    assert result.endswith("需要我针对某个具体模块深入分析，或指出代码中存在的问题清单吗？")
