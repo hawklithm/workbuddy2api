@@ -961,6 +961,25 @@ async def forward_chat(
 # 异步流式转发（核心改进）
 # ============================================================================
 
+def _build_openai_flush_chunk(residual: str, last_chunk_id: str,
+                              last_chunk_created: int, last_chunk_model: str) -> dict:
+    """构造流结束 flush 时发出的 OpenAI ChatCompletionChunk。
+
+    必须补全顶层 id/object/created/model 字段，否则严格解析的客户端
+    （如 grok）会报 `serialization error: missing field id`。
+    """
+    return {
+        "id": last_chunk_id,
+        "object": "chat.completion.chunk",
+        "created": last_chunk_created,
+        "model": last_chunk_model,
+        "choices": [{
+            "index": 0,
+            "delta": {"content": residual},
+        }],
+    }
+
+
 async def stream_upstream(
     url: str,
     headers: dict[str, str],
@@ -1009,6 +1028,11 @@ async def stream_upstream(
     raw_chunks: list[bytes] = []
     last_progress_log = stream_start_time
     detected_tool_calls = []
+    # 【修复 C3】记录最后一个上游 chunk 的元数据，供流结束 flush 时复用，
+    # 保证 final_chunk 补全 OpenAI ChatCompletionChunk 必需的顶层字段
+    last_chunk_id: str = ""
+    last_chunk_created: int = 0
+    last_chunk_model: str = ""
     try:
         # 异步HTTP客户端：timeout=None 依赖TCP超时
         # 使用合理的超时配置：连接超时30s，读取超时300s
@@ -1133,6 +1157,14 @@ async def stream_upstream(
                         continue
                     
                     chunk_count += 1
+                    
+                    # 【修复 C3】记录最后一个上游 chunk 的元数据，供流结束 flush 复用
+                    if chunk.get("id"):
+                        last_chunk_id = chunk["id"]
+                    if chunk.get("created"):
+                        last_chunk_created = chunk["created"]
+                    if chunk.get("model"):
+                        last_chunk_model = chunk["model"]
                     
                     # 根据协议转换事件
                     if protocol == "openai":
@@ -1338,12 +1370,9 @@ async def stream_upstream(
                     residual = dsml_buffer.flush()
                     if residual:
                         response_text += residual
-                        final_chunk = {
-                            "choices": [{
-                                "index": 0,
-                                "delta": {"content": residual},
-                            }]
-                        }
+                        final_chunk = _build_openai_flush_chunk(
+                            residual, last_chunk_id, last_chunk_created, last_chunk_model
+                        )
                         yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n".encode()
                     yield b"data: [DONE]\n\n"
     
