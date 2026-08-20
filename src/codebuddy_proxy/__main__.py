@@ -897,6 +897,24 @@ async def create_message(request: Request):
 # 核心：转发请求到上游
 # ============================================================================
 
+def _normalize_tool_choice(tool_choice: Any) -> Any:
+    """把 OpenAI 的 object 形式 tool_choice 转成上游接受的 string 形式。
+
+    上游 CodeBuddy 后端（Go）的 Request.tool_choice 字段是 string 类型，
+    OpenAI 标准里 `{"type":"function","function":{"name":"X"}}` 这种 object
+    形式（强制调用函数 X）会触发 400：cannot unmarshal object into ...
+    of type string。此处转换为等价的函数名字符串 "X"（实测上游接受且语义一致）。
+    """
+    if isinstance(tool_choice, dict):
+        name = (tool_choice.get("function") or {}).get("name")
+        if name:
+            return name
+        # {"type": "function"} 但缺 name：退化为 required（强制调用工具）
+        if tool_choice.get("type") == "function":
+            return "required"
+    return tool_choice
+
+
 async def forward_chat(
     body: dict[str, Any],
     protocol: str,
@@ -910,6 +928,10 @@ async def forward_chat(
     
     stream = bool(body.get("stream"))
     upstream_body = dict(body)
+    
+    # 归一化 tool_choice：object 形式 → 函数名字符串（上游只接受 string）
+    if "tool_choice" in upstream_body:
+        upstream_body["tool_choice"] = _normalize_tool_choice(upstream_body["tool_choice"])
     
     # 限制 tools 数量防止上游拒绝 (CodeBuddy 限制约 30-50 个工具)
     original_tool_count = len(upstream_body.get("tools", []))
