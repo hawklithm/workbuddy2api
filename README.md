@@ -1,82 +1,85 @@
-# CodeBuddy API 代理
+# CodeBuddy API Proxy
 
-> 一个轻量级的 API 代理服务，将 CodeBuddy 底层接口转换为标准的 OpenAI、Anthropic 和 Responses 协议格式。
+> A lightweight API proxy service that converts CodeBuddy's underlying interface into standard OpenAI, Anthropic, and Responses protocol formats.
 
-## ✨ 核心特性
+> **中文版文档见 [README_zh.md](README_zh.md).**
 
-- **协议转换** - 支持 OpenAI Chat Completions、Anthropic Messages API 和 Responses 三种标准格式
-- **脱敏处理** - 内置智能脱敏模块，自动过滤敏感信息（账号、密码、密钥、品牌词、路径等），有效缓解审核误拦
-- **消息压缩** - 智能压缩历史消息，大幅降低 token 使用量（适用于 Codex CLI 等长上下文场景）
-- **工具调用支持** - 完整支持 function calling 和 tool use 特性，自动过滤无效工具定义
-- **DSML 解析** - 自动识别和转换 DeepSeek 标记语言（DSML）格式的工具调用
-- **流式响应** - 支持 SSE 流式输出，实时返回生成内容，内置 60 秒超时保护
-- **多账号管理** - 支持多个登录态隔离，方便工作/个人账号切换
+## ✨ Core Features
+
+- **Protocol conversion** - Supports three standard formats: OpenAI Chat Completions, Anthropic Messages API, and Responses
+- **Desensitization** - Built-in smart desensitization module that automatically filters sensitive information (accounts, passwords, keys, brand terms, paths, etc.) to mitigate review-based false blocks
+- **Message compression** - Intelligently compresses historical messages to dramatically reduce token usage (ideal for long-context scenarios such as Codex CLI)
+- **Tool call support** - Full support for function calling and tool use, with automatic filtering of invalid tool definitions
+- **DSML parsing** - Automatically detects and converts DeepSeek Markup Language (DSML) tool calls
+- **Streaming responses** - SSE streaming output, returning generated content in real time, with built-in 60-second timeout protection
+- **Multi-account management** - Supports isolation of multiple login states for easy switching between work/personal accounts
+
 ---
 
-## 安装
+## Installation
 
-推荐使用 [uv](https://docs.astral.sh/uv/) 从 PyPI 运行：
+Recommended to run from PyPI using [uv](https://docs.astral.sh/uv/):
 
 ```bash
-# 安装 uv
+# Install uv
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# 运行最新可用版本（uv 会自动创建环境并安装依赖）
+# Run the latest available version (uv automatically creates the environment and installs dependencies)
 uv run --with workbuddy2api python -m codebuddy_proxy \
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 
-# 强制刷新缓存后运行最新版本
+# Force refresh the cache and run the latest version
 uv run --refresh-package workbuddy2api --with workbuddy2api \
   python -m codebuddy_proxy \
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
-后续启动无需手动激活虚拟环境，重复执行上述 `uv run` 命令即可。
+No need to manually activate the virtual environment on subsequent starts; just repeat the `uv run` command above.
 
-### 本地源码启动
+### Running from local source
 
-在项目根目录执行以下命令，使用当前工作区源码而不是 PyPI 中的已发布版本：
+Run the following commands from the project root to use the workspace source code instead of the published PyPI version:
 
 ```bash
-# 同步本地项目依赖
+# Sync local project dependencies
 uv sync
 
-# 启动本地源码
+# Start the local source
 uv run python -m codebuddy_proxy --desensitize
 ```
 
-首次使用需要登录时：
+On first use, when login is required:
 
 ```bash
 uv run python -m codebuddy_proxy --login --desensitize
 ```
 
-## 快速开始
+## Quick Start
 
-### 1. 启动 proxy
+### 1. Start the proxy
 
 ```bash
-# 使用最新版本（推荐）
+# Use the latest version (recommended)
 uv run --with workbuddy2api python -m codebuddy_proxy --desensitize
 
-# 首次使用：登录并启动
+# First use: log in and start
 uv run --with workbuddy2api python -m codebuddy_proxy --login --desensitize
 ```
 
-默认监听 `http://127.0.0.1:8787`
+Listens on `http://127.0.0.1:8787` by default.
 
-### 2. 验证
+### 2. Verify
 
 ```bash
 curl http://127.0.0.1:8787/health
 curl http://127.0.0.1:8787/v1/models
 ```
 
-### 3. 接入客户端
+### 3. Connect clients
 
 #### Codex CLI
 
-编辑 `~/.codex/config.toml`：
+Edit `~/.codex/config.toml`:
 
 ```toml
 [model_providers.codebuddy]
@@ -89,15 +92,15 @@ model = "glm-5.2"
 model_provider = "codebuddy"
 ```
 
-使用：
+Usage:
 
 ```bash
-codex --profile codebuddy "你的任务"
+codex --profile codebuddy "your task"
 ```
 
 #### Claude Code + CC Switch
 
-在 CC Switch 配置中添加：
+Add the following to your CC Switch configuration:
 
 ```json
 {
@@ -111,7 +114,7 @@ codex --profile codebuddy "你的任务"
 
 #### OpenCode
 
-编辑项目根目录的 `opencode.json`：
+Edit `opencode.json` in the project root:
 
 ```json
 {
@@ -135,105 +138,105 @@ codex --profile codebuddy "你的任务"
 }
 ```
 
-启动 opencode 后，用 `/models` 命令在 `codebuddy` provider 下选择模型（如 `codebuddy/glm-5.2`）。
+After launching opencode, use the `/models` command to select a model under the `codebuddy` provider (e.g. `codebuddy/glm-5.2`).
 
-> 说明：`baseURL` 指向本地代理；`apiKey` 填任意占位值即可（本地代理不校验密钥）。`models` 的 key 是 OpenCode 内的模型 ID（供选择），`modelID` 是发给代理的实际模型名。密钥字段请用 `apiKey`（而非某些旧模板里的 `env_key`），避免绑定错误的 provider 语义。
+> Note: `baseURL` points to the local proxy; `apiKey` can be any placeholder value (the local proxy does not validate keys). The `models` keys are the model IDs used inside OpenCode (for selection), while `modelID` is the actual model name sent to the proxy. Use `apiKey` for the key field (not `env_key` from some older templates), to avoid binding the wrong provider semantics.
 
-#### 其他 OpenAI 兼容客户端
+#### Other OpenAI-compatible clients
 
 - Base URL: `http://127.0.0.1:8787/v1`
-- API Key: 留空（或填你启动时用 `--api-key` 设置的值）
-- 模型名: `glm-5.2` / `deepseek-v4-pro` / `kimi-k2.7` / `auto` 等
+- API Key: leave blank (or use the value you set with `--api-key` at startup)
+- Model name: `glm-5.2` / `deepseek-v4-pro` / `kimi-k2.7` / `auto`, etc.
 
-## 命令行参数
-
-```bash
---host HOST              监听地址（默认 127.0.0.1）
---port PORT              监听端口（默认 8787）
---endpoint ENDPOINT      CodeBuddy 后端地址
---session-file PATH      会话文件路径（默认 ~/.codebuddy-session.json）
---log-file PATH          JSONL 日志文件（默认 ~/.workbuddy2api/codebuddy-proxy.jsonl）
---desensitize            启用脱敏处理（推荐）
---optimize-context       启用消息压缩优化（Codex CLI 推荐）
---login                  启动时执行浏览器登录
---no-browser             登录时不打开浏览器
---verbose-llm            log full LLM request/response content 
-                        (default: summary only, saves 98% space)
---mock-dir DIR           使用 mock 数据（测试用）
-```
-
-### 环境变量
+## Command-line arguments
 
 ```bash
-CODEBUDDY_PROXY_HOST      # 等同 --host
-CODEBUDDY_PROXY_PORT      # 等同 --port
-CODEBUDDY_ENDPOINT        # 等同 --endpoint
-CODEBUDDY_PROXY_LOG_FILE  # 等同 --log-file
+--host HOST              Bind address (default 127.0.0.1)
+--port PORT              Bind port (default 8787)
+--endpoint ENDPOINT      CodeBuddy backend address
+--session-file PATH      Session file path (default ~/.codebuddy-session.json)
+--log-file PATH          JSONL log file (default ~/.workbuddy2api/codebuddy-proxy.jsonl)
+--desensitize            Enable desensitization (recommended)
+--optimize-context       Enable message compression (recommended for Codex CLI)
+--login                  Perform browser login at startup
+--no-browser             Do not open the browser on login
+--verbose-llm            Log full LLM request/response content
+                         (default: summary only, saves 98% space)
+--mock-dir DIR           Use mock data (for testing)
 ```
 
-## 常见场景
+### Environment variables
 
-### 首次使用（需要登录）
+```bash
+CODEBUDDY_PROXY_HOST      # Same as --host
+CODEBUDDY_PROXY_PORT      # Same as --port
+CODEBUDDY_ENDPOINT        # Same as --endpoint
+CODEBUDDY_PROXY_LOG_FILE  # Same as --log-file
+```
+
+## Common scenarios
+
+### First use (login required)
 
 ```bash
 uv run --with workbuddy2api python -m codebuddy_proxy --login \
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
-浏览器打开后登录，成功后 proxy 自动启动。
+After the browser opens and you log in, the proxy starts automatically.
 
-### 日常使用（自动读取登录态）
+### Daily use (automatically reads the login state)
 
 ```bash
 uv run --with workbuddy2api python -m codebuddy_proxy --desensitize \
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
-### Codex CLI 场景（启用压缩优化）
+### Codex CLI scenario (with compression enabled)
 
 ```bash
 uv run --with workbuddy2api python -m codebuddy_proxy --desensitize --optimize-context \
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
-### 多账号切换
+### Multi-account switching
 
 ```bash
-# 账号 1
+# Account 1
 uv run --with workbuddy2api python -m codebuddy_proxy --session-file ~/.codebuddy-work.json --login \
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 
-# 账号 2
+# Account 2
 uv run --with workbuddy2api python -m codebuddy_proxy --session-file ~/.codebuddy-personal.json --login \
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
-### 监听所有网卡（局域网共享）
+### Listening on all interfaces (LAN sharing)
 
 ```bash
 uv run --with workbuddy2api python -m codebuddy_proxy --host 0.0.0.0 --desensitize \
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
-## API 接口
+## API endpoints
 
-所有接口默认不需要在请求中额外携带 token，代理会使用本地 session 完成认证。
+All endpoints do not require an extra token in the request by default; the proxy authenticates using the local session.
 
-| 方法 | 路径 | 用途 |
+| Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/health` | 查询本地服务和认证状态 |
-| GET | `/v1/models` | 查询 CodeBuddy 模型列表 |
-| POST | `/v1/chat/completions` | OpenAI Chat Completions，支持 tools 和流式响应 |
-| POST | `/v1/responses` | Responses API，兼容 Codex CLI |
-| POST | `/v1/messages` | Anthropic Messages API，兼容 Claude Code / CC Switch |
+| GET | `/health` | Query local service and auth status |
+| GET | `/v1/models` | Query the CodeBuddy model list |
+| POST | `/v1/chat/completions` | OpenAI Chat Completions, supports tools and streaming |
+| POST | `/v1/responses` | Responses API, compatible with Codex CLI |
+| POST | `/v1/messages` | Anthropic Messages API, compatible with Claude Code / CC Switch |
 
-### `/health` - 健康检查
+### `/health` - health check
 
 ```bash
 curl http://127.0.0.1:8787/health
 ```
 
-返回示例：
+Example response:
 
 ```json
 {
@@ -244,28 +247,28 @@ curl http://127.0.0.1:8787/health
 }
 ```
 
-### `/v1/models` - 模型列表
+### `/v1/models` - model list
 
 ```bash
 curl http://127.0.0.1:8787/v1/models
 ```
 
-返回 OpenAI 格式的模型列表，`data[].id` 就是后续请求中的 `model` 值（如 `deepseek-v4-flash`、`glm-5.2`）。
+Returns a model list in OpenAI format; `data[].id` is the `model` value used in subsequent requests (e.g. `deepseek-v4-flash`, `glm-5.2`).
 
 ### `/v1/chat/completions` - OpenAI Chat
 
-**非流式请求：**
+**Non-streaming request:**
 
 ```bash
 curl http://127.0.0.1:8787/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{
     "model": "deepseek-v4-flash",
-    "messages": [{"role": "user", "content": "写一个快排"}]
+    "messages": [{"role": "user", "content": "Write a quicksort"}]
   }'
 ```
 
-**流式请求：**
+**Streaming request:**
 
 ```bash
 curl -N http://127.0.0.1:8787/v1/chat/completions \
@@ -277,28 +280,28 @@ curl -N http://127.0.0.1:8787/v1/chat/completions \
   }'
 ```
 
-支持 `tools`、`tool_choice`、`stream_options` 等完整 OpenAI 特性。
+Supports the full set of OpenAI features, including `tools`, `tool_choice`, and `stream_options`.
 
 ### `/v1/responses` - Responses API
 
-用于兼容 Codex CLI：
+Used for Codex CLI compatibility:
 
 ```bash
 curl http://127.0.0.1:8787/v1/responses \
   -H 'Content-Type: application/json' \
   -d '{
     "model": "default",
-    "input": "写一个快排"
+    "input": "Write a quicksort"
   }'
 ```
 
-支持 `instructions` (system prompt)、消息形式的 `input`、`tools`、`tool_choice` 和 `stream`。
+Supports `instructions` (system prompt), message-form `input`, `tools`, `tool_choice`, and `stream`.
 
-**💡 提示：** 使用 `--optimize-context` 可大幅减少 Codex CLI 的 token 使用。
+**💡 Tip:** Using `--optimize-context` dramatically reduces token usage for Codex CLI.
 
 ### `/v1/messages` - Anthropic Messages
 
-用于兼容 Claude Code / CC Switch：
+Used for Claude Code / CC Switch compatibility:
 
 ```bash
 curl http://127.0.0.1:8787/v1/messages \
@@ -310,32 +313,32 @@ curl http://127.0.0.1:8787/v1/messages \
   }'
 ```
 
-设置 `"stream": true` 时返回 Anthropic SSE 事件流。
+Setting `"stream": true` returns an Anthropic SSE event stream.
 
-## 高级功能
+## Advanced features
 
-### 脱敏处理 (`--desensitize`)
+### Desensitization (`--desensitize`)
 
-对 system 消息中的敏感词插入零宽空格（U+200B），打断后端关键词匹配，缓解合规模板被审核误拦。
+Inserts zero-width spaces (U+200B) into sensitive words in system messages, breaking the backend's keyword matching and mitigating compliance templates being falsely blocked by review.
 
-#### 何时需要使用
+#### When to use it
 
-**强烈推荐启用的场景：**
+**Scenarios where enabling is strongly recommended:**
 
-1. **对接 Claude Code / CC Switch**
-   - Claude Code 的 system prompt 包含大量 Anthropic 品牌词和安全合规声明
-   - 腾讯后端可能将竞争品牌词（"Claude"、"Anthropic"）视为敏感内容
-   - 不启用脱敏时，几乎每次请求都会被审核拦截
+1. **Integrating with Claude Code / CC Switch**
+   - Claude Code's system prompt contains many Anthropic brand terms and security compliance statements
+   - The Tencent backend may treat competing brand terms ("Claude", "Anthropic") as sensitive content
+   - Without desensitization, almost every request gets blocked by review
 
-2. **对接 Codex CLI / Oh My Posh 等 agentic 工具**
-   - 这些工具的 system prompt 含有大量安全术语（DoS、exploit、credential testing 等）
-   - 即使是合规的"拒绝有害请求"声明，也可能被关键词匹配误拦
+2. **Integrating with agentic tools such as Codex CLI / Oh My Posh**
+   - These tools' system prompts contain a large number of security terms (DoS, exploit, credential testing, etc.)
+   - Even compliant "refuse harmful requests" statements can be falsely blocked by keyword matching
 
-3. **使用包含安全术语的自定义 system prompt**
-   - 安全研究、渗透测试相关的合规对话
-   - 需要讨论漏洞、攻击防御的技术文档生成
+3. **Using custom system prompts that contain security terms**
+   - Compliance conversations related to security research and penetration testing
+   - Generating technical documentation that needs to discuss vulnerabilities and attack defenses
 
-**典型错误信息：**
+**Typical error message:**
 ```json
 {
   "error": {
@@ -344,99 +347,45 @@ curl http://127.0.0.1:8787/v1/messages \
   }
 }
 ```
-或后端返回空响应、连接中断。
+Or the backend returns an empty response / connection drops.
 
-**不需要启用的场景：**
-- ✅ 普通对话（无安全术语）
-- ✅ 使用官方 CodeBuddy 客户端（已内置处理）
-- ✅ 纯粹的代码生成（无品牌词/安全声明）
+**Scenarios where you don't need it:**
+- ✅ Normal conversation (no security terms)
+- ✅ Using the official CodeBuddy client (handling is built in)
+- ✅ Pure code generation (no brand terms / security statements)
 
-#### 典型使用案例
+#### Typical use cases
 
-
-## 🔧 技术细节
-
-### 工具调用兼容性
-
-代理自动过滤不兼容的工具定义，确保上游 API 接受：
-
-**过滤规则**：
-- ❌ 非 `type: "function"` 的工具（如 `web_search`）
-- ❌ `parameters` 为空对象 `{}` 的工具
-- ❌ `parameters` 缺少 `type` 字段的工具
-- ✅ 清理 `additionalProperties` 和 `strict` 字段（CodeBuddy 后端不支持）
-
-**日志事件**：`tools_filtered` 记录过滤详情
-
-### 流式响应保护
-
-**超时配置**：
-- **连接超时**：30 秒
-- **读取超时**：300 秒（两次数据接收间隔）
-- **总时长限制**：60 秒（防止流无限期运行）
-
-**为什么需要总时长限制**：
-- httpx 的 `read timeout` 只限制两次数据间隔，不限制总时长
-- 上游持续发送数据时，流可能无限期运行（观察到 6+ 分钟，2000+ chunks 的异常流）
-- 60 秒适合交互式对话，可根据场景调整（代码中修改 `MAX_STREAM_DURATION`）
-
-**日志事件**：`stream_duration_exceeded` 记录超时截断
-
-### DSML 解析
-
-自动识别三种工具调用标记格式：
-
-1. **DeepSeek DSML**：`<||DSML||tool_calls>` / `<||DSML||invoke name="...">`
-2. **Claude 风格**：`<tool_call><invoke name="exec_command"><cmd>...</cmd></invoke></tool_call>`
-3. **简化格式**：`<tool_call><toolName>bash</toolName>...</tool_call>`
-
-解析后转换为标准 OpenAI `tool_calls` 格式，并从响应内容中清理标记。
-
-### 协议适配
-
-| 源协议 | 目标协议 | 转换器 | 说明 |
-|--------|----------|--------|------|
-| CodeBuddy Chat | OpenAI Chat | 直接透传 | 添加 DSML 解析 |
-| CodeBuddy Chat | Responses API | `ResponsesStreamConverter` | 事件序列转换 |
-| CodeBuddy Chat | Anthropic Messages | `AnthropicStreamConverter` | 流式事件映射 |
-
-**流式事件映射**（Responses API）：
-```
-upstream chunk → response.output_text.delta
-工具调用 → response.output_item.added (function_call)
-完成 → response.completed
-```
-
-**案例 1: 对接 Claude Code**
+**Case 1: Integrating with Claude Code**
 
 ```bash
-# 必须启用 --desensitize，否则几乎每次都被拦截
+# --desensitize is required, otherwise almost every request is blocked
 uv run --with workbuddy2api python -m codebuddy_proxy --desensitize \
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 
-# 在 Claude Code / CC Switch 中配置
+# Configure in Claude Code / CC Switch
 # Base URL: http://127.0.0.1:8787/v1/messages
 ```
 
-**案例 2: 对接 Codex CLI**
+**Case 2: Integrating with Codex CLI**
 
 ```bash
-# 同时启用脱敏和消息压缩（最佳配置）
+# Enable both desensitization and message compression (best configuration)
 uv run --with workbuddy2api python -m codebuddy_proxy --desensitize --optimize-context \
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 
-# 在 Codex CLI 配置文件中
+# In the Codex CLI config file
 # base_url: http://127.0.0.1:8787/v1/responses
 ```
 
-**案例 3: 安全研究对话**
+**Case 3: Security research conversation**
 
 ```bash
-# 启用脱敏以避免合规术语被误拦
+# Enable desensitization to avoid compliance terms being falsely blocked
 uv run --with workbuddy2api python -m codebuddy_proxy --desensitize \
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 
-# 示例请求
+# Example request
 curl http://127.0.0.1:8787/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{
@@ -448,125 +397,125 @@ curl http://127.0.0.1:8787/v1/chat/completions \
       },
       {
         "role": "user",
-        "content": "解释 SQL injection 的防御措施"
+        "content": "Explain defenses against SQL injection"
       }
     ]
   }'
 ```
 
-#### 工作原理
+#### How it works
 
 ```python
-# 原文
+# Original
 "Refuse requests for DoS attacks and exploit development."
 
-# 脱敏后（插入零宽空格 U+200B）
+# Desensitized (zero-width space U+200B inserted)
 "Refuse requests for Do​S a​ttacks and e​xploit development."
-# 人眼/模型：看起来完全一样
-# 后端审核：关键词匹配失效
+# Human/model: looks exactly the same
+# Backend review: keyword matching fails
 ```
 
-#### 处理范围
+#### Scope of processing
 
-- ✅ system 角色消息（默认）
-- ✅ developer 角色消息
-- ✅ Codex CLI / Claude Code 注入的 harness user 消息
-- ✅ tools 的 description 字段
-- ❌ user/assistant 消息（保持原样，不影响正常对话）
+- ✅ `system` role messages (default)
+- ✅ `developer` role messages
+- ✅ Harness user messages injected by Codex CLI / Claude Code
+- ✅ `description` field of `tools`
+- ❌ `user`/`assistant` messages (kept as-is, so normal conversation is unaffected)
 
-#### 敏感词表
+#### Sensitive word list
 
-约 80 个安全/合规术语：
-- 攻击类型：DoS, DDoS, exploit, SQL injection, XSS, malware...
-- 安全术语：vulnerability, penetration testing, privilege escalation...
-- 品牌词：Claude Code, Anthropic（避免竞争品牌触发审核）
+Roughly 80 security/compliance terms:
+- Attack types: DoS, DDoS, exploit, SQL injection, XSS, malware...
+- Security terms: vulnerability, penetration testing, privilege escalation...
+- Brand terms: Claude Code, Anthropic (to avoid competing brands triggering review)
 
-完整列表见 `desensitize.py` 中的 `SENSITIVE_TERMS`。
+The full list is in `SENSITIVE_TERMS` in `desensitize.py`.
 
-#### 注意事项
+#### Notes
 
-- ✅ 只处理合规声明，不绕过对有害输入的审核
-- ✅ 只改 system 消息，真实用户输入保持原样
-- ⚠️ 零宽空格对人眼/模型透明，但会影响精确字符串匹配
-- ⚠️ 性能开销：<1ms（正则替换）
+- ✅ Only processes compliance statements; does not bypass review of harmful input
+- ✅ Only modifies system messages; real user input is kept as-is
+- ⚠️ Zero-width spaces are transparent to humans/models but affect exact string matching
+- ⚠️ Performance cost: <1ms (regex replacement)
 
 ---
 
-### 消息压缩优化 (`--optimize-context`)
+### Message compression (`--optimize-context`)
 
-仅对 `/v1/responses` 端点生效，将长历史、大 schema、超长工具输出压缩成"最小语义闭包"，大幅减少 token 使用（可能减少 60-90%）。
+Only applies to the `/v1/responses` endpoint, compressing long histories, large schemas, and oversized tool outputs into a "minimal semantic closure", dramatically reducing token usage (possibly 60-90%).
 
-#### 适用场景
+#### When to use it
 
-- ✅ 使用 Codex CLI / Claude Code 等 agentic 工具（长历史）
-- ✅ Token 使用量很大（>100k/天）
-- ✅ 经常触发 "context " 错误
-- ✅ 每次请求都发送完整历史记录
-- ❌ 不用于短对话/简单请求
+- ✅ Using agentic tools such as Codex CLI / Claude Code (long histories)
+- ✅ High token usage (>100k/day)
+- ✅ Frequently hitting "context" errors
+- ✅ Sending the full history on every request
+- ❌ Not for short conversations / simple requests
 
-#### 使用方法
+#### Usage
 
 ```bash
-# 启用消息压缩
+# Enable message compression
 uv run --with workbuddy2api python -m codebuddy_proxy --optimize-context \
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 
-# 同时启用两个功能（推荐用于 Codex CLI）
+# Enable both features (recommended for Codex CLI)
 uv run --with workbuddy2api python -m codebuddy_proxy --desensitize --optimize-context \
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
-#### 工作原理
+#### How it works
 
-##### Conservative 模式（非 agentic 请求）
+##### Conservative mode (non-agentic requests)
 
-只做长度裁剪：
-- System → 截断至 1200 字符
-- User → 3200 字符
-- Assistant → 首尾保留摘要（1800）
-- Tool 输出 → 压缩至 1600 字符
+Only length trimming:
+- System → truncated to 1200 characters
+- User → 3200 characters
+- Assistant → keep a head/tail summary (1800)
+- Tool output → compressed to 1600 characters
 
-##### Aggressive 模式（agentic CLI 请求）
+##### Aggressive mode (agentic CLI requests)
 
-自动检测 agentic 请求（tools 包含 `exec_command`、`apply_patch` 等，或消息含 harness 标记），重构成最小语义闭包：
+Automatically detects agentic requests (tools containing `exec_command`, `apply_patch`, etc., or messages containing harness markers) and reconstructs them into a minimal semantic closure:
 
-1. **丢弃 harness 消息** — 删除所有 Codex/Claude Code 注入的 system/user 消息
-2. **保留最近上下文** — 从后往前保留 ≤8 条消息 / ≤7000 字符
-3. **历史摘要化** — 更早的历史压缩为规则摘要（每条一行）
-4. **Schema 收敛** — 只保留结构字段，删除 description（最占空间）
-5. **Tool 输出/参数压缩** — 保留关键部分，其余省略
+1. **Drop harness messages** — remove all Codex/Claude Code injected system/user messages
+2. **Keep recent context** — keep ≤8 messages / ≤7000 chars from the tail
+3. **Summarize history** — compress earlier history into rule summaries (one line each)
+4. **Schema convergence** — keep only structural fields, drop descriptions (the biggest space consumers)
+5. **Compress tool output/arguments** — keep key parts, omit the rest
 
-#### 效果示例
+#### Example effect
 
 ```
-原始请求：
-  - Messages: 50 条，120,000 字符
-  - Tools: 15 个，45,000 字符
-  - 总计：~165,000 字符（~40k tokens）
+Original request:
+  - Messages: 50, 120,000 characters
+  - Tools: 15, 45,000 characters
+  - Total: ~165,000 characters (~40k tokens)
 
-压缩后：
-  - Messages: 12 条，18,000 字符
-  - Tools: 15 个，8,000 字符
-  - 总计：~26,000 字符（~6k tokens）
+After compression:
+  - Messages: 12, 18,000 characters
+  - Tools: 15, 8,000 characters
+  - Total: ~26,000 characters (~6k tokens)
 
-节省：~85% token
+Savings: ~85% tokens
 ```
 
-#### 日志验证
+#### Log verification
 
-启用功能后，日志会记录压缩统计：
+Once enabled, the log records compression statistics:
 
 ```bash
 grep projection_applied "$HOME/.workbuddy2api/codebuddy-proxy.jsonl" | jq .
 ```
 
-示例输出：
+Example output:
 
 ```json
 {
   "event": "projection_applied",
   "protocol": "responses",
-  "mode""aggressive",
+  "mode": "aggressive",
   "original_messages": 50,
   "projected_messages": 12,
   "original_message_chars": 120000,
@@ -575,25 +524,25 @@ grep projection_applied "$HOME/.workbuddy2api/codebuddy-proxy.jsonl" | jq .
 }
 ```
 
-#### 注意事项
+#### Notes
 
-- ✅ 只用于 `/v1/responses`，不影响 chat/messages 端点
-- ✅ 保留语义闭包，模型仍可推理
-- ⚠️ 历史被摘要化，精确细节需重新运行工具获取
-- ⚠️ Schema 被裁剪，description 等辅助信息丢失
-- ⚠️ 性能开销：<10ms（遍历+压缩）
+- ✅ Only used for `/v1/responses`; does not affect the chat/messages endpoints
+- ✅ Preserves the semantic closure; the model can still reason
+- ⚠️ History is summarized; precise details require re-running tools to retrieve
+- ⚠️ Schema is trimmed; auxiliary info such as descriptions is lost
+- ⚠️ Performance cost: <10ms (traversal + compression)
 
 ---
 
-### 日志
+### Logging
 
-日志包含：
-- 文本日志：`$HOME/.workbuddy2api/proxy.log`（按天滚动，保留 30 天）
-- 结构化日志：`$HOME/.workbuddy2api/codebuddy-proxy.jsonl`（按天滚动，保留 30 天，完整请求/响应）
+Logs include:
+- Text log: `$HOME/.workbuddy2api/proxy.log` (rotated daily, retained 30 days)
+- Structured log: `$HOME/.workbuddy2api/codebuddy-proxy.jsonl` (rotated daily, retained 30 days, full request/response)
 
-JSONL 每条记录包含 `app_version`、`system_version`、`python_version` 和 `machine` 字段；启动时还会记录 `startup` 事件。
+Each JSONL record contains `app_version`, `system_version`, `python_version`, and `machine` fields; a `startup` event is also recorded at launch.
 
-也可以指定日志文件的绝对路径：
+You can also specify an absolute path for the log file:
 
 ```bash
 uv run --with workbuddy2api python -m codebuddy_proxy \
@@ -601,60 +550,62 @@ uv run --with workbuddy2api python -m codebuddy_proxy \
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
-查看日志：
+Viewing logs:
 
 ```bash
-# 实时查看
+# Follow in real time
 tail -f "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 
-# 查看流式事件
+# View streaming events
 tail -100 "$HOME/.workbuddy2api/codebuddy-proxy.jsonl" | jq 'select(.event | startswith("stream"))'
 
-# 统计超时
+# Count timeouts
 jq 'select(.event=="stream_timeout")' "$HOME/.workbuddy2api/codebuddy-proxy.jsonl" | wc -l
 
-# 验证脱敏
+# Verify desensitization
 grep desensitize_applied "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 
-# 验证压缩（查看统计数据）
+# Verify compression (view statistics)
 grep projection_applied "$HOME/.workbuddy2api/codebuddy-proxy.jsonl" | jq .
 ```
 
-### 找不到 session 文件
+## Troubleshooting
 
-首次使用需要登录：
+### Session file not found
 
-```bash
-uv run --with workbuddy2api python -m codebuddy_proxy --login \
-  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
-```
-
-### 401 认证失败
-
-Token 过期，重新登录：
+First use requires login:
 
 ```bash
 uv run --with workbuddy2api python -m codebuddy_proxy --login \
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
-### 审核拦截
+### 401 authentication failure
 
-启用脱敏：
+Token expired; log in again:
+
+```bash
+uv run --with workbuddy2api python -m codebuddy_proxy --login \
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
+```
+
+### Review blocking
+
+Enable desensitization:
 
 ```bash
 uv run --with workbuddy2api python -m codebuddy_proxy --desensitize \
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
-如果仍然被拦截，尝试压缩优化（仅 `/v1/responses`）：
+If still blocked, try compression (`/v1/responses` only):
 
 ```bash
 uv run --with workbuddy2api python -m codebuddy_proxy --desensitize --optimize-context \
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
-### 端口被占用
+### Port already in use
 
 ```bash
 lsof -i :8787
@@ -662,15 +613,15 @@ uv run --with workbuddy2api python -m codebuddy_proxy --port 8788 \
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
-### SOCKS proxy 错误
+### SOCKS proxy errors
 
-依赖已自动安装 `httpx[socks]`。如果仍有问题，检查环境变量：
+The `httpx[socks]` dependency is installed automatically. If problems persist, check the environment variables:
 
 ```bash
 env | grep -i proxy
 ```
 
-临时禁用代理：
+Temporarily disable the proxy:
 
 ```bash
 unset http_proxy https_proxy all_proxy
@@ -678,18 +629,18 @@ uv run --with workbuddy2api python -m codebuddy_proxy \
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
-## 技术细节
+## Technical details
 
-- **架构**: FastAPI + httpx（异步）
-- **并发**: 支持 1000+ 并发请求
-- **超时**: 连接 10 秒，读取 30 秒
-- **流式**: 完整的流式日志（started / progress / completed / timeout）
+- **Architecture**: FastAPI + httpx (async)
+- **Concurrency**: supports 1000+ concurrent requests
+- **Timeouts**: connect 10 seconds, read 30 seconds
+- **Streaming**: full streaming logs (started / progress / completed / timeout)
 
-## 免责声明
+## Disclaimer
 
-**本项目仅供学习和研究使用。请遵守 CodeBuddy 的服务条款。**
+**This project is for learning and research purposes only. Please comply with CodeBuddy's Terms of Service.**
 
-- 本项目不提供任何形式的担保
-- 使用本项目产生的任何后果由使用者自行承担
-- 请勿将本项目用于任何违反 CodeBuddy 服务条款的用途
-- 请勿将本项目用于商业用途
+- This project provides no warranty of any kind
+- Any consequences arising from the use of this project are the sole responsibility of the user
+- Do not use this project for any purpose that violates CodeBuddy's Terms of Service
+- Do not use this project for commercial purposes
