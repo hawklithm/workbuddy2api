@@ -146,6 +146,36 @@ def markdown_code_span_end(text: str, start: int) -> Tuple[int, bool]:
     return len(text), False
 
 
+def last_unclosed_code_span(text: str) -> int:
+    """返回最后一个未闭合的单/双反引号 code span 起始位置；无则 -1。
+
+    流式场景下，内联代码 `` `<tool_calls>` `` 的反引号与标签会跨 chunk 到达，
+    需要在标签完整前保留开头的反引号，否则 buffer 会丢失「处于代码内」的上下文，
+    从而把 `<tool_calls>` 误判为工具调用开标签。
+    """
+    last = -1
+    i = 0
+    while i < len(text):
+        if text[i] != '`':
+            i += 1
+            continue
+        tick_count = 0
+        j = i
+        while j < len(text) and text[j] == '`':
+            tick_count += 1
+            j += 1
+        if tick_count >= 3:
+            i = j  # 三反引号 fence，交给 is_inside_markdown_fence 处理
+            continue
+        end, found = markdown_code_span_end(text, i)
+        if found:
+            i = end
+            continue
+        last = i  # 未闭合的单/双反引号
+        i = j
+    return last
+
+
 def is_inside_markdown_fence(text: str, pos: int) -> bool:
     """检查位置是否在 Markdown fence 块内"""
     fence_depth = 0
@@ -368,6 +398,13 @@ def find_tool_markup_tag_outside_ignored(text: str, start: int) -> Tuple[Optiona
             if found:
                 i = end
                 continue
+            elif end == len(text) and not is_inside_markdown_fence(text, i):
+                # 未闭合的单/双反引号 code span（流式下闭合符尚未到达）：
+                # 剩余内容视为代码，不再识别工具调用标签，避免把内联代码里的
+                # `<tool_calls>` 误判为工具调用开标签而被扣留到流末尾。
+                # 注意排除 fence 内的反引号（fence 由 is_inside_markdown_fence 处理）。
+                return None, False
+            # end == start（三反引号 fence 首字节）或处于 fence 内：交给 is_inside_markdown_fence 处理
         
         if is_inside_markdown_fence(text, i):
             line_end = text.find('\n', i)
@@ -776,7 +813,8 @@ class ToolCallStreamBuffer:
                         prefix = self.buffer[:tag.start]
                         suffix = self.buffer[close_tag.end + 1:]
                         
-                        self.buffer = ""
+                        # 【修复】保留闭标签之后的文本，避免同 chunk 内跟随的内容被丢弃
+                        self.buffer = suffix
                         
                         return prefix.strip(), calls
                 else:
@@ -806,7 +844,8 @@ class ToolCallStreamBuffer:
                         prefix = self.buffer[:tag.start]
                         suffix = self.buffer[close_tag.end + 1:]
                         
-                        self.buffer = ""
+                        # 【修复】保留闭标签之后的文本，避免同 chunk 内跟随的内容被丢弃
+                        self.buffer = suffix
                         
                         return prefix.strip(), calls
                 else:
@@ -815,14 +854,70 @@ class ToolCallStreamBuffer:
             
             i = tag.end + 1
         
-        # 如果 buffer 中没有任何 < 字符，可以安全输出
-        if '<' in self.buffer:
-            return "", None
-        
-        output = self.buffer
+        # 改进：不再「只要存在 '<' 就整段扣留」。当文本中出现工具调用标签的
+        # 示例（如架构文档里写的 `<tool_call><invoke>`）时，原逻辑会把其后
+        # 的全部内容永久扣留并在流结束时丢失。
+        # 新策略：只扣留「最后一个可能正在生成工具调用标签」的后缀，或「未闭合
+        # 内联代码 span」的后缀，先吐出此前的内容；若残留片段并非工具调用开头，
+        # 则整段作为普通文本发出。
+        last_lt = self.buffer.rfind('<')
+        last_tick = last_unclosed_code_span(self.buffer)
+
+        hold_from = len(self.buffer)
+        if last_lt != -1 and self._is_tool_call_start(self.buffer[last_lt:]):
+            hold_from = last_lt
+        if last_tick != -1:
+            hold_from = min(hold_from, last_tick)
+
+        if hold_from >= len(self.buffer):
+            output = self.buffer
+            self.buffer = ""
+            return output, None
+
+        prefix = self.buffer[:hold_from]
+        self.buffer = self.buffer[hold_from:]
+        if prefix:
+            return prefix, None
+        return "", None
+
+    def _is_tool_call_start(self, tail: str) -> bool:
+        """
+        判断以 '<' 开头的 tail 是否可能是「正在流式生成的工具调用标签」开头。
+        仅对已知的块级标签（tool_calls / invoke 及其变体、DSML 前缀）做保守前缀
+        匹配，避免把 '<50%'、'a < b' 这类普通文本中的 '<' 误判为工具调用。
+        """
+        if not tail.startswith('<'):
+            return False
+        # 若 tail 里已含 '>'，说明 '<' 开头的标签已闭合（如内联代码 `<tool_calls>`），
+        # 不是「正在生成的标签开头」，不应扣留。
+        if '>' in tail:
+            return False
+        body = tail[1:]
+        # 去掉可选的 DSML 标记前缀（全角/半角变体）
+        for variant in DSML_VARIANTS:
+            if body.startswith(variant):
+                body = body[len(variant):]
+                break
+        body = body.lstrip().lower()
+        if not body:
+            # 形如 "<" 或 "<｜｜DSML｜｜>" 且标签名尚未到达：仍可能是工具调用开头
+            return True
+        for opener in ("tool", "invoke", "tool_calls", "tool-calls",
+                       "toolcalls", "tool_call", "tool-call"):
+            if opener.startswith(body) or body.startswith(opener):
+                return True
+        return False
+
+    def flush(self) -> str:
+        """
+        流结束时强制刷新残留缓冲区。
+        将仍留在 buffer 中的内容（可能是被误扣留的普通文本，或未完成/被截断的
+        工具调用片段）作为纯文本一次性吐出，避免内容永久丢失。
+        """
+        leftover = self.buffer
         self.buffer = ""
-        return output, None
-    
+        return leftover
+
     def should_emit_tool_calls(self) -> bool:
         """是否应该发送 tool_calls"""
         return self.calls_emitted

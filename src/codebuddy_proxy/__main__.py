@@ -167,8 +167,24 @@ class ProxyState:
         self.started_at = time.time()
     
     def ensure_auth(self) -> None:
-        if self.mock_dir is None:
+        """确保已认证；认证失败（token 过期/网络错误/登录未完成）返回结构化 401 而非 500。"""
+        if self.mock_dir is not None:
+            return
+        try:
             self.client.ensure_authenticated()
+        except HTTPException:
+            raise  # 已是结构化异常，原样透传（如 503 proxy not initialized）
+        except Exception as exc:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": {
+                        "message": "认证失败：token 无效或已过期，请重新登录（--login）",
+                        "type": "authentication_error",
+                        "details": str(exc)[:200],
+                    }
+                },
+            )
     
     def write_log(self, event: str, **kwargs) -> None:
         if self.json_logger is None:
@@ -768,13 +784,48 @@ async def list_models():
 
 
 # ============================================================================
+# 请求体解析（兼容非 UTF-8 编码，避免 UnicodeDecodeError 抛 500）
+# ============================================================================
+
+async def parse_request_body(request: Request) -> Any:
+    """解析 JSON 请求体，兼容 GBK/cp936/latin-1 等非 UTF-8 编码。
+
+    某些客户端（如 Pi）偶尔以 GBK 编码发送请求体，而 Starlette 的
+    `request.json()` 内部是 `json.loads(raw_bytes)`，默认按 UTF-8 解码，
+    遇非 UTF-8 字节会直接抛 `UnicodeDecodeError`（`ValueError` 子类，
+    非 `JSONDecodeError`），导致 500。此处改为按
+    utf-8 → gbk → cp936 → latin-1 依次解码再解析，彻底失败时返回 400。
+    """
+    raw = await request.body()
+    for encoding in ("utf-8", "gbk", "cp936", "latin-1"):
+        try:
+            text = raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            continue
+    # latin-1 能解码任意字节，故 decode 不会失败；走到这里仅当 JSON 结构非法。
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": {
+                "message": "请求体不是有效的 JSON（已尝试 utf-8/gbk/cp936/latin-1 解码）",
+                "type": "invalid_request_body",
+            }
+        },
+    )
+
+
+# ============================================================================
 # 端点：/v1/chat/completions
 # ============================================================================
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     state = get_state()
-    body = await request.json()
+    body = await parse_request_body(request)
     
     log_client_request("POST", "/v1/chat/completions", body)
     diagnostic("request", protocol="openai", **body_summary(body))
@@ -789,7 +840,7 @@ async def chat_completions(request: Request):
 @app.post("/v1/responses")
 async def create_response(request: Request):
     state = get_state()
-    body = await request.json()
+    body = await parse_request_body(request)
     
     log_client_request("POST", "/v1/responses", body)
     
@@ -847,7 +898,7 @@ async def create_response(request: Request):
 @app.post("/v1/messages")
 async def create_message(request: Request):
     state = get_state()
-    body = await request.json()
+    body = await parse_request_body(request)
     
     log_client_request("POST", "/v1/messages", body)
     
@@ -862,6 +913,24 @@ async def create_message(request: Request):
 # 核心：转发请求到上游
 # ============================================================================
 
+def _normalize_tool_choice(tool_choice: Any) -> Any:
+    """把 OpenAI 的 object 形式 tool_choice 转成上游接受的 string 形式。
+
+    上游 CodeBuddy 后端（Go）的 Request.tool_choice 字段是 string 类型，
+    OpenAI 标准里 `{"type":"function","function":{"name":"X"}}` 这种 object
+    形式（强制调用函数 X）会触发 400：cannot unmarshal object into ...
+    of type string。此处转换为等价的函数名字符串 "X"（实测上游接受且语义一致）。
+    """
+    if isinstance(tool_choice, dict):
+        name = (tool_choice.get("function") or {}).get("name")
+        if name:
+            return name
+        # {"type": "function"} 但缺 name：退化为 required（强制调用工具）
+        if tool_choice.get("type") == "function":
+            return "required"
+    return tool_choice
+
+
 async def forward_chat(
     body: dict[str, Any],
     protocol: str,
@@ -875,6 +944,10 @@ async def forward_chat(
     
     stream = bool(body.get("stream"))
     upstream_body = dict(body)
+    
+    # 归一化 tool_choice：object 形式 → 函数名字符串（上游只接受 string）
+    if "tool_choice" in upstream_body:
+        upstream_body["tool_choice"] = _normalize_tool_choice(upstream_body["tool_choice"])
     
     # 限制 tools 数量防止上游拒绝 (CodeBuddy 限制约 30-50 个工具)
     original_tool_count = len(upstream_body.get("tools", []))
@@ -926,6 +999,25 @@ async def forward_chat(
 # 异步流式转发（核心改进）
 # ============================================================================
 
+def _build_openai_flush_chunk(residual: str, last_chunk_id: str,
+                              last_chunk_created: int, last_chunk_model: str) -> dict:
+    """构造流结束 flush 时发出的 OpenAI ChatCompletionChunk。
+
+    必须补全顶层 id/object/created/model 字段，否则严格解析的客户端
+    （如 grok）会报 `serialization error: missing field id`。
+    """
+    return {
+        "id": last_chunk_id,
+        "object": "chat.completion.chunk",
+        "created": last_chunk_created,
+        "model": last_chunk_model,
+        "choices": [{
+            "index": 0,
+            "delta": {"content": residual},
+        }],
+    }
+
+
 async def stream_upstream(
     url: str,
     headers: dict[str, str],
@@ -961,6 +1053,11 @@ async def stream_upstream(
     # DSML 缓冲区（用于处理可能的文本标记格式工具调用）
     dsml_buffer = DSMLStreamBuffer()
     
+    # 【修复 B1】原生流式 tool_calls name 缓存
+    # 上游首 chunk 带完整 name，后续 chunk name 为空但有 arguments 分片
+    # 维护 name 缓存防止空值覆盖
+    native_tool_name_by_index: dict[int, str] = {}
+    
     emitted_response_created = False
     response_text = ""
     response_text_started = False
@@ -969,6 +1066,11 @@ async def stream_upstream(
     raw_chunks: list[bytes] = []
     last_progress_log = stream_start_time
     detected_tool_calls = []
+    # 【修复 C3】记录最后一个上游 chunk 的元数据，供流结束 flush 时复用，
+    # 保证 final_chunk 补全 OpenAI ChatCompletionChunk 必需的顶层字段
+    last_chunk_id: str = ""
+    last_chunk_created: int = 0
+    last_chunk_model: str = ""
     try:
         # 异步HTTP客户端：timeout=None 依赖TCP超时
         # 使用合理的超时配置：连接超时30s，读取超时300s
@@ -1094,8 +1196,49 @@ async def stream_upstream(
                     
                     chunk_count += 1
                     
+                    # 【修复 C3】记录最后一个上游 chunk 的元数据，供流结束 flush 复用
+                    if chunk.get("id"):
+                        last_chunk_id = chunk["id"]
+                    if chunk.get("created"):
+                        last_chunk_created = chunk["created"]
+                    if chunk.get("model"):
+                        last_chunk_model = chunk["model"]
+                    
+                    # 提取当前 chunk 的原生 tool_calls（三种协议共享）。
+                    # 注意：必须在协议分支之前定义，responses/anthropic 分支
+                    # 的 B2 覆盖条件也会引用它（原生 tool_calls 存在时不覆盖）。
+                    native_tool_calls = (
+                        ((chunk.get("choices") or [{}])[0].get("delta") or {}).get("tool_calls")
+                    )
+                    
                     # 根据协议转换事件
                     if protocol == "openai":
+                        # 【修复 Bug B3】删除空 finish_reason 字段
+                        # 上游可能返回 "finish_reason": "" 或 null，导致客户端序列化失败
+                        # 完全删除该字段，只保留真实的 stop/tool_calls/length/content_filter
+                        if "choices" in chunk:
+                            for choice in chunk["choices"]:
+                                if "finish_reason" in choice and (choice["finish_reason"] == "" or choice["finish_reason"] is None):
+                                    del choice["finish_reason"]
+                        
+                        # 【修复 Bug 2】原生流式 tool_calls name 缓存
+                        # 首 chunk 带完整 name，后续 chunk name 为空但带 arguments 分片，
+                        # 这里按 index 缓存 name 并回填（native_tool_calls 已在协议分支前提取）
+                        if native_tool_calls:
+                            for tc in native_tool_calls:
+                                idx = tc.get("index", 0)
+                                fn = tc.get("function") or {}
+                                nm = fn.get("name") or ""
+                                
+                                # 首次出现非空 name：记录到缓存
+                                if nm:
+                                    native_tool_name_by_index[idx] = nm
+                                # 后续空 name：从缓存回填
+                                elif idx in native_tool_name_by_index:
+                                    if "function" not in tc:
+                                        tc["function"] = {}
+                                    tc["function"]["name"] = native_tool_name_by_index[idx]
+                        
                         # 提取 content 并通过 DSML 缓冲区处理
                         chunk_content = str(
                             ((chunk.get("choices") or [{}])[0].get("delta") or {}).get("content") or ""
@@ -1119,8 +1262,10 @@ async def stream_upstream(
                                     chunk["choices"][0]["delta"] = {}
                                 chunk["choices"][0]["delta"]["content"] = cleaned_content
                         
-                        # 如果检测到工具调用，添加 tool_calls 字段
-                        if detected_tool_calls and dsml_buffer.should_emit_tool_calls():
+                        # 【修复 Bug B2】仅当 chunk 不含原生 tool_calls 时，才使用 DSML 解析的工具调用
+                        # DSML 用于兜底：处理上游以文本标记返回工具调用的场景
+                        # 如果 chunk 已有原生 delta.tool_calls，原样透传，绝不覆盖
+                        if detected_tool_calls and dsml_buffer.should_emit_tool_calls() and not native_tool_calls:
                             if "choices" in chunk and len(chunk["choices"]) > 0:
                                 chunk["choices"][0]["finish_reason"] = "tool_calls"
                                 # 将检测到的工具调用转换为 OpenAI 格式
@@ -1163,8 +1308,8 @@ async def stream_upstream(
                                     chunk["choices"][0]["delta"] = {}
                                 chunk["choices"][0]["delta"]["content"] = cleaned_content
                             
-                            # 如果检测到工具调用，添加 tool_calls 字段
-                            if chunk_tool_calls and dsml_buffer.should_emit_tool_calls():
+                            # 【修复 Bug B2】仅当 chunk 不含原生 tool_calls 时，才使用 DSML 解析的工具调用
+                            if chunk_tool_calls and dsml_buffer.should_emit_tool_calls() and not native_tool_calls:
                                 if "choices" in chunk and len(chunk["choices"]) > 0:
                                     chunk["choices"][0]["finish_reason"] = "tool_calls"
                                     chunk["choices"][0]["delta"]["tool_calls"] = [
@@ -1209,8 +1354,8 @@ async def stream_upstream(
                                 # 使用清理后的内容替换原始内容
                                 chunk["choices"][0]["delta"]["content"] = cleaned_content
                             
-                            # 如果检测到工具调用，添加 tool_calls 字段
-                            if chunk_tool_calls and dsml_buffer.should_emit_tool_calls():
+                            # 【修复 Bug B2】仅当 chunk 不含原生 tool_calls 时，才使用 DSML 解析的工具调用
+                            if chunk_tool_calls and dsml_buffer.should_emit_tool_calls() and not native_tool_calls:
                                 if "choices" in chunk and len(chunk["choices"]) > 0:
                                     chunk["choices"][0]["finish_reason"] = "tool_calls"
                                     chunk["choices"][0]["delta"]["tool_calls"] = [
@@ -1233,6 +1378,13 @@ async def stream_upstream(
                 
                 # 发送结束事件
                 if protocol == "responses" and responses_state:
+                    # 【修复】流结束前强制刷新 DSML 缓冲区残留内容
+                    residual = dsml_buffer.flush()
+                    if residual:
+                        for event_name, event_data in responses_state.feed_chunk({
+                            "choices": [{"index": 0, "delta": {"content": residual}}]
+                        }):
+                            yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
                     # 使用 ResponsesStreamConverter 的 finish() 方法发出完整事件序列
                     for event_name, event_data in responses_state.finish():
                         yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
@@ -1241,6 +1393,13 @@ async def stream_upstream(
                     yield b"data: [DONE]\n\n"
                 
                 elif protocol == "anthropic" and anthropic_state:
+                    # 【修复】流结束前强制刷新 DSML 缓冲区残留内容
+                    residual = dsml_buffer.flush()
+                    if residual:
+                        for event_name, event_data in anthropic_state.feed_chunk({
+                            "choices": [{"index": 0, "delta": {"content": residual}}]
+                        }):
+                            yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
                     for event_name, event_data in anthropic_state.finish():
                         yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
                     
@@ -1249,6 +1408,15 @@ async def stream_upstream(
                     yield b"data: [DONE]\n\n"
                 
                 elif protocol == "openai":
+                    # 【修复】流结束前强制刷新 DSML 缓冲区残留内容，避免含 '<' 的
+                    # 普通文本（如文档中举例的工具调用标签）被永久扣留而截断输出
+                    residual = dsml_buffer.flush()
+                    if residual:
+                        response_text += residual
+                        final_chunk = _build_openai_flush_chunk(
+                            residual, last_chunk_id, last_chunk_created, last_chunk_model
+                        )
+                        yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n".encode()
                     yield b"data: [DONE]\n\n"
     
     except httpx.TimeoutException as exc:

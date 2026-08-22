@@ -25,6 +25,26 @@ class CodeBuddyError(RuntimeError):
     pass
 
 
+def _load_json_bytes(raw: bytes) -> Any:
+    """按 utf-8 → gbk → cp936 → latin-1 依次解码并解析 JSON。
+
+    兼容上游偶发返回非 UTF-8 字节（如 GBK）的情况，避免 `raw.decode("utf-8")`
+    抛 `UnicodeDecodeError`。若所有编码都无法解析为合法 JSON，最终以
+    latin-1 解码后抛 `json.JSONDecodeError`，交由调用方统一处理。
+    """
+    for encoding in ("utf-8", "gbk", "cp936", "latin-1"):
+        try:
+            text = raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            continue
+    # latin-1 能解码任意字节，故 decode 不会失败；走到这里仅当 JSON 结构非法。
+    return json.loads(raw.decode("latin-1"))
+
+
 class CodeBuddyClient:
     def __init__(
         self,
@@ -86,6 +106,10 @@ class CodeBuddyClient:
             "User-Agent": "Mozilla/5.0 (compatible; Genie-IDE/1.0)",
             "X-Product-Code": "codebuddy",
         }
+        # 关键修复：合并调用者传入的 headers
+        if headers:
+            request_headers.update(headers)
+        
         data = None
         if body is not None:
             data = json.dumps(body).encode("utf-8")
@@ -108,7 +132,7 @@ class CodeBuddyClient:
         if "json" not in content_type and not raw:
             return None
         try:
-            return json.loads(raw.decode("utf-8"))
+            return _load_json_bytes(raw)
         except json.JSONDecodeError as exc:
             raise CodeBuddyError(f"{path} 返回的不是 JSON: {raw[:300]!r}") from exc
 
@@ -144,6 +168,25 @@ class CodeBuddyClient:
             # X-Domain for the plugin protocol.
             headers["X-Domain"] = str(auth["domain"])
         return headers
+
+    def _enterprise_headers(self, token: dict[str, Any] | None = None) -> dict[str, str]:
+        """构造企业认证 headers（模拟 VSIX enterpriseHeaders）"""
+        domain = ""
+        try:
+            if token and token.get("domain"):
+                domain = str(token["domain"])
+            else:
+                # 关键修复：从 endpoint 提取 authority 作为 domain
+                # VSIX 逻辑: domain = URI.parse(endpoint).authority
+                from urllib.parse import urlparse
+                parsed = urlparse(self.endpoint)
+                domain = parsed.netloc  # netloc 包含 host:port
+            
+            if domain:
+                return {"X-Domain": domain}
+        except Exception:
+            pass
+        return {}
 
     def _get_machine_id(self) -> str:
         """获取或生成机器ID（模拟VSCode的machineId）"""
@@ -209,28 +252,41 @@ class CodeBuddyClient:
             except CodeBuddyError:
                 continue
             if isinstance(token, dict) and token.get("accessToken"):
-                account = self._unwrap(
-                    self._request(
-                        "GET",
-                        f"/v2{self.prefix}/login/account?state={urllib.parse.quote(str(state))}",
-                        headers={
-                            # The extension sends the bearer token here, but
-                            # only suppresses user/enterprise/department
-                            # headers; X-No-Authorization is not combined
-                            # with Authorization on this request.
-                            "X-No-User-Id": "true",
-                            "X-No-Enterprise-Id": "true",
-                            "X-No-Department-Info": "true",
-                            **self._token_headers(token),
-                        },
-                    )
-                )
-                if not isinstance(account, dict):
-                    raise CodeBuddyError(f"登录账户响应格式异常: {account!r}")
+                # 🔥 关键修复：/login/account 也需要轮询（模拟 VSIX loopGetAccount）
+                # 服务端在用户浏览器登录后，账户信息可能需要异步准备
+                account = None
+                account_deadline = time.monotonic() + 60  # 账户轮询最多60秒
+                
+                while time.monotonic() < account_deadline:
+                    time.sleep(1)  # 每秒轮询一次
+                    try:
+                        account = self._unwrap(
+                            self._request(
+                                "GET",
+                                f"/v2{self.prefix}/login/account?state={urllib.parse.quote(str(state))}",
+                                headers={
+                                    # 关键修复：必须包含完整的 enterprise headers（包括 X-Domain）
+                                    **self._enterprise_headers(token),
+                                    "Authorization": f"Bearer {token['accessToken']}",
+                                    "X-No-User-Id": "true",
+                                    "X-No-Enterprise-Id": "true",
+                                    "X-No-Department-Info": "true",
+                                },
+                            )
+                        )
+                        if isinstance(account, dict) and account.get("uid"):
+                            # 账户信息获取成功
+                            break
+                    except CodeBuddyError:
+                        # 401 或其他错误：账户信息可能尚未就绪，继续轮询
+                        continue
+                
+                if not account or not isinstance(account, dict):
+                    raise CodeBuddyError("账户信息获取超时")
+                
                 self._save_session({"auth": token, "account": account})
                 print(f"登录成功，用户: {account.get('nickname') or account.get('uid', '<unknown>')}")
                 return
-        raise CodeBuddyError("登录超时")
 
     @staticmethod
     def _token_headers(token: dict[str, Any]) -> dict[str, str]:
