@@ -141,6 +141,31 @@ codex --profile codebuddy "你的任务"
 
 > 说明：`baseURL` 指向本地代理；`apiKey` 填任意占位值即可（本地代理不校验密钥）。`models` 的 key 是 OpenCode 内的模型 ID（供选择），`modelID` 是发给代理的实际模型名。密钥字段请用 `apiKey`（而非某些旧模板里的 `env_key`），避免绑定错误的 provider 语义。
 
+#### Grok CLI
+
+编辑 `~/.grok/config.toml`，为每个模型添加一个指向本地代理的 `[model.<name>]` 配置。grok 默认使用 OpenAI Chat Completions 后端（`/v1/chat/completions`），本代理原生支持：
+
+```toml
+[models]
+default = "hy3"   # 可选：设置默认模型
+
+[model.hy3]
+model = "hy3"                        # 发给代理的模型 ID
+base_url = "http://127.0.0.1:8787/v1"
+name = "HY3 Main"                    # 模型选择器里显示的名称
+api_key = "noop"                     # 任意占位值即可
+
+[model.dv4f]
+model = "deepseek-v4-flash"
+base_url = "http://127.0.0.1:8787/v1"
+name = "DeepSeek V4 Flash"
+api_key = "noop"
+```
+
+之后在 TUI 中用 `/model hy3` 切换（或 `Ctrl+M` 打开模型选择器），或命令行模式 `grok -m hy3 "你的任务"`。
+
+> 说明：`base_url` 指向本地代理；`api_key` 填任意占位值即可（本地代理不校验密钥）。如需改用其他协议，可设置 `api_backend = "responses"` 走 `/v1/responses` 端点，或 `"messages"` 走 Anthropic 的 `/v1/messages` 端点。
+
 #### 其他 OpenAI 兼容客户端
 
 - Base URL: `http://127.0.0.1:8787/v1`

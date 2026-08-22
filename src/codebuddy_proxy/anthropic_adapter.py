@@ -173,7 +173,10 @@ def anthropic_request_to_chat(body: dict) -> dict:
     # 构造Chat body
     chat: dict[str, Any] = {
         "messages": messages,
-        "stream": True,  # Anthropic默认也是流式
+        # Anthropic Messages defaults to a normal JSON response.  Preserve
+        # the client's choice here; forward_chat() will still request a
+        # stream from CodeBuddy internally and aggregate it when needed.
+        "stream": bool(body.get("stream", False)),
     }
     
     # model

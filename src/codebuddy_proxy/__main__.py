@@ -949,16 +949,6 @@ async def forward_chat(
     if "tool_choice" in upstream_body:
         upstream_body["tool_choice"] = _normalize_tool_choice(upstream_body["tool_choice"])
     
-    # 限制 tools 数量防止上游拒绝 (CodeBuddy 限制约 30-50 个工具)
-    original_tool_count = len(upstream_body.get("tools", []))
-    MAX_TOOLS = 30
-    if original_tool_count > MAX_TOOLS:
-        upstream_body["tools"] = upstream_body["tools"][:MAX_TOOLS]
-        diagnostic("tools_truncated", 
-                  original_count=original_tool_count,
-                  truncated_count=MAX_TOOLS,
-                  reason="Upstream API tool limit")
-    
     # 应用脱敏处理
     if state.enable_desensitize:
         upstream_body = desensitize_body(upstream_body, compact_harness=True)
