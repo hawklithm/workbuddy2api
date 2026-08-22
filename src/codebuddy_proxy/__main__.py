@@ -167,8 +167,24 @@ class ProxyState:
         self.started_at = time.time()
     
     def ensure_auth(self) -> None:
-        if self.mock_dir is None:
+        """确保已认证；认证失败（token 过期/网络错误/登录未完成）返回结构化 401 而非 500。"""
+        if self.mock_dir is not None:
+            return
+        try:
             self.client.ensure_authenticated()
+        except HTTPException:
+            raise  # 已是结构化异常，原样透传（如 503 proxy not initialized）
+        except Exception as exc:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": {
+                        "message": "认证失败：token 无效或已过期，请重新登录（--login）",
+                        "type": "authentication_error",
+                        "details": str(exc)[:200],
+                    }
+                },
+            )
     
     def write_log(self, event: str, **kwargs) -> None:
         if self.json_logger is None:
