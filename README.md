@@ -167,6 +167,50 @@ Then switch to the proxy model in the TUI with `/model hy3` (or `Ctrl+M` model p
 
 > Note: `base_url` points to the local proxy; `api_key` can be any placeholder value (the local proxy does not validate keys). You can also set `api_backend = "responses"` to use the `/v1/responses` endpoint, or `"messages"` for the Anthropic `/v1/messages` endpoint, depending on your needs.
 
+#### Oh My Pi (OMP)
+
+[Oh My Pi](https://github.com/can1357/oh-my-pi) is a terminal coding agent (formerly known as `pi`). It reads custom providers from `~/.omp/agent/models.yml`, so the local proxy is configured as a keyless OpenAI-compatible endpoint.
+
+Add a `codebuddy` provider (the exact models follow the IDs returned by `/v1/models`, e.g. `hy3`, `glm-5.2`, `deepseek-v4-flash`, `kimi-k2.7`):
+
+```yaml
+# ~/.omp/agent/models.yml
+providers:
+  codebuddy:
+    baseUrl: http://127.0.0.1:8787/v1
+    api: openai-completions
+    auth: none
+    models:
+      - id: hy3
+        name: Hy3 (CodeBuddy)
+        reasoning: true
+        contextWindow: 192000
+        maxTokens: 64000
+      - id: glm-5.2
+        name: GLM-5.2 (CodeBuddy)
+        reasoning: true
+        contextWindow: 1000000
+        maxTokens: 48000
+      - id: deepseek-v4-flash
+        name: DeepSeek V4 Flash (CodeBuddy)
+        reasoning: true
+        contextWindow: 1000000
+        maxTokens: 50000
+      - id: kimi-k2.7
+        name: Kimi K2.7 (CodeBuddy)
+        reasoning: true
+        contextWindow: 256000
+        maxTokens: 32000
+```
+
+Notes:
+
+- `auth: none` marks the provider keyless, so the proxy's own session file handles authentication. No `apiKey` is needed (the proxy does not validate keys anyway).
+- `api: openai-completions` routes requests through `/v1/chat/completions`, which this proxy supports. If your OMP build or model needs the Responses wire format instead, use `api: openai-responses` (routes through `/v1/responses`).
+- The proxy already strips OpenAI extension fields (`strict`, `additionalProperties`) from tool schemas before forwarding to CodeBuddy, so you generally do **not** need `disableStrictTools: true` — add it only if a CodeBuddy backend revision starts rejecting tool requests.
+
+Select the model inside OMP with `/model codebuddy/hy3` (or set it as the default in your OMP profile), or run headless with `omp --model codebuddy/hy3 "your task"`. Model selection is by exact `provider/modelId`.
+
 #### Other OpenAI-compatible clients
 
 - Base URL: `http://127.0.0.1:8787/v1`

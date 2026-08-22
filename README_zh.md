@@ -166,6 +166,50 @@ api_key = "noop"
 
 > 说明：`base_url` 指向本地代理；`api_key` 填任意占位值即可（本地代理不校验密钥）。如需改用其他协议，可设置 `api_backend = "responses"` 走 `/v1/responses` 端点，或 `"messages"` 走 Anthropic 的 `/v1/messages` 端点。
 
+#### Oh My Pi (OMP)
+
+[Oh My Pi](https://github.com/can1357/oh-my-pi) 是一个终端编码代理（即原来的 `pi`）。它从 `~/.omp/agent/models.yml` 读取自定义 provider，因此把本地代理配置为一个免密钥的 OpenAI 兼容端点即可。
+
+在 `models.yml` 中添加 `codebuddy` provider（模型 ID 以 `/v1/models` 返回为准，如 `hy3`、`glm-5.2`、`deepseek-v4-flash`、`kimi-k2.7`）：
+
+```yaml
+# ~/.omp/agent/models.yml
+providers:
+  codebuddy:
+    baseUrl: http://127.0.0.1:8787/v1
+    api: openai-completions
+    auth: none
+    models:
+      - id: hy3
+        name: Hy3 (CodeBuddy)
+        reasoning: true
+        contextWindow: 192000
+        maxTokens: 64000
+      - id: glm-5.2
+        name: GLM-5.2 (CodeBuddy)
+        reasoning: true
+        contextWindow: 1000000
+        maxTokens: 48000
+      - id: deepseek-v4-flash
+        name: DeepSeek V4 Flash (CodeBuddy)
+        reasoning: true
+        contextWindow: 1000000
+        maxTokens: 50000
+      - id: kimi-k2.7
+        name: Kimi K2.7 (CodeBuddy)
+        reasoning: true
+        contextWindow: 256000
+        maxTokens: 32000
+```
+
+说明：
+
+- `auth: none` 将该 provider 标记为免密钥，鉴权完全由代理自身的会话文件负责，无需 `apiKey`（代理本来也不校验密钥）。
+- `api: openai-completions` 走 `/v1/chat/completions`，本代理原生支持。若你的 OMP 版本或模型需要 Responses 协议，可改用 `api: openai-responses`（走 `/v1/responses`）。
+- 代理在转发前已剔除工具 schema 中的 OpenAI 扩展字段（`strict`、`additionalProperties`），一般**无需**设置 `disableStrictTools: true`——仅当 CodeBuddy 后端后续开始拒绝工具请求时才需要加上。
+
+在 OMP 内用 `/model codebuddy/hy3` 选择模型（或设为 OMP profile 的默认模型），命令行模式可 `omp --model codebuddy/hy3 "你的任务"`。模型选择使用精确的 `provider/modelId`。
+
 #### 其他 OpenAI 兼容客户端
 
 - Base URL: `http://127.0.0.1:8787/v1`
