@@ -1048,7 +1048,8 @@ async def stream_upstream(
     # 维护 name 缓存防止空值覆盖
     native_tool_name_by_index: dict[int, str] = {}
     
-    emitted_response_created = False
+    # 【修复】跟踪上游实际状态码，避免finally块硬编码status=200导致日志误导
+    actual_status = 200
     response_text = ""
     response_text_started = False
     chunk_count = 0
@@ -1068,6 +1069,7 @@ async def stream_upstream(
         async with httpx.AsyncClient(timeout=timeout_config) as client:
             async with client.stream("POST", url, headers=headers, json=body) as resp:
                 if resp.status_code != 200:
+                    actual_status = resp.status_code  # 【修复】记录实际状态码
                     error_body = await resp.aread()
                     error_text = error_body.decode("utf-8", "replace")
                     
@@ -1460,7 +1462,7 @@ async def stream_upstream(
         if state.verbose_llm:
             raw_response = b"\n".join(raw_chunks)
             state.write_body_log("upstream_response", raw_response, protocol=protocol,
-                                status=200, method="POST", path="/v2/chat/completions")
+                                status=actual_status, method="POST", path="/v2/chat/completions")
         
         logged_text = (
             anthropic_state.text if anthropic_state
