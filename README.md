@@ -65,6 +65,12 @@ uv run --with workbuddy2api python -m codebuddy_proxy --desensitize
 
 # First use: log in and start
 uv run --with workbuddy2api python -m codebuddy_proxy --login --desensitize
+
+# International service: first login and start
+uv run --with workbuddy2api python -m codebuddy_proxy --global --login --desensitize
+
+# International service: later starts
+uv run --with workbuddy2api python -m codebuddy_proxy --global --desensitize
 ```
 
 Listens on `http://127.0.0.1:8787` by default.

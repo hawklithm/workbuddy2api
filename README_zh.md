@@ -64,6 +64,12 @@ uv run --with workbuddy2api python -m codebuddy_proxy --desensitize
 
 # 首次使用：登录并启动
 uv run --with workbuddy2api python -m codebuddy_proxy --login --desensitize
+
+# 国际版：首次登录并启动
+uv run --with workbuddy2api python -m codebuddy_proxy --global --login --desensitize
+
+# 国际版：后续启动
+uv run --with workbuddy2api python -m codebuddy_proxy --global --desensitize
 ```
 
 默认监听 `http://127.0.0.1:8787`
