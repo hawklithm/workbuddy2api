@@ -2,8 +2,20 @@
 """测试修改后的 /v1/models 端点"""
 
 import json
+import importlib.resources
 import sys
-from pathlib import Path
+
+from codebuddy_proxy.backend_profile import DOMESTIC_PROFILE
+
+
+def load_packaged_config():
+    """Load the domestic catalog through the same package resource as runtime."""
+
+    resource = importlib.resources.files("codebuddy_proxy").joinpath(
+        DOMESTIC_PROFILE.models_resource
+    )
+    with resource.open("r", encoding="utf-8") as config_stream:
+        return json.load(config_stream)
 
 def test_local_config():
     """测试本地配置文件加载"""
@@ -11,14 +23,8 @@ def test_local_config():
     print("1. 测试本地配置文件加载")
     print("=" * 60)
     
-    config_file = Path("models_config.json")
-    if not config_file.exists():
-        print(f"❌ 配置文件不存在: {config_file}")
-        return False
-    
     try:
-        with open(config_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        data = load_packaged_config()
         
         models = data.get("models", [])
         print(f"✓ 成功加载配置文件")
@@ -43,9 +49,7 @@ def test_model_fields():
     print("2. 测试模型字段完整性")
     print("=" * 60)
     
-    config_file = Path("models_config.json")
-    with open(config_file, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    data = load_packaged_config()
     
     models = data.get("models", [])
     required_fields = ["id", "name"]
@@ -88,9 +92,7 @@ def test_codex_format_simulation():
     print("3. 模拟Codex格式转换")
     print("=" * 60)
     
-    config_file = Path("models_config.json")
-    with open(config_file, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    data = load_packaged_config()
     
     models = data.get("models", [])
     

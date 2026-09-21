@@ -23,6 +23,7 @@ import urllib.request
 import uuid
 from typing import Any
 
+from codebuddy_proxy.backend_profile import resolve_backend_from_args
 from codebuddy_proxy.codebuddy_client_demo import CodeBuddyClient, CodeBuddyError
 
 
@@ -74,7 +75,7 @@ def direct_request(client: CodeBuddyClient, method: str, path: str,
     if body is not None:
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
         headers["Content-Type"] = "application/json"
-    url = client.endpoint + path
+    url = client.build_url(path)
     if path == "/v3/config":
         # CloudProductManager calls axios.get(path, {params: {repos: []}}).
         url += "?repos="
@@ -92,30 +93,36 @@ def direct_request(client: CodeBuddyClient, method: str, path: str,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Record two raw CodeBuddy backend responses")
-    parser.add_argument("--endpoint", default="https://copilot.tencent.com")
+    parser.add_argument("--global", dest="global_mode", action="store_true",
+                        help="使用国际版 CodeBuddy（默认使用国内版）")
+    parser.add_argument("--endpoint", default=None,
+                        help="CodeBuddy 后端地址；显式值优先于 profile 默认值和 CODEBUDDY_ENDPOINT")
     parser.add_argument("--session-file", type=pathlib.Path)
     parser.add_argument("--output-dir", type=pathlib.Path, default=pathlib.Path("fixtures/codebuddy-real"))
     parser.add_argument("--model", default="default")
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
 
-    client = CodeBuddyClient(args.endpoint, session_file=args.session_file)
+    client = CodeBuddyClient(backend=resolve_backend_from_args(args))
     # Authentication may refresh the local session or perform browser SSO;
     # this is preparation, not one of the two model/LLM data calls.
     client.ensure_authenticated(open_browser=not args.no_browser)
 
-    models_path = args.output_dir / "models.v3-config.json"
-    chat_path = args.output_dir / "chat-hi.sse.json"
+    models_fixture_path = args.output_dir / "models.v3-config.json"
+    chat_fixture_path = args.output_dir / "chat-hi.sse.json"
+    models_api_path = "/v3/config"
 
     models_request = {"method": "GET", "path": "/v3/config?repos=", "body": None,
                       "headers": {"X-Product": "SaaS", "X-IDE-Type": "VSCode",
                                    "X-IDE-Name": "VSCode", "X-IDE-Version": "1.70.2",
                                    "X-Product-Version": "4.10.33259736"}}
-    status, headers, raw, content_type = direct_request(client, "GET", "/v3/config")
-    write_fixture(models_path, request=models_request, status=status,
+    status, headers, raw, content_type = direct_request(client, "GET", models_api_path)
+    write_fixture(models_fixture_path, request=models_request, status=status,
                   headers=headers, body=raw, content_type=content_type)
     if status != 200:
-        raise CodeBuddyError(f"模型列表请求失败，HTTP {status}；原始响应已保存到 {models_path}")
+        raise CodeBuddyError(
+            f"模型列表请求失败，HTTP {status}；原始响应已保存到 {models_fixture_path}"
+        )
 
     chat_body = {
         "model": args.model,
@@ -123,17 +130,23 @@ def main() -> int:
         "stream": True,
         "stream_options": {"include_usage": True},
     }
-    chat_request = {"method": "POST", "path": "/v2/chat/completions", "body": chat_body}
+    chat_api_path = client.profile.chat_path
+    chat_request = {"method": "POST", "path": chat_api_path, "body": chat_body}
     status, headers, raw, content_type = direct_request(
-        client, "POST", "/v2/chat/completions", chat_body, accept="text/event-stream"
+        client, "POST", chat_api_path, chat_body, accept="text/event-stream"
     )
-    write_fixture(chat_path, request=chat_request, status=status,
+    write_fixture(chat_fixture_path, request=chat_request, status=status,
                   headers=headers, body=raw, content_type=content_type)
     if status != 200:
-        raise CodeBuddyError(f"chat 请求失败，HTTP {status}；原始响应已保存到 {chat_path}")
+        raise CodeBuddyError(
+            f"chat 请求失败，HTTP {status}；原始响应已保存到 {chat_fixture_path}"
+        )
 
-    print(f"models fixture: {models_path} ({len(json.loads(models_path.read_text())['response']['body_text'])} chars)")
-    print(f"chat fixture:   {chat_path} ({len(raw)} bytes)")
+    print(
+        f"models fixture: {models_fixture_path} "
+        f"({len(json.loads(models_fixture_path.read_text())['response']['body_text'])} chars)"
+    )
+    print(f"chat fixture:   {chat_fixture_path} ({len(raw)} bytes)")
     return 0
 
 

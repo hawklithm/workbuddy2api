@@ -67,6 +67,42 @@ uv run --with workbuddy2api python -m codebuddy_proxy --login --desensitize
 
 默认监听 `http://127.0.0.1:8787`
 
+### 国内版与国际版后端
+
+默认启动使用国内版 CodeBuddy：
+
+- endpoint：`https://copilot.tencent.com`
+- session：`~/.codebuddy-session.json`
+
+使用 `--global` 切换到国际版 CodeBuddy：
+
+```bash
+workbuddy2api --global
+workbuddy2api --global --login
+workbuddy2api --global --endpoint https://staging-codebuddy.tencent.com \
+  --session-file ~/.codebuddy-global-staging-session.json
+```
+
+国际版默认使用 `https://www.codebuddy.ai` 和独立的
+`~/.codebuddy-global-session.json`，不会读取国内默认 session。显式的
+`--session-file` 仍然优先；如果文件中的 backend/endpoint 元数据与当前
+profile 不匹配，代理会拒绝使用其中的 token，并保留原文件。
+
+endpoint 解析优先级为：显式 `--endpoint` > `--global` 对应的 profile 默认值
+> 非 global 模式下的 `CODEBUDDY_ENDPOINT` > 国内默认 endpoint。也就是说，
+`--global` 未同时指定 `--endpoint` 时不会被 `CODEBUDDY_ENDPOINT` 覆盖回国内域名。
+
+Claude Code/CC Switch 仍连接本地代理的 `/v1/messages`；`--global` 只改变
+代理访问的上游 CodeBuddy 区域，不改变本地协议地址。
+
+每个 endpoint（包括 staging）都应使用独立的 `--session-file`。这样可以避免
+session endpoint 校验冲突，也能防止 token 被发送到错误的域名。
+
+运行时模型配置从包内 profile 资源加载：
+`src/codebuddy_proxy/models_config.domestic.json` 和
+`src/codebuddy_proxy/models_config.global.json`。根目录的
+`models_config.json` 仅作为开发兼容用的国内版配置副本保留，不是运行时数据源。
+
 ### 2. 验证
 
 ```bash
@@ -221,8 +257,9 @@ providers:
 ```bash
 --host HOST              监听地址（默认 127.0.0.1）
 --port PORT              监听端口（默认 8787）
---endpoint ENDPOINT      CodeBuddy 后端地址
---session-file PATH      会话文件路径（默认 ~/.codebuddy-session.json）
+--global                 使用国际版 CodeBuddy（默认国内版）
+--endpoint ENDPOINT      CodeBuddy 后端地址（覆盖 profile 默认值）
+--session-file PATH      会话文件路径（默认按 profile 隔离）
 --log-file PATH          JSONL 日志文件（默认 ~/.workbuddy2api/codebuddy-proxy.jsonl）
 --desensitize            启用脱敏处理（推荐）
 --optimize-context       启用消息压缩优化（Codex CLI 推荐）
@@ -238,7 +275,7 @@ providers:
 ```bash
 CODEBUDDY_PROXY_HOST      # 等同 --host
 CODEBUDDY_PROXY_PORT      # 等同 --port
-CODEBUDDY_ENDPOINT        # 等同 --endpoint
+CODEBUDDY_ENDPOINT        # 非 --global 模式下作为 endpoint 候选
 CODEBUDDY_PROXY_LOG_FILE  # 等同 --log-file
 ```
 
@@ -252,6 +289,12 @@ uv run --with workbuddy2api python -m codebuddy_proxy --login \
 ```
 
 浏览器打开后登录，成功后 proxy 自动启动。
+
+国际版首次登录：
+
+```bash
+workbuddy2api --global --login
+```
 
 ### 日常使用（自动读取登录态）
 

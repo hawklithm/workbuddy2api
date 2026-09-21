@@ -5,13 +5,13 @@ import json
 from unittest.mock import patch, Mock, MagicMock
 from src.codebuddy_proxy.codebuddy_client_demo import CodeBuddyClient
 
-def test_full_login_flow():
+def test_full_login_flow(tmp_path):
     """模拟完整登录流程，验证每个请求的 headers"""
     print("=" * 70)
     print("完整登录流程 Headers 验证")
     print("=" * 70)
     
-    client = CodeBuddyClient()
+    client = CodeBuddyClient(session_file=tmp_path / "login-session.json")
     
     # 捕获所有 HTTP 请求
     requests_made = []
@@ -74,6 +74,10 @@ def test_full_login_flow():
                     client.login(open_browser=False)
                 except Exception as e:
                     print(f"登录过程出错: {e}")
+
+    saved_session = json.loads((tmp_path / "login-session.json").read_text(encoding="utf-8"))
+    assert saved_session["backend"] == "domestic"
+    assert saved_session["endpoint"] == "https://copilot.tencent.com"
     
     print(f"\n捕获到 {len(requests_made)} 个 HTTP 请求\n")
     

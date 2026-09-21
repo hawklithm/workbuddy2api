@@ -68,6 +68,46 @@ uv run --with workbuddy2api python -m codebuddy_proxy --login --desensitize
 
 Listens on `http://127.0.0.1:8787` by default.
 
+### Domestic and global CodeBuddy backends
+
+The default startup uses the domestic backend:
+
+- endpoint: `https://copilot.tencent.com`
+- session: `~/.codebuddy-session.json`
+
+Use `--global` to select the international CodeBuddy backend:
+
+```bash
+workbuddy2api --global
+workbuddy2api --global --login
+workbuddy2api --global --endpoint https://staging-codebuddy.tencent.com \
+  --session-file ~/.codebuddy-global-staging-session.json
+```
+
+Global mode defaults to `https://www.codebuddy.ai` and the isolated
+`~/.codebuddy-global-session.json`; it never reads the domestic default session.
+An explicit `--session-file` still takes precedence. If session metadata does
+not match the selected backend/endpoint, the proxy refuses to use its token
+and leaves the original file untouched.
+
+Endpoint precedence is: explicit `--endpoint` > the `--global` profile default
+> `CODEBUDDY_ENDPOINT` in non-global mode > the domestic default endpoint.
+Therefore `--global` without `--endpoint` cannot be overridden back to the
+domestic host by `CODEBUDDY_ENDPOINT`.
+
+Claude Code/CC Switch continues to connect to the local `/v1/messages` endpoint;
+`--global` only changes the upstream CodeBuddy region used by the proxy.
+
+Use a different `--session-file` for every endpoint, including staging. This
+avoids session endpoint validation conflicts and prevents a token from being
+sent to the wrong host.
+
+Runtime model catalogs are loaded from the packaged profile resources
+`src/codebuddy_proxy/models_config.domestic.json` and
+`src/codebuddy_proxy/models_config.global.json`. The root
+`models_config.json` is retained only as a development-compatibility copy of
+the domestic catalog and is not a runtime data source.
+
 ### 2. Verify
 
 ```bash
@@ -222,8 +262,9 @@ Select the model inside OMP with `/model codebuddy/hy3` (or set it as the defaul
 ```bash
 --host HOST              Bind address (default 127.0.0.1)
 --port PORT              Bind port (default 8787)
---endpoint ENDPOINT      CodeBuddy backend address
---session-file PATH      Session file path (default ~/.codebuddy-session.json)
+--global                 Use the international CodeBuddy backend (default domestic)
+--endpoint ENDPOINT      CodeBuddy backend address (overrides the profile default)
+--session-file PATH      Session file path (isolated by profile by default)
 --log-file PATH          JSONL log file (default ~/.workbuddy2api/codebuddy-proxy.jsonl)
 --desensitize            Enable desensitization (recommended)
 --optimize-context       Enable message compression (recommended for Codex CLI)
@@ -239,7 +280,7 @@ Select the model inside OMP with `/model codebuddy/hy3` (or set it as the defaul
 ```bash
 CODEBUDDY_PROXY_HOST      # Same as --host
 CODEBUDDY_PROXY_PORT      # Same as --port
-CODEBUDDY_ENDPOINT        # Same as --endpoint
+CODEBUDDY_ENDPOINT        # Endpoint fallback in non-global mode
 CODEBUDDY_PROXY_LOG_FILE  # Same as --log-file
 ```
 
@@ -253,6 +294,12 @@ uv run --with workbuddy2api python -m codebuddy_proxy --login \
 ```
 
 After the browser opens and you log in, the proxy starts automatically.
+
+First login for the international backend:
+
+```bash
+workbuddy2api --global --login
+```
 
 ### Daily use (automatically reads the login state)
 

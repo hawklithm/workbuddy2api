@@ -1,0 +1,150 @@
+{
+  "models": [
+    {
+      "id": "claude-3.7",
+      "name": "Claude-3.7-Sonnet",
+      "vendor": "e",
+      "maxOutputTokens": 8192,
+      "maxInputTokens": 200000,
+      "supportsToolCall": true,
+      "supportsImages": true,
+      "maxAllowedSize": 40000
+    },
+    {
+      "id": "claude-4.0",
+      "name": "Claude-4.0-Sonnet",
+      "vendor": "e",
+      "maxOutputTokens": 24000,
+      "maxInputTokens": 200000,
+      "supportsToolCall": true,
+      "supportsImages": true,
+      "maxAllowedSize": 40000,
+      "isDefault": true
+    },
+    {
+      "id": "gpt-5",
+      "name": "GPT-5",
+      "vendor": "e",
+      "maxOutputTokens": 128000,
+      "maxInputTokens": 272000,
+      "supportsToolCall": true,
+      "supportsImages": true,
+      "maxAllowedSize": 80000
+    },
+    {
+      "id": "gpt-5-mini",
+      "name": "GPT-5-mini",
+      "vendor": "e",
+      "maxOutputTokens": 128000,
+      "maxInputTokens": 272000,
+      "supportsToolCall": true,
+      "supportsImages": true,
+      "maxAllowedSize": 80000
+    },
+    {
+      "id": "gpt-5-nano",
+      "name": "GPT-5-nano",
+      "vendor": "e",
+      "maxOutputTokens": 128000,
+      "maxInputTokens": 272000,
+      "supportsToolCall": true,
+      "supportsImages": true,
+      "maxAllowedSize": 80000
+    },
+    {
+      "id": "o4-mini",
+      "name": "GPT-4o-mini",
+      "vendor": "e",
+      "maxOutputTokens": 32000,
+      "maxInputTokens": 200000,
+      "supportsToolCall": true,
+      "supportsImages": true,
+      "maxAllowedSize": 40000
+    },
+    {
+      "id": "chat-1.0",
+      "name": "chat-1.0",
+      "vendor": "f",
+      "maxOutputTokens": 32000,
+      "supportsToolCall": true,
+      "supportsImages": false
+    },
+    {
+      "id": "enhance-1.0",
+      "name": "Enhance-1.0",
+      "vendor": "f",
+      "maxOutputTokens": 32000,
+      "supportsToolCall": true,
+      "supportsImages": false
+    },
+    {
+      "id": "completion-1.0",
+      "name": "completion-1.0",
+      "vendor": "j",
+      "maxOutputTokens": 256,
+      "supportsExtra": true
+    },
+    {
+      "id": "completion-1.2",
+      "name": "completion-1.2",
+      "vendor": "j",
+      "maxOutputTokens": 256,
+      "supportsExtra": true
+    },
+    {
+      "id": "nes-1.0",
+      "name": "nes-1.0",
+      "vendor": "f",
+      "maxOutputTokens": 256
+    },
+    {
+      "id": "nes-1.1",
+      "name": "nes-1.1",
+      "vendor": "f",
+      "maxOutputTokens": 8192
+    },
+    {
+      "id": "nes-1.2",
+      "name": "nes-1.2",
+      "vendor": "f",
+      "maxOutputTokens": 32000,
+      "supportsToolCall": true,
+      "supportsImages": true
+    },
+    {
+      "id": "gemini-2.5-flash",
+      "name": "Gemini-2.5-Flash",
+      "maxOutputTokens": 16384,
+      "maxInputTokens": 1000000,
+      "supportsToolCall": true,
+      "supportsImages": true,
+      "maxAllowedSize": 40000
+    },
+    {
+      "id": "gemini-2.5-pro",
+      "name": "Gemini-2.5-Pro",
+      "maxOutputTokens": 16384,
+      "maxInputTokens": 1000000,
+      "supportsToolCall": true,
+      "supportsImages": true,
+      "maxAllowedSize": 40000
+    },
+    {
+      "id": "auto-chat",
+      "name": "auto",
+      "vendor": "f",
+      "maxOutputTokens": 8192,
+      "maxInputTokens": 32000,
+      "supportsToolCall": true,
+      "supportsImages": false,
+      "disabledMultimodal": true,
+      "credits": "x0.01 credits"
+    },
+    {
+      "id": "nes-v1-14b",
+      "name": "nes-v1-14b",
+      "vendor": "tencent",
+      "maxOutputTokens": 8192
+    }
+  ]
+}
