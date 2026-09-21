@@ -18,6 +18,7 @@ import base64
 import hashlib
 import io
 import importlib.metadata
+import importlib.resources
 import json
 import logging
 import logging.handlers
@@ -35,6 +36,12 @@ from fastapi.responses import JSONResponse, StreamingResponse
 import uvicorn
 from codebuddy_proxy.dsml_parser import DSMLStreamBuffer, parse_all_tool_calls, remove_all_tool_call_markers
 
+from codebuddy_proxy.backend_profile import (
+    BackendProfile,
+    ResolvedBackend,
+    DOMESTIC_PROFILE,
+    resolve_backend_from_args,
+)
 from codebuddy_proxy.codebuddy_client_demo import CodeBuddyClient, CodeBuddyError
 
 # 尝试导入高级功能模块（可选）
@@ -300,9 +307,24 @@ def diagnostic(event: str, **kwargs) -> None:
 
 class RemoteConfigCache:
     """远程配置缓存（带 TTL）- 匹配 VS Code 插件的逻辑"""
-    
-    def __init__(self, url: str, ttl: int = 300):
-        self.url = url
+
+    def __init__(
+        self,
+        client: CodeBuddyClient | str | None = None,
+        ttl: int = 300,
+        *,
+        url: str | None = None,
+    ):
+        # ``url=`` and a positional string were accepted by older callers.
+        # Convert them once to a client, while all actual requests below use
+        # the proxy state's resolved client so the base URL cannot diverge.
+        if url is not None:
+            if client is not None:
+                raise TypeError("RemoteConfigCache 不能同时指定 client 和 url")
+            client = url
+        if isinstance(client, str):
+            client = CodeBuddyClient(endpoint=client)
+        self.client = client or CodeBuddyClient()
         self.ttl = ttl
         self._cache: Optional[dict[str, Any]] = None
         self._last_fetch: float = 0
@@ -341,8 +363,8 @@ class RemoteConfigCache:
         # 企业版用户：调用动态 API
         try:
             # 构造 URL（匹配插件逻辑）
-            path = f"/console/enterprises/{enterprise_id}/config/models"
-            full_url = self.url.rstrip("/") + path
+            path = state.client.enterprise_models_path(str(enterprise_id))
+            full_url = state.client.build_url(path)
             
             diagnostic("remote_config_fetch_attempt", url=full_url, enterprise_id=enterprise_id)
             
@@ -454,32 +476,62 @@ def build_model_list_static() -> list[dict[str, Any]]:
 
 
 
-def load_models_from_local_config() -> list[dict[str, Any]]:
-    """从本地配置文件加载模型列表"""
-    config_file = pathlib.Path(__file__).parent / "models_config.json"
-    
+def _profile_for_models(
+    backend: BackendProfile | ResolvedBackend | None = None,
+) -> BackendProfile:
+    if isinstance(backend, ResolvedBackend):
+        return backend.profile
+    if isinstance(backend, BackendProfile):
+        return backend
+    if proxy_state is not None:
+        return proxy_state.client.profile
+    return DOMESTIC_PROFILE
+
+
+def _local_diagnostic(event: str, **kwargs: Any) -> None:
+    """Emit diagnostics when the app is initialized, but stay unit-testable."""
+
+    if proxy_state is not None and proxy_state.logger:
+        diagnostic(event, **kwargs)
+
+
+def load_models_from_local_config(
+    backend: BackendProfile | ResolvedBackend | None = None,
+) -> list[dict[str, Any]]:
+    """Load and normalize the selected profile's package model resource.
+
+    A missing or malformed resource is an error.  In particular, global mode
+    must never silently expose the domestic model catalog.
+    """
+
+    profile = _profile_for_models(backend)
+    resource_name = profile.models_resource
     try:
-        if not config_file.exists():
-            diagnostic("local_config_missing", path=str(config_file))
-            return build_model_list_static()
-        
-        with open(config_file, "r", encoding="utf-8") as f:
-            config_data = json.load(f)
-        
+        resource = importlib.resources.files("codebuddy_proxy").joinpath(resource_name)
+        with resource.open("r", encoding="utf-8") as stream:
+            config_data = json.load(stream)
         models = config_data.get("models", [])
-        diagnostic("local_config_loaded", models_count=len(models))
-        
-        # 规范化每个模型的格式
-        normalized_models = []
-        for model in models:
-            normalized = normalize_model_format(model)
-            normalized_models.append(normalized)
-        
-        return normalized_models
-    
-    except Exception as e:
-        diagnostic("local_config_error", error=str(e), path=str(config_file))
-        return build_model_list_static()
+        if not isinstance(models, list):
+            raise ValueError("models 字段必须是数组")
+        normalized_models = [normalize_model_format(model) for model in models]
+    except Exception as exc:
+        _local_diagnostic(
+            "local_config_error",
+            backend=profile.key,
+            resource=resource_name,
+            error=str(exc),
+        )
+        raise CodeBuddyError(
+            f"无法加载 backend={profile.key} 的模型资源 {resource_name}: {exc}"
+        ) from exc
+
+    _local_diagnostic(
+        "local_config_loaded",
+        backend=profile.key,
+        resource=resource_name,
+        models_count=len(normalized_models),
+    )
+    return normalized_models
 
 
 def normalize_model_format(remote_model: dict[str, Any]) -> dict[str, Any]:
@@ -757,6 +809,8 @@ async def health():
         "authenticated": bool(auth.get("accessToken")),
         "token_valid": not expires or expires > int(time.time() * 1000),
         "uptime_seconds": int(time.time() - state.started_at),
+        "backend": state.client.profile.key,
+        "upstream_endpoint": state.client.endpoint,
     }
 
 
@@ -767,12 +821,14 @@ async def health():
 @app.get("/v1/models")
 async def list_models():
     state = get_state()
-    # 从本地配置文件加载模型列表
-    data = load_models_from_local_config()
-    
+    # 始终从当前 backend 的包内资源读取；不访问远程动态配置。
+    data = load_models_from_local_config(state.client.backend)
+
     # 记录模型列表请求
     diagnostic(
         "models_list_request",
+        backend=state.client.profile.key,
+        resource=state.client.profile.models_resource,
         models_count=len(data),
         source="local_config"
     )
@@ -958,7 +1014,7 @@ async def forward_chat(
     upstream_body.setdefault("stream_options", {"include_usage": True})
     
     
-    url = state.client.endpoint + "/v2/chat/completions"
+    url = state.client.build_url(state.client.profile.chat_path)
     headers = {
         "User-Agent": "Mozilla/5.0 (compatible; Genie-IDE/1.0)",
         **state.client.auth_headers(),
@@ -1048,7 +1104,8 @@ async def stream_upstream(
     # 维护 name 缓存防止空值覆盖
     native_tool_name_by_index: dict[int, str] = {}
     
-    emitted_response_created = False
+    # 【修复】跟踪上游实际状态码，避免finally块硬编码status=200导致日志误导
+    actual_status = 200
     response_text = ""
     response_text_started = False
     chunk_count = 0
@@ -1068,6 +1125,7 @@ async def stream_upstream(
         async with httpx.AsyncClient(timeout=timeout_config) as client:
             async with client.stream("POST", url, headers=headers, json=body) as resp:
                 if resp.status_code != 200:
+                    actual_status = resp.status_code  # 【修复】记录实际状态码
                     error_body = await resp.aread()
                     error_text = error_body.decode("utf-8", "replace")
                     
@@ -1460,7 +1518,7 @@ async def stream_upstream(
         if state.verbose_llm:
             raw_response = b"\n".join(raw_chunks)
             state.write_body_log("upstream_response", raw_response, protocol=protocol,
-                                status=200, method="POST", path="/v2/chat/completions")
+                                status=actual_status, method="POST", path="/v2/chat/completions")
         
         logged_text = (
             anthropic_state.text if anthropic_state
@@ -1690,18 +1748,25 @@ def convert_nonstream(data: dict[str, Any], protocol: str, original: dict[str, A
 # 启动
 # ============================================================================
 
-def main():
-    global proxy_state
-    
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="CodeBuddy local API proxy")
     parser.add_argument("--host", default=os.getenv("CODEBUDDY_PROXY_HOST", "127.0.0.1"),
                         help="监听地址")
     parser.add_argument("--port", type=int, default=int(os.getenv("CODEBUDDY_PROXY_PORT", "8787")),
                         help="监听端口")
-    parser.add_argument("--endpoint", default=os.getenv("CODEBUDDY_ENDPOINT", "https://copilot.tencent.com"),
-                        help="CodeBuddy 后端地址")
+    parser.add_argument(
+        "--global",
+        dest="global_mode",
+        action="store_true",
+        help="使用国际版 CodeBuddy（默认使用国内版）",
+    )
+    parser.add_argument(
+        "--endpoint",
+        default=None,
+        help="CodeBuddy 后端地址；显式值优先于 profile 默认值和 CODEBUDDY_ENDPOINT",
+    )
     parser.add_argument("--session-file", type=pathlib.Path,
-                        help="会话文件路径")
+                        help="会话文件路径（默认按 backend profile 隔离）")
     parser.add_argument("--mock-dir", type=pathlib.Path,
                         help="只使用指定目录中的真实响应 fixture，不访问 CodeBuddy 后端")
     default_log_file = pathlib.Path(
@@ -1726,20 +1791,41 @@ def main():
                         help="登录时不自动打开浏览器")
     parser.add_argument("--verbose-llm", action="store_true",
                         help="log full LLM request/response content (default: summary only, saves 98%% space)")
-    parser.add_argument("--static-models", action="store_true",
-                        help="使用静态模型列表（默认从远程 API 动态获取）")
-    parser.add_argument("--config-cache-ttl", type=int, default=int(os.getenv("CODEBUDDY_CONFIG_CACHE_TTL", "300")),
-                        help="远程配置缓存 TTL（秒，默认 300）")
-    args = parser.parse_args()
+    parser.add_argument(
+        "--static-models",
+        action="store_true",
+        help="兼容旧参数；/v1/models 当前始终使用 profile 对应的本地模型资源",
+    )
+    parser.add_argument(
+        "--config-cache-ttl",
+        type=int,
+        default=int(os.getenv("CODEBUDDY_CONFIG_CACHE_TTL", "300")),
+        help="兼容旧参数；当前 /v1/models 不启用远程动态模型",
+    )
+    return parser
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    args = build_parser().parse_args(argv)
     args.log_file = args.log_file.expanduser()
+    return args
+
+
+def main():
+    global proxy_state
+
+    args = parse_args()
+    try:
+        resolved_backend = resolve_backend_from_args(args)
+        client = CodeBuddyClient(backend=resolved_backend)
+    except (CodeBuddyError, ValueError) as exc:
+        print(f"错误: {exc}", file=sys.stderr)
+        return 1
     
     # 设置日志
     log_dir = args.log_file.parent if args.log_file else pathlib.Path("logs")
     logger = setup_logging(log_dir)
     json_logger = setup_json_logging(args.log_file)
-    
-    # 初始化客户端
-    client = CodeBuddyClient(args.endpoint, session_file=args.session_file)
     
     # 处理登录
     if args.login:
@@ -1760,6 +1846,17 @@ def main():
         "startup",
         host=args.host,
         port=args.port,
+        backend=client.profile.key,
+        upstream_endpoint=client.endpoint,
+        session_file=str(client.session_file),
+        models_resource=client.profile.models_resource,
+    )
+    logger.info(
+        "Backend profile=%s endpoint=%s session_file=%s models_resource=%s",
+        client.profile.key,
+        client.endpoint,
+        client.session_file,
+        client.profile.models_resource,
     )
     logger.info(
         "Runtime: app_version=%s system_version=%s python_version=%s machine=%s",
@@ -1769,20 +1866,18 @@ def main():
         proxy_state.runtime_info["machine"],
     )
     
-    # 初始化远程配置缓存（默认启用动态模型列表）
+    # 保留远程缓存类以兼容旧调用方，但 /v1/models 明确使用包内资源。
     global remote_config_cache
-    if not args.static_models:
-        # 默认：动态模式
-        remote_config_cache = RemoteConfigCache(
-            url=args.endpoint,
-            ttl=args.config_cache_ttl
-        )
-        logger.info(f"Dynamic model list enabled: cache_url={args.endpoint}, ttl={args.config_cache_ttl}s")
-        print(f"[Dynamic Models] Enabled (endpoint={args.endpoint}, TTL={args.config_cache_ttl}s)")
-    else:
-        # 显式禁用：静态模式
-        logger.info("Using static model list (25 models)")
-        print(f"[Static Models] Using 25 hardcoded models")
+    remote_config_cache = None
+    logger.info(
+        "Using local model resource: backend=%s resource=%s",
+        client.profile.key,
+        client.profile.models_resource,
+    )
+    print(
+        f"[Local Models] backend={client.profile.key}, "
+        f"resource={client.profile.models_resource}"
+    )
     
     # 启动信息输出到 stdout
     print(f"CodeBuddy proxy listening on http://{args.host}:{args.port}")
@@ -1796,4 +1891,4 @@ def main():
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

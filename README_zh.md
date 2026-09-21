@@ -12,6 +12,7 @@
 - **工具调用支持** - 完整支持 function calling 和 tool use 特性，自动过滤无效工具定义
 - **DSML 解析** - 自动识别和转换 DeepSeek 标记语言（DSML）格式的工具调用
 - **流式响应** - 支持 SSE 流式输出，实时返回生成内容，内置 60 秒超时保护
+- **国内版与国际版后端** - 默认连接国内版 CodeBuddy，通过 `--global` 切换国际版，并隔离登录态和模型列表
 - **多账号管理** - 支持多个登录态隔离，方便工作/个人账号切换
 ---
 
@@ -63,9 +64,66 @@ uv run --with workbuddy2api python -m codebuddy_proxy --desensitize
 
 # 首次使用：登录并启动
 uv run --with workbuddy2api python -m codebuddy_proxy --login --desensitize
+
+# 国际版：首次登录并启动
+uv run --with workbuddy2api python -m codebuddy_proxy --global --login --desensitize
+
+# 国际版：后续启动
+uv run --with workbuddy2api python -m codebuddy_proxy --global --desensitize
 ```
 
 默认监听 `http://127.0.0.1:8787`
+
+### 国内版与国际版 CodeBuddy 后端
+
+代理同时支持国内版和国际版 CodeBuddy。国内版仍是默认模式，因此已有启动命令
+无需修改。
+
+| 模式 | 启动参数 | 上游 endpoint | 默认 session 文件 |
+| --- | --- | --- | --- |
+| 国内版（默认） | 无 | `https://copilot.tencent.com` | `~/.codebuddy-session.json` |
+| 国际版 | `--global` | `https://www.codebuddy.ai` | `~/.codebuddy-global-session.json` |
+
+国际版首次登录和日常启动：
+
+```bash
+# 首次登录
+uv run --with workbuddy2api python -m codebuddy_proxy \
+  --global --login --desensitize
+
+# 后续启动会复用国际版 session
+uv run --with workbuddy2api python -m codebuddy_proxy \
+  --global --desensitize
+```
+
+如果已将包安装为命令，可使用简写 `workbuddy2api --global --login`。从本地源码
+运行时，可使用 `uv run python -m codebuddy_proxy --global --login`。
+
+`--global` 只切换上游服务。Codex CLI、Claude Code/CC Switch、OpenCode 等客户端
+仍然连接相同的本地代理地址；`/v1/models` 返回的模型列表会随 profile 切换。
+
+国内版和国际版登录态默认相互隔离。显式 `--session-file` 的优先级更高，但文件中
+保存的 backend 和 endpoint 必须与当前启动参数匹配。代理会拒绝不匹配的凭据，
+并保留原 session 文件不变。
+
+使用自定义国际版 endpoint 时，应同时指定独立的 session 文件：
+
+```bash
+uv run --with workbuddy2api python -m codebuddy_proxy \
+  --global \
+  --endpoint https://staging-codebuddy.tencent.com \
+  --session-file "$HOME/.codebuddy-global-staging-session.json" \
+  --login
+```
+
+endpoint 解析优先级为：显式 `--endpoint` > `--global` 对应的 profile 默认值
+> 非 global 模式下的 `CODEBUDDY_ENDPOINT` > 国内默认 endpoint。也就是说，
+`--global` 未同时指定 `--endpoint` 时不会被 `CODEBUDDY_ENDPOINT` 覆盖回国内域名。
+
+运行时模型配置从包内 profile 资源加载：
+`src/codebuddy_proxy/models_config.domestic.json` 和
+`src/codebuddy_proxy/models_config.global.json`。根目录的
+`models_config.json` 仅作为开发兼容用的国内版配置副本保留，不是运行时数据源。
 
 ### 2. 验证
 
@@ -73,6 +131,9 @@ uv run --with workbuddy2api python -m codebuddy_proxy --login --desensitize
 curl http://127.0.0.1:8787/health
 curl http://127.0.0.1:8787/v1/models
 ```
+
+健康检查响应中的 `backend`（`domestic` 或 `global`）和 `upstream_endpoint`
+可以用来确认当前选择的区域，再连接客户端。
 
 ### 3. 接入客户端
 
@@ -221,8 +282,9 @@ providers:
 ```bash
 --host HOST              监听地址（默认 127.0.0.1）
 --port PORT              监听端口（默认 8787）
---endpoint ENDPOINT      CodeBuddy 后端地址
---session-file PATH      会话文件路径（默认 ~/.codebuddy-session.json）
+--global                 使用国际版 CodeBuddy（默认国内版）
+--endpoint ENDPOINT      CodeBuddy 后端地址（覆盖 profile 默认值）
+--session-file PATH      会话文件路径（默认按 profile 隔离）
 --log-file PATH          JSONL 日志文件（默认 ~/.workbuddy2api/codebuddy-proxy.jsonl）
 --desensitize            启用脱敏处理（推荐）
 --optimize-context       启用消息压缩优化（Codex CLI 推荐）
@@ -238,7 +300,7 @@ providers:
 ```bash
 CODEBUDDY_PROXY_HOST      # 等同 --host
 CODEBUDDY_PROXY_PORT      # 等同 --port
-CODEBUDDY_ENDPOINT        # 等同 --endpoint
+CODEBUDDY_ENDPOINT        # 非 --global 模式下作为 endpoint 候选
 CODEBUDDY_PROXY_LOG_FILE  # 等同 --log-file
 ```
 
@@ -253,10 +315,24 @@ uv run --with workbuddy2api python -m codebuddy_proxy --login \
 
 浏览器打开后登录，成功后 proxy 自动启动。
 
+国际版首次登录：
+
+```bash
+uv run --with workbuddy2api python -m codebuddy_proxy --global --login \
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
+```
+
 ### 日常使用（自动读取登录态）
 
 ```bash
 uv run --with workbuddy2api python -m codebuddy_proxy --desensitize \
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
+```
+
+国际版每次启动都需要保留 `--global`：
+
+```bash
+uv run --with workbuddy2api python -m codebuddy_proxy --global --desensitize \
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
@@ -309,9 +385,11 @@ curl http://127.0.0.1:8787/health
 ```json
 {
   "status": "ok",
-  "uptime_seconds": 123.45,
+  "uptime_seconds": 123,
   "authenticated": true,
-  "token_valid": true
+  "token_valid": true,
+  "backend": "global",
+  "upstream_endpoint": "https://www.codebuddy.ai"
 }
 ```
 
@@ -321,7 +399,8 @@ curl http://127.0.0.1:8787/health
 curl http://127.0.0.1:8787/v1/models
 ```
 
-返回 OpenAI 格式的模型列表，`data[].id` 就是后续请求中的 `model` 值（如 `deepseek-v4-flash`、`glm-5.2`）。
+返回当前 backend 对应的 OpenAI 格式模型列表，`data[].id` 即后续请求中的
+`model` 值；国内版和国际版可能提供不同的模型 ID。
 
 ### `/v1/chat/completions` - OpenAI Chat
 
@@ -691,6 +770,8 @@ grep desensitize_applied "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 grep projection_applied "$HOME/.workbuddy2api/codebuddy-proxy.jsonl" | jq .
 ```
 
+## 故障排查
+
 ### 找不到 session 文件
 
 首次使用需要登录：
@@ -699,6 +780,26 @@ grep projection_applied "$HOME/.workbuddy2api/codebuddy-proxy.jsonl" | jq .
 uv run --with workbuddy2api python -m codebuddy_proxy --login \
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
+
+国际版请在同一命令中加入 `--global`，代理会创建并在后续启动中复用
+`~/.codebuddy-global-session.json`。
+
+### Session backend 或 endpoint 不匹配
+
+不要让国内版和国际版共用 session，也不要让生产环境和自定义 endpoint 共用
+session。应使用与后续启动完全相同的 backend 参数重新登录：
+
+```bash
+# 国际版默认 endpoint
+uv run --with workbuddy2api python -m codebuddy_proxy --global --login
+
+# 自定义国际版 endpoint，并使用独立 session
+uv run --with workbuddy2api python -m codebuddy_proxy \
+  --global --endpoint https://staging-codebuddy.tencent.com \
+  --session-file "$HOME/.codebuddy-global-staging-session.json" --login
+```
+
+代理会主动拒绝 session 元数据不匹配的凭据，避免把已保存的 token 发送到其他域名。
 
 ### 401 认证失败
 

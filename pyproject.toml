@@ -1,6 +1,6 @@
 [project]
 name = "workbuddy2api"
-version = "2.0.4"
+version = "2.0.5"
 description = "Local OpenAI/Responses/Anthropic compatible proxy for CodeBuddy"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,6 +25,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+codebuddy_proxy = ["models_config.*.json"]
 
 [dependency-groups]
 dev = [

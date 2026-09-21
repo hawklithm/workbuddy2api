@@ -20,6 +20,14 @@ import urllib.request
 import webbrowser
 from typing import Any, Iterator
 
+from codebuddy_proxy.backend_profile import (
+    BackendProfile,
+    ResolvedBackend,
+    normalize_endpoint,
+    resolve_backend,
+    resolve_backend_from_args,
+)
+
 
 class CodeBuddyError(RuntimeError):
     pass
@@ -48,38 +56,151 @@ def _load_json_bytes(raw: bytes) -> Any:
 class CodeBuddyClient:
     def __init__(
         self,
-        endpoint: str = "https://copilot.tencent.com",
+        endpoint: str | None = None,
         platform: str = "VSCode",
-        session_file: pathlib.Path | None = None,
+        session_file: pathlib.Path | str | None = None,
+        *,
+        backend: ResolvedBackend | BackendProfile | None = None,
+        profile: BackendProfile | None = None,
     ) -> None:
-        self.endpoint = endpoint.rstrip("/")
+        if backend is not None and profile is not None:
+            raise ValueError("CodeBuddyClient 不能同时指定 backend 和 profile")
+        if profile is not None:
+            backend = profile
+        if isinstance(backend, ResolvedBackend):
+            if endpoint is None and session_file is None:
+                resolved_backend = backend
+            else:
+                resolved_backend = resolve_backend(
+                    profile=backend.profile,
+                    endpoint=endpoint or backend.endpoint,
+                    session_file=session_file or backend.session_file,
+                    environment={},
+                )
+        elif isinstance(backend, BackendProfile):
+            resolved_backend = resolve_backend(
+                profile=backend,
+                endpoint=endpoint,
+                session_file=session_file,
+                environment={},
+            )
+        else:
+            # Direct library callers historically defaulted to the domestic
+            # endpoint; environment precedence belongs to the CLI resolver.
+            resolved_backend = resolve_backend(
+                endpoint=endpoint,
+                session_file=session_file,
+                environment={},
+            )
+
+        self.backend = resolved_backend
+        self.profile = resolved_backend.profile
+        self.endpoint = resolved_backend.endpoint
         self.platform = platform
-        self.prefix = "/plugin"
-        self.session_file = session_file or pathlib.Path.home() / ".codebuddy-session.json"
+        self.prefix = self.profile.auth_prefix
+        self.session_file = resolved_backend.session_file
         self.session: dict[str, Any] = self._load_session()
 
     def _load_session(self) -> dict[str, Any]:
         try:
-            return json.loads(self.session_file.read_text())
+            session = json.loads(self.session_file.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return {}
         except (OSError, json.JSONDecodeError) as exc:
             raise CodeBuddyError(f"无法读取 session 文件: {self.session_file}: {exc}") from exc
 
+        if not isinstance(session, dict):
+            raise CodeBuddyError(f"session 文件格式无效（应为 JSON object）: {self.session_file}")
+        self._validate_session_metadata(session)
+        return session
+
+    def _validate_session_metadata(self, session: dict[str, Any]) -> None:
+        """Reject credentials saved for a different backend or endpoint."""
+
+        stored_backend = session.get("backend")
+        stored_endpoint = session.get("endpoint")
+
+        # Sessions written before profile metadata was introduced are
+        # intentionally usable only by the domestic profile's default endpoint.
+        # This preserves the old default while preventing an old token from
+        # being sent to a custom or global endpoint.
+        if not stored_backend:
+            if self.profile.key != "domestic":
+                raise CodeBuddyError(
+                    f"session 文件 {self.session_file} 没有 backend 元数据，"
+                    "只能由 domestic profile 读取；请使用匹配的 --session-file。"
+                )
+            if self.endpoint != self.profile.default_endpoint:
+                raise CodeBuddyError(
+                    f"session 文件 {self.session_file} 没有 backend/endpoint 元数据，"
+                    "只能在 domestic profile 的默认 endpoint 下读取；"
+                    "请使用匹配的 --session-file。"
+                )
+            if stored_endpoint:
+                try:
+                    stored_endpoint = normalize_endpoint(str(stored_endpoint))
+                except ValueError:
+                    stored_endpoint = ""
+                if stored_endpoint != self.endpoint:
+                    raise CodeBuddyError(
+                        f"session 文件 {self.session_file} 的 endpoint 与当前 backend 不匹配；"
+                        "原文件未修改，请使用匹配的 --session-file。"
+                    )
+            return
+
+        if stored_backend != self.profile.key:
+            raise CodeBuddyError(
+                f"session 文件 {self.session_file} 属于 backend={stored_backend!r}，"
+                f"当前 backend={self.profile.key!r}，backend 不匹配；原文件未修改。"
+            )
+
+        if not stored_endpoint:
+            raise CodeBuddyError(
+                f"session 文件 {self.session_file} 缺少 endpoint 元数据；原文件未修改。"
+            )
+
+        try:
+            normalized_stored_endpoint = normalize_endpoint(str(stored_endpoint))
+        except ValueError:
+            normalized_stored_endpoint = ""
+        if normalized_stored_endpoint != self.endpoint:
+            raise CodeBuddyError(
+                f"session 文件 {self.session_file} 的 endpoint 与当前 backend 不匹配；"
+                "原文件未修改，请使用匹配的 --session-file。"
+            )
+
     def _save_session(self, session: dict[str, Any]) -> None:
+        persisted_session = dict(session)
+        persisted_session["backend"] = self.profile.key
+        persisted_session["endpoint"] = self.endpoint
         self.session_file.parent.mkdir(parents=True, exist_ok=True)
         flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
         fd = os.open(self.session_file, flags, 0o600)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                json.dump(session, stream, ensure_ascii=False, indent=2)
+                json.dump(persisted_session, stream, ensure_ascii=False, indent=2)
                 stream.write("\n")
         finally:
             try:
                 os.chmod(self.session_file, 0o600)
             except OSError:
                 pass
-        self.session = session
+        self.session = persisted_session
+
+    def build_url(self, path: str) -> str:
+        """Build a URL from the resolved endpoint and a relative path."""
+
+        return f"{self.endpoint}/{path.lstrip('/')}"
+
+    def enterprise_models_path(self, enterprise_id: str) -> str:
+        """Return the profile-defined enterprise model-config path."""
+
+        return self.profile.enterprise_models_path.format(
+            enterpriseId=urllib.parse.quote(str(enterprise_id), safe="")
+        )
+
+    def _auth_path(self, suffix: str) -> str:
+        return f"/v2{self.profile.auth_prefix}{suffix}"
 
     @staticmethod
     def _unwrap(payload: Any) -> Any:
@@ -115,7 +236,7 @@ class CodeBuddyClient:
             data = json.dumps(body).encode("utf-8")
             request_headers.setdefault("Content-Type", "application/json")
         request = urllib.request.Request(
-            urllib.parse.urljoin(self.endpoint + "/", path.lstrip("/")),
+            self.build_url(path),
             data=data,
             headers=request_headers,
             method=method,
@@ -163,34 +284,30 @@ class CodeBuddyClient:
         if account.get("departmentInfo"):
             # 🔥 新增：部门信息（如果有）
             headers["X-Department-Info"] = str(account["departmentInfo"])
-        if auth.get("domain"):
+        domain = self._domain_for_token(auth)
+        if domain:
             # The extension calls this the domain header.  The server accepts
             # X-Domain for the plugin protocol.
-            headers["X-Domain"] = str(auth["domain"])
+            headers["X-Domain"] = domain
         return headers
 
     def _enterprise_headers(self, token: dict[str, Any] | None = None) -> dict[str, str]:
         """构造企业认证 headers（模拟 VSIX enterpriseHeaders）"""
-        domain = ""
+        domain = self._domain_for_token(token)
+        return {"X-Domain": domain} if domain else {}
+
+    def _domain_for_token(self, token: dict[str, Any] | None = None) -> str:
+        """Use token.domain first, then the resolved endpoint authority."""
+
+        if token and token.get("domain"):
+            return str(token["domain"])
         try:
-            if token and token.get("domain"):
-                domain = str(token["domain"])
-            else:
-                # 关键修复：从 endpoint 提取 authority 作为 domain
-                # VSIX 逻辑: domain = URI.parse(endpoint).authority
-                from urllib.parse import urlparse
-                parsed = urlparse(self.endpoint)
-                domain = parsed.netloc  # netloc 包含 host:port
-            
-            if domain:
-                return {"X-Domain": domain}
-        except Exception:
-            pass
-        return {}
+            return urllib.parse.urlsplit(self.endpoint).netloc
+        except ValueError:
+            return ""
 
     def _get_machine_id(self) -> str:
         """获取或生成机器ID（模拟VSCode的machineId）"""
-        import hashlib
         import platform
         import uuid
         
@@ -224,8 +341,8 @@ class CodeBuddyClient:
         state_payload = self._unwrap(
             self._request(
                 "POST",
-                f"/v2{self.prefix}/auth/state?platform={urllib.parse.quote(self.platform)}",
-                headers=no_auth,
+                f"{self._auth_path('/auth/state')}?platform={urllib.parse.quote(self.platform)}",
+                headers={**self._enterprise_headers(), **no_auth},
                 body={},
             )
         )
@@ -245,8 +362,8 @@ class CodeBuddyClient:
                 token = self._unwrap(
                     self._request(
                         "GET",
-                        f"/v2{self.prefix}/auth/token?state={urllib.parse.quote(str(state))}",
-                        headers=no_auth,
+                        f"{self._auth_path('/auth/token')}?state={urllib.parse.quote(str(state), safe='')}",
+                        headers={**self._enterprise_headers(), **no_auth},
                     )
                 )
             except CodeBuddyError:
@@ -263,7 +380,7 @@ class CodeBuddyClient:
                         account = self._unwrap(
                             self._request(
                                 "GET",
-                                f"/v2{self.prefix}/login/account?state={urllib.parse.quote(str(state))}",
+                                f"{self._auth_path('/login/account')}?state={urllib.parse.quote(str(state), safe='')}",
                                 headers={
                                     # 关键修复：必须包含完整的 enterprise headers（包括 X-Domain）
                                     **self._enterprise_headers(token),
@@ -284,7 +401,7 @@ class CodeBuddyClient:
                 if not account or not isinstance(account, dict):
                     raise CodeBuddyError("账户信息获取超时")
                 
-                self._save_session({"auth": token, "account": account})
+                self._save_session({**self.session, "auth": token, "account": account})
                 print(f"登录成功，用户: {account.get('nickname') or account.get('uid', '<unknown>')}")
                 return
 
@@ -305,7 +422,7 @@ class CodeBuddyClient:
         payload = self._unwrap(
             self._request(
                 "POST",
-                f"/v2{self.prefix}/auth/token/refresh",
+                self._auth_path("/auth/token/refresh"),
                 headers={
                     **self.auth_headers(access=False, refresh=True),
                     "X-Auth-Refresh-Source": "plugin",
@@ -346,7 +463,7 @@ class CodeBuddyClient:
             "stream": True,
         }
         request = urllib.request.Request(
-            f"{self.endpoint}/v2/chat/completions",
+            self.build_url(self.profile.chat_path),
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "User-Agent": "Mozilla/5.0 (compatible; Genie-IDE/1.0)",
@@ -389,14 +506,17 @@ class CodeBuddyClient:
 def main() -> int:
     parser = argparse.ArgumentParser(description="CodeBuddy login/refresh/chat demo")
     parser.add_argument("prompt", nargs="?", help="要发送的问题")
-    parser.add_argument("--endpoint", default=os.getenv("CODEBUDDY_ENDPOINT", "https://copilot.tencent.com"))
+    parser.add_argument("--global", dest="global_mode", action="store_true",
+                        help="使用国际版 CodeBuddy（默认使用国内版）")
+    parser.add_argument("--endpoint", default=None,
+                        help="CodeBuddy 后端地址；显式值优先于 profile 默认值和 CODEBUDDY_ENDPOINT")
     parser.add_argument("--model", default=os.getenv("CODEBUDDY_MODEL", "default"))
     parser.add_argument("--session-file", type=pathlib.Path)
     parser.add_argument("--no-browser", action="store_true", help="只打印登录 URL，不自动打开浏览器")
     parser.add_argument("--login", action="store_true", help="强制重新登录")
     args = parser.parse_args()
-    client = CodeBuddyClient(args.endpoint, session_file=args.session_file)
     try:
+        client = CodeBuddyClient(backend=resolve_backend_from_args(args))
         if args.login:
             client.login(open_browser=not args.no_browser)
         prompt = args.prompt or input("Prompt: ")

@@ -12,6 +12,7 @@
 - **Tool call support** - Full support for function calling and tool use, with automatic filtering of invalid tool definitions
 - **DSML parsing** - Automatically detects and converts DeepSeek Markup Language (DSML) tool calls
 - **Streaming responses** - SSE streaming output, returning generated content in real time, with built-in 60-second timeout protection
+- **Domestic and international backends** - Uses domestic CodeBuddy by default and switches to the international CodeBuddy service with `--global`, with isolated sessions and model catalogs
 - **Multi-account management** - Supports isolation of multiple login states for easy switching between work/personal accounts
 
 ---
@@ -64,9 +65,71 @@ uv run --with workbuddy2api python -m codebuddy_proxy --desensitize
 
 # First use: log in and start
 uv run --with workbuddy2api python -m codebuddy_proxy --login --desensitize
+
+# International service: first login and start
+uv run --with workbuddy2api python -m codebuddy_proxy --global --login --desensitize
+
+# International service: later starts
+uv run --with workbuddy2api python -m codebuddy_proxy --global --desensitize
 ```
 
 Listens on `http://127.0.0.1:8787` by default.
+
+### Domestic and international CodeBuddy backends
+
+The proxy supports both CodeBuddy regions. Domestic mode remains the default,
+so existing startup commands continue to work unchanged.
+
+| Mode | Startup option | Upstream endpoint | Default session file |
+| --- | --- | --- | --- |
+| Domestic (default) | none | `https://copilot.tencent.com` | `~/.codebuddy-session.json` |
+| International | `--global` | `https://www.codebuddy.ai` | `~/.codebuddy-global-session.json` |
+
+First login and daily startup for the international service:
+
+```bash
+# First login
+uv run --with workbuddy2api python -m codebuddy_proxy \
+  --global --login --desensitize
+
+# Later starts reuse the international session
+uv run --with workbuddy2api python -m codebuddy_proxy \
+  --global --desensitize
+```
+
+If the package is installed as a command, the equivalent short form is
+`workbuddy2api --global --login`. When running from source, use
+`uv run python -m codebuddy_proxy --global --login`.
+
+`--global` changes only the upstream service. Codex CLI, Claude Code/CC Switch,
+OpenCode, and other clients continue to use the same local proxy URLs. The
+selected profile also controls the model catalog returned by `/v1/models`.
+
+Domestic and international sessions are intentionally isolated. An explicit
+`--session-file` takes precedence, but its saved backend and endpoint must match
+the current startup options. The proxy refuses mismatched credentials and does
+not modify the original file.
+
+For a custom international endpoint, always use a dedicated session file:
+
+```bash
+uv run --with workbuddy2api python -m codebuddy_proxy \
+  --global \
+  --endpoint https://staging-codebuddy.tencent.com \
+  --session-file "$HOME/.codebuddy-global-staging-session.json" \
+  --login
+```
+
+Endpoint precedence is: explicit `--endpoint` > the `--global` profile default
+> `CODEBUDDY_ENDPOINT` in non-global mode > the domestic default endpoint.
+Therefore `--global` without `--endpoint` cannot be redirected to the domestic
+host by `CODEBUDDY_ENDPOINT`.
+
+Runtime model catalogs are loaded from the packaged profile resources
+`src/codebuddy_proxy/models_config.domestic.json` and
+`src/codebuddy_proxy/models_config.global.json`. The root
+`models_config.json` is retained only as a development-compatibility copy of
+the domestic catalog and is not a runtime data source.
 
 ### 2. Verify
 
@@ -74,6 +137,10 @@ Listens on `http://127.0.0.1:8787` by default.
 curl http://127.0.0.1:8787/health
 curl http://127.0.0.1:8787/v1/models
 ```
+
+The health response reports the active `backend` (`domestic` or `global`) and
+`upstream_endpoint`, which makes it easy to confirm the selected region before
+connecting a client.
 
 ### 3. Connect clients
 
@@ -222,8 +289,9 @@ Select the model inside OMP with `/model codebuddy/hy3` (or set it as the defaul
 ```bash
 --host HOST              Bind address (default 127.0.0.1)
 --port PORT              Bind port (default 8787)
---endpoint ENDPOINT      CodeBuddy backend address
---session-file PATH      Session file path (default ~/.codebuddy-session.json)
+--global                 Use the international CodeBuddy backend (default domestic)
+--endpoint ENDPOINT      CodeBuddy backend address (overrides the profile default)
+--session-file PATH      Session file path (isolated by profile by default)
 --log-file PATH          JSONL log file (default ~/.workbuddy2api/codebuddy-proxy.jsonl)
 --desensitize            Enable desensitization (recommended)
 --optimize-context       Enable message compression (recommended for Codex CLI)
@@ -239,7 +307,7 @@ Select the model inside OMP with `/model codebuddy/hy3` (or set it as the defaul
 ```bash
 CODEBUDDY_PROXY_HOST      # Same as --host
 CODEBUDDY_PROXY_PORT      # Same as --port
-CODEBUDDY_ENDPOINT        # Same as --endpoint
+CODEBUDDY_ENDPOINT        # Endpoint fallback in non-global mode
 CODEBUDDY_PROXY_LOG_FILE  # Same as --log-file
 ```
 
@@ -254,10 +322,24 @@ uv run --with workbuddy2api python -m codebuddy_proxy --login \
 
 After the browser opens and you log in, the proxy starts automatically.
 
+First login for the international backend:
+
+```bash
+uv run --with workbuddy2api python -m codebuddy_proxy --global --login \
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
+```
+
 ### Daily use (automatically reads the login state)
 
 ```bash
 uv run --with workbuddy2api python -m codebuddy_proxy --desensitize \
+  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
+```
+
+For the international backend, keep `--global` on every startup:
+
+```bash
+uv run --with workbuddy2api python -m codebuddy_proxy --global --desensitize \
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
@@ -310,9 +392,11 @@ Example response:
 ```json
 {
   "status": "ok",
-  "uptime_seconds": 123.45,
+  "uptime_seconds": 123,
   "authenticated": true,
-  "token_valid": true
+  "token_valid": true,
+  "backend": "global",
+  "upstream_endpoint": "https://www.codebuddy.ai"
 }
 ```
 
@@ -322,7 +406,9 @@ Example response:
 curl http://127.0.0.1:8787/v1/models
 ```
 
-Returns a model list in OpenAI format; `data[].id` is the `model` value used in subsequent requests (e.g. `deepseek-v4-flash`, `glm-5.2`).
+Returns the active backend's model catalog in OpenAI format. `data[].id` is the
+`model` value used in subsequent requests; domestic and international mode may
+expose different model IDs.
 
 ### `/v1/chat/completions` - OpenAI Chat
 
@@ -648,6 +734,28 @@ First use requires login:
 uv run --with workbuddy2api python -m codebuddy_proxy --login \
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
+
+For the international backend, add `--global` to the same command. It creates
+and later reuses `~/.codebuddy-global-session.json`.
+
+### Session backend or endpoint mismatch
+
+Do not reuse a domestic session for the international backend, or a production
+session for a custom endpoint. Log in with the same backend options you plan to
+use later:
+
+```bash
+# International default endpoint
+uv run --with workbuddy2api python -m codebuddy_proxy --global --login
+
+# Custom international endpoint with an isolated session
+uv run --with workbuddy2api python -m codebuddy_proxy \
+  --global --endpoint https://staging-codebuddy.tencent.com \
+  --session-file "$HOME/.codebuddy-global-staging-session.json" --login
+```
+
+The proxy intentionally rejects mismatched session metadata instead of sending
+the saved token to another host.
 
 ### 401 authentication failure
 
