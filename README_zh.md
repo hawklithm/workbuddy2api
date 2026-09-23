@@ -135,6 +135,27 @@ curl http://127.0.0.1:8787/v1/models
 健康检查响应中的 `backend`（`domestic` 或 `global`）和 `upstream_endpoint`
 可以用来确认当前选择的区域，再连接客户端。
 
+### Windows 出现 `[WinError 64]` / `Accept failed on a socket`
+
+Windows 下 Uvicorn 的默认 Proactor 事件循环在接收连接时，可能因客户端断开或
+网络状态变化报告 `Task exception was never retrieved`、`WinError 64`。
+这是本地 HTTP 服务接受连接时的异常，不代表 CodeBuddy 登录或上游模型报错。
+
+通过本项目 CLI 启动时，Windows 默认改用 Selector 事件循环，避免上述 Proactor
+accept 异常；新版 Uvicorn 使用显式 loop factory，旧版则通过事件循环策略切换。
+原启动命令不需要修改，重启使用更新后的本地源码即可：
+
+```powershell
+uv run python -m codebuddy_proxy --desensitize --host 0.0.0.0 --global
+```
+
+如确实需要 Proactor 的异步子进程能力或较高的 Windows socket 并发，可用
+`--windows-loop proactor` 保留原先行为，但可能重新遇到这类接入异常。
+`--windows-loop` 仅在 Windows 生效。若只有本机使用，建议省略 `--host 0.0.0.0`
+并连接 `http://127.0.0.1:8787`；`0.0.0.0` 会监听所有 IPv4 网卡，
+而该代理默认没有入站 API Key 校验，不宜直接暴露到不可信网络。
+若换用 Selector 后健康检查仍失败，请检查实际客户端连接地址、防火墙及端口占用。
+
 ### 3. 接入客户端
 
 #### Codex CLI
@@ -274,7 +295,7 @@ providers:
 #### 其他 OpenAI 兼容客户端
 
 - Base URL: `http://127.0.0.1:8787/v1`
-- API Key: 留空（或填你启动时用 `--api-key` 设置的值）
+- API Key: 客户端要求时可填占位值；代理当前不校验入站 API Key，请勿直接暴露到公网
 - 模型名: `glm-5.2` / `deepseek-v4-pro` / `kimi-k2.7` / `auto` 等
 
 ## 命令行参数
@@ -282,6 +303,7 @@ providers:
 ```bash
 --host HOST              监听地址（默认 127.0.0.1）
 --port PORT              监听端口（默认 8787）
+--windows-loop MODE      Windows 事件循环：selector（默认）/ proactor
 --global                 使用国际版 CodeBuddy（默认国内版）
 --endpoint ENDPOINT      CodeBuddy 后端地址（覆盖 profile 默认值）
 --session-file PATH      会话文件路径（默认按 profile 隔离）

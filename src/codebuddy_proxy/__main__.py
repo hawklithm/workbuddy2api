@@ -14,6 +14,7 @@ Usage with uv:
 """
 
 import argparse
+import asyncio
 import base64
 import hashlib
 import io
@@ -1748,12 +1749,34 @@ def convert_nonstream(data: dict[str, Any], protocol: str, original: dict[str, A
 # 启动
 # ============================================================================
 
+def run_http_server(*, host: str, port: int, windows_loop: str = "selector") -> None:
+    """Avoid Windows Proactor's noisy WinError 64 accept failures.
+
+    Newer Uvicorn versions choose a Proactor loop explicitly, ignoring the
+    asyncio event-loop policy. Older versions use that policy instead. Use
+    the corresponding selector mechanism without affecting non-Windows hosts.
+    """
+    options: dict[str, Any] = {"host": host, "port": port, "log_level": "warning"}
+    if sys.platform == "win32" and windows_loop == "selector":
+        if hasattr(uvicorn.Config, "get_loop_factory"):
+            options["loop"] = asyncio.SelectorEventLoop
+        else:
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    uvicorn.run(app, **options)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="CodeBuddy local API proxy")
     parser.add_argument("--host", default=os.getenv("CODEBUDDY_PROXY_HOST", "127.0.0.1"),
                         help="监听地址")
     parser.add_argument("--port", type=int, default=int(os.getenv("CODEBUDDY_PROXY_PORT", "8787")),
                         help="监听端口")
+    parser.add_argument(
+        "--windows-loop",
+        choices=("selector", "proactor"),
+        default="selector",
+        help="仅 Windows 生效：默认 selector 避免 WinError 64；可选 proactor 保留原行为",
+    )
     parser.add_argument(
         "--global",
         dest="global_mode",
@@ -1888,7 +1911,7 @@ def main():
     logger.info("Endpoints: /v1/models /v1/chat/completions /v1/responses /v1/messages /health")
     
     # 启动 uvicorn
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    run_http_server(host=args.host, port=args.port, windows_loop=args.windows_loop)
 
 if __name__ == "__main__":
     raise SystemExit(main())
