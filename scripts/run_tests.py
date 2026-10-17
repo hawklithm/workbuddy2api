@@ -24,8 +24,6 @@ def run(command: list[str], *, cwd: Path, env: dict[str, str]) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run repository tests with src imports configured")
     parser.add_argument("--quick", action="store_true", help="Only run login header tests")
-    parser.add_argument("--compare-main", action="store_true",
-                        help="Reserved: compare results manually against main; no checkout is performed")
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parent.parent
@@ -42,8 +40,15 @@ def main() -> int:
     print(f"Python: {sys.executable}")
     print(f"PYTHONPATH: {env['PYTHONPATH']}")
     print("No session files will be deleted or modified by this runner.")
-    if args.compare_main:
-        print("NOTE: --compare-main does not change branches; run separately on main if needed.")
+    check = subprocess.run([sys.executable, "-c", "import pytest"], cwd=str(root), env=env, check=False, capture_output=True, text=True)
+    if check.returncode != 0:
+        print("\\nERROR: pytest is not installed for this Python interpreter.", file=sys.stderr)
+        print("Create an isolated environment and install pytest:", file=sys.stderr)
+        print("  python3 -m venv .venv", file=sys.stderr)
+        print("  .venv/bin/python -m pip install pytest", file=sys.stderr)
+        print("  .venv/bin/python scripts/run_tests.py", file=sys.stderr)
+        print("On Windows use .venv\\\\Scripts\\\\python.exe instead of .venv/bin/python.", file=sys.stderr)
+        return 2
 
     tests = [["test_login_headers.py", "-vv", "--tb=long"]]
     if not args.quick:
