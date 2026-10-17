@@ -167,7 +167,7 @@ def test_root_model_config_matches_packaged_domestic_resource():
     )
     root_copy = Path(__file__).with_name("models_config.json")
 
-    assert root_copy.read_bytes() == package_resource.read_bytes()
+    # Git may check out text files with CRLF on Windows and LF on Linux/WSL.\n    # Compare the JSON contents while preserving every other byte.\n    normalize_newlines = lambda value: value.replace(b"\r\n", b"\n")\n    assert normalize_newlines(root_copy.read_bytes()) == normalize_newlines(\n        package_resource.read_bytes()\n    )
 
 
 def test_refresh_preserves_session_metadata_and_machine_id(tmp_path, monkeypatch):
