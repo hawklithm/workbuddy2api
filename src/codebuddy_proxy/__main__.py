@@ -15,6 +15,7 @@ Usage with uv:
 
 import argparse
 import asyncio
+from contextlib import asynccontextmanager, nullcontext
 import base64
 import hashlib
 import io
@@ -1030,16 +1031,72 @@ async def forward_chat(
         diagnostic("upstream_ide_headers", **ide_headers)
     
     if stream:
-        # 流式：直接转发
+        # 上游响应头必须在客户端 StreamingResponse 开始之前读取，否则 400 会被包装成 200。
+        upstream_client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0))
+        try:
+            upstream_request = upstream_client.build_request(
+                "POST", url, headers=headers, json=upstream_body
+            )
+            upstream_response = await upstream_client.send(upstream_request, stream=True)
+        except httpx.HTTPError as exc:
+            await upstream_client.aclose()
+            status = 504 if isinstance(exc, httpx.TimeoutException) else 502
+            diagnostic("upstream_connection_error", protocol=protocol, status=status, error=str(exc))
+            return JSONResponse(
+                status_code=status,
+                content={"error": {
+                    "type": "upstream_error",
+                    "message": f"Upstream connection failed: {exc}",
+                    "code": status,
+                }},
+            )
+        except BaseException:
+            await upstream_client.aclose()
+            raise
+
+        if upstream_response.status_code != 200:
+            try:
+                error_body = await upstream_response.aread()
+                error_text = error_body.decode("utf-8", errors="replace")
+                diagnostic("upstream_error", protocol=protocol,
+                           status=upstream_response.status_code, detail=error_text[:500])
+                try:
+                    error_json = json.loads(error_text)
+                except (ValueError, TypeError):
+                    error_json = {}
+                upstream_code = error_json.get("code") if isinstance(error_json, dict) else None
+                error_message = (
+                    error_json.get("msg") or error_json.get("message") or error_text
+                    if isinstance(error_json, dict) else error_text
+                )
+                error_info = {
+                    "type": "upstream_error",
+                    "message": str(error_message)[:1000],
+                    "code": upstream_code or upstream_response.status_code,
+                }
+                error_payload = (
+                    {"type": "error", "error": error_info}
+                    if protocol == "anthropic" else {"error": error_info}
+                )
+                return JSONResponse(
+                    status_code=upstream_response.status_code, content=error_payload
+                )
+            finally:
+                await upstream_response.aclose()
+                await upstream_client.aclose()
+
         return StreamingResponse(
-            stream_upstream(url, headers, upstream_body, protocol, original),
+            stream_upstream(
+                url, headers, upstream_body, protocol, original,
+                prepared_upstream=(upstream_client, upstream_response),
+            ),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "Connection": "close"}
+            headers={"Cache-Control": "no-cache", "Connection": "close"},
         )
-    else:
-        # 非流式：聚合后返回
-        collected = await collect_upstream(url, headers, upstream_body, protocol)
-        return JSONResponse(content=convert_nonstream(collected, protocol, original))
+
+    # 非流式：聚合后返回
+    collected = await collect_upstream(url, headers, upstream_body, protocol)
+    return JSONResponse(content=convert_nonstream(collected, protocol, original))
 
 
 # ============================================================================
@@ -1065,12 +1122,23 @@ def _build_openai_flush_chunk(residual: str, last_chunk_id: str,
     }
 
 
+@asynccontextmanager
+async def _prepared_upstream_response(client: httpx.AsyncClient, response: httpx.Response):
+    """Take ownership of the already-open HTTP response and client."""
+    try:
+        yield response
+    finally:
+        await response.aclose()
+        await client.aclose()
+
+
 async def stream_upstream(
     url: str,
     headers: dict[str, str],
     body: dict[str, Any],
     protocol: str,
-    original: dict[str, Any] | None
+    original: dict[str, Any] | None,
+    prepared_upstream: tuple[httpx.AsyncClient, httpx.Response] | None = None,
 ):
     """异步流式转发上游响应到客户端。
     
@@ -1120,11 +1188,14 @@ async def stream_upstream(
     last_chunk_created: int = 0
     last_chunk_model: str = ""
     try:
-        # 异步HTTP客户端：timeout=None 依赖TCP超时
-        # 使用合理的超时配置：连接超时30s，读取超时300s
+        # Existing direct stream_upstream callers remain supported. The HTTP
+        # endpoint supplies a pre-opened response to preserve upstream status.
         timeout_config = httpx.Timeout(30.0, read=300.0)
-        async with httpx.AsyncClient(timeout=timeout_config) as client:
-            async with client.stream("POST", url, headers=headers, json=body) as resp:
+        async with (nullcontext() if prepared_upstream else httpx.AsyncClient(timeout=timeout_config)) as client:
+            async with (
+                _prepared_upstream_response(*prepared_upstream)
+                if prepared_upstream else client.stream("POST", url, headers=headers, json=body)
+            ) as resp:
                 if resp.status_code != 200:
                     actual_status = resp.status_code  # 【修复】记录实际状态码
                     error_body = await resp.aread()
@@ -1242,7 +1313,31 @@ async def stream_upstream(
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
-                    
+
+                    if not isinstance(chunk, dict):
+                        continue
+                    if chunk.get("error"):
+                        upstream_error = chunk["error"]
+                        if isinstance(upstream_error, dict):
+                            message = str(upstream_error.get("message") or upstream_error)
+                        else:
+                            message = str(upstream_error)
+                        diagnostic("upstream_stream_error_event", protocol=protocol,
+                                   chunks=chunk_count)
+                        if protocol == "responses" and responses_state:
+                            for event_name, event_data in responses_state.fail(
+                                "upstream_stream_error", message
+                            ):
+                                yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
+                        elif protocol == "anthropic":
+                            payload = {"type": "error", "error": {
+                                "type": "api_error", "message": message
+                            }}
+                            yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
+                        else:
+                            yield f"data: {json.dumps({'error': upstream_error}, ensure_ascii=False)}\n\n".encode()
+                        return
+
                     chunk_count += 1
                     
                     # 【修复 C3】记录最后一个上游 chunk 的元数据，供流结束 flush 复用
@@ -1425,6 +1520,20 @@ async def stream_upstream(
                         for event_name, event_data in events:
                             yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
                 
+                # 未看到上游 [DONE]：不能把断流/超时伪装成成功完成。
+                if not done_seen:
+                    diagnostic("upstream_stream_incomplete", protocol=protocol, chunks=chunk_count)
+                    if protocol == "responses" and responses_state:
+                        for event_name, event_data in responses_state.fail(
+                            "upstream_stream_incomplete", "Upstream stream ended without [DONE]"
+                        ):
+                            yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
+                    elif protocol == "anthropic":
+                        yield b'event: error\ndata: {"type":"error","error":{"type":"api_error","message":"Upstream stream ended without [DONE]"}}\n\n'
+                    else:
+                        yield b'data: {"error":{"type":"upstream_error","message":"Upstream stream ended without [DONE]"}}\n\n'
+                    return
+
                 # 发送结束事件
                 if protocol == "responses" and responses_state:
                     # 【修复】流结束前强制刷新 DSML 缓冲区残留内容
@@ -1474,22 +1583,15 @@ async def stream_upstream(
             elapsed=round(time.time() - stream_start_time, 2), error=str(exc))
         state.write_log("stream_timeout", protocol=protocol, chunks=chunk_count, error=str(exc))
         
-        # 【防御性编程】确保发出完整的事件序列
+        error_msg = f"stream timeout after {chunk_count} chunks"
         if protocol == "responses" and responses_state:
-            for event_name, event_data in responses_state.finish():
+            for event_name, event_data in responses_state.fail("upstream_timeout", error_msg):
                 yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
-        elif protocol == "anthropic" and anthropic_state:
-            for event_name, event_data in anthropic_state.finish():
-                yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
-        
-        # 发送错误事件
-        error_chunk = {
-            "error": {
-                "message": f"stream timeout after {chunk_count} chunks",
-                "type": "timeout_error"
-            }
-        }
-        yield f"data: {json.dumps(error_chunk, ensure_ascii=False)}\n\n".encode()
+        elif protocol == "anthropic":
+            payload = {"type": "error", "error": {"type": "api_error", "message": error_msg}}
+            yield f"event: error\ndata: {json.dumps(payload)}\n\n".encode()
+        else:
+            yield f"data: {json.dumps({'error': {'type': 'timeout_error', 'message': error_msg}})}\n\n".encode()
     
     except Exception as exc:
         # 【日志】其他错误
@@ -1497,22 +1599,15 @@ async def stream_upstream(
             elapsed=round(time.time() - stream_start_time, 2), error=str(exc))
         state.write_log("stream_error", protocol=protocol, chunks=chunk_count, error=str(exc))
         
-        # 【防御性编程】确保发出完整的事件序列
+        error_msg = f"Upstream stream error: {exc}"
         if protocol == "responses" and responses_state:
-            for event_name, event_data in responses_state.finish():
+            for event_name, event_data in responses_state.fail("upstream_stream_error", error_msg):
                 yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
-        elif protocol == "anthropic" and anthropic_state:
-            for event_name, event_data in anthropic_state.finish():
-                yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
-        
-        # 发送错误事件
-        error_chunk = {
-            "error": {
-                "message": f"stream error: {exc}",
-                "type": "internal_error"
-            }
-        }
-        yield f"data: {json.dumps(error_chunk, ensure_ascii=False)}\n\n".encode()
+        elif protocol == "anthropic":
+            payload = {"type": "error", "error": {"type": "api_error", "message": error_msg}}
+            yield f"event: error\ndata: {json.dumps(payload)}\n\n".encode()
+        else:
+            yield f"data: {json.dumps({'error': {'type': 'upstream_error', 'message': error_msg}})}\n\n".encode()
     
     finally:
         # 【日志】流完成
