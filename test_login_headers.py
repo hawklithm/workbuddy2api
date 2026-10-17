@@ -4,14 +4,17 @@
 import json
 from src.codebuddy_proxy.codebuddy_client_demo import CodeBuddyClient
 
-def test_enterprise_headers():
+def test_enterprise_headers(tmp_path):
     """测试企业认证头生成"""
     print("=" * 60)
     print("测试企业认证头生成")
     print("=" * 60)
     
     # 场景1: token 无 domain 字段（最常见的场景）
-    client = CodeBuddyClient(endpoint="https://copilot.tencent.com")
+    client = CodeBuddyClient(
+        endpoint="https://copilot.tencent.com",
+        session_file=tmp_path / "domestic-session.json",
+    )
     token_no_domain = {"accessToken": "test_token_123"}
     headers1 = client._enterprise_headers(token_no_domain)
     
@@ -38,7 +41,10 @@ def test_enterprise_headers():
     print("  ✓ 正确使用 token.domain 覆盖默认值")
     
     # 场景3: 带端口的 endpoint
-    client_with_port = CodeBuddyClient(endpoint="https://copilot.example.com:8443")
+    client_with_port = CodeBuddyClient(
+        endpoint="https://copilot.example.com:8443",
+        session_file=tmp_path / "custom-session.json",
+    )
     headers3 = client_with_port._enterprise_headers(token_no_domain)
     
     print("\n场景3: endpoint 包含端口")
@@ -53,13 +59,13 @@ def test_enterprise_headers():
     print("✓ 所有测试通过！")
     print("=" * 60)
 
-def test_login_account_headers():
+def test_login_account_headers(tmp_path):
     """验证 /login/account 请求会正确组合所有必需的 headers"""
     print("\n" + "=" * 60)
     print("验证 /login/account 请求头组合")
     print("=" * 60)
     
-    client = CodeBuddyClient()
+    client = CodeBuddyClient(session_file=tmp_path / "account-session.json")
     mock_token = {"accessToken": "bearer_token_xyz"}
     
     # 模拟 login 方法中的 headers 组合逻辑
