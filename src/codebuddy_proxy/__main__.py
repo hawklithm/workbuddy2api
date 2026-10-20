@@ -1022,6 +1022,16 @@ async def forward_chat(
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
     }
+    # INTL (www.codebuddy.ai) 网关的「会话标识」闸门（2026-10-16 起）。
+    # 缺失 X-Conversation-* 头族会被 400 / code 11128 拒绝。
+    # 仅在国际站注入，避免影响国内站 copilot.tencent.com 的现有逻辑。
+    if "codebuddy.ai" in url:
+        try:
+            headers.update(state.client.conversation_headers(upstream_body))
+            diagnostic("intl_conversation_headers",
+                       conversation_id=headers.get("X-Conversation-ID", "")[:12] + "...")
+        except Exception as exc:  # 头注入失败不应阻断主流程
+            diagnostic("intl_conversation_headers_failed", error=str(exc)[:200])
     
     # 🔍 调试：输出实际发送的IDE识别headers
     if state.logger:

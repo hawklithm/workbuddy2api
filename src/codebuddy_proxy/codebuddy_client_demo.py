@@ -291,6 +291,39 @@ class CodeBuddyClient:
             headers["X-Domain"] = domain
         return headers
 
+    def conversation_headers(self, body: dict[str, Any] | None = None) -> dict[str, str]:
+        """INTL (www.codebuddy.ai) 网关的「会话标识」闸门。
+
+        2026-10-16 起，国际站对 chat/completions 强制校验 X-Conversation-* 头族，
+        缺失即返回 HTTP 400 / code 11128 "conversation id missing" /
+        "request illegal"（渠道校验失败）。国内站 copilot.tencent.com 无此闸门。
+
+        X-Conversation-ID 需在**同一会话内稳定**（上游按它做 prompt 前缀缓存分桶），
+        因此取首条消息（通常是 system）的哈希；同一会话跨轮复用同一个值。
+        Message-ID / Request-ID 每请求新生成。
+
+        参考社区独立复现与修复：
+        - decolua/9router#4933  fix(codebuddy-intl): send X-Conversation-ID header family
+        - Ebony-Vinyl/dsh-our-free-model#377  「双闸门」：X-Conversation-* + 首条 system
+        """
+        import hashlib
+        import uuid as _uuid
+
+        messages = (body or {}).get("messages") or []
+        seed = ""
+        if messages and isinstance(messages[0], dict):
+            first = messages[0].get("content")
+            seed = (first if isinstance(first, str)
+                    else json.dumps(first, ensure_ascii=False, sort_keys=True))
+        if not seed:
+            seed = json.dumps(body or {}, ensure_ascii=False, sort_keys=True)
+        conversation_id = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:32]
+
+        return {
+            "X-Conversation-ID": conversation_id,
+            "X-Conversation-Message-ID": str(_uuid.uuid4()),
+            "X-Conversation-Request-ID": str(_uuid.uuid4()),
+        }
     def _enterprise_headers(self, token: dict[str, Any] | None = None) -> dict[str, str]:
         """构造企业认证 headers（模拟 VSIX enterpriseHeaders）"""
         domain = self._domain_for_token(token)
