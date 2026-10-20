@@ -386,6 +386,23 @@ class ResponsesStreamConverter:
 
         return events
 
+    def fail(self, code: str, message: str) -> list[tuple[str, dict]]:
+        """Emit a terminal Responses failure, never a successful completion."""
+        events: list[tuple[str, dict]] = []
+        if not self.started:
+            events.extend(self.feed_chunk({"choices": []}))
+        events.append(("response.failed", {
+            "type": "response.failed",
+            "response": {
+                "id": self.response_id,
+                "object": "response",
+                "status": "failed",
+                "created_at": self.created_at,
+                "error": {"code": code, "message": message},
+            },
+        }))
+        return events
+
     def finish(self) -> list[tuple[str, dict]]:
         """流结束，发出done和completed事件"""
         events: list[tuple[str, dict]] = []
