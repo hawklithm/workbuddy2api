@@ -88,6 +88,94 @@ def _convert_tools_for_chat(tools: list[dict]) -> list[dict]:
     return result
 
 
+def _sanitize_tool_pairing(messages: list[dict]) -> list[dict]:
+    """Keep each Chat tool result adjacent to its declaring assistant tool_calls.
+
+    Responses histories can contain messages between outputs belonging to a
+    single assistant turn. Chat Completions requires the declared call IDs to
+    be answered together, so postpone intervening messages until that group
+    has finished. Never forward an orphan/duplicate result or an unanswered
+    tool call to the upstream service.
+    """
+    out: list[dict] = []
+    deferred: list[dict] = []
+    pending: set[str] = set()
+    answered: set[str] = set()
+    assistant_index: int | None = None
+
+    def _close_group() -> None:
+        nonlocal assistant_index
+        if assistant_index is not None:
+            assistant = out[assistant_index]
+            matched = [
+                call for call in assistant["tool_calls"]
+                if call["id"] in answered
+            ]
+            if matched:
+                assistant["tool_calls"] = matched
+            else:
+                assistant.pop("tool_calls", None)
+                if not str(assistant.get("content") or "").strip():
+                    out.pop(assistant_index)
+
+        assistant_index = None
+        pending.clear()
+        answered.clear()
+        out.extend(deferred)
+        deferred.clear()
+
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+
+        role = message.get("role")
+        calls = message.get("tool_calls") or []
+        if role == "assistant" and calls:
+            _close_group()
+            # A duplicate/missing call ID would make matching ambiguous.
+            unique_calls: list[dict] = []
+            seen_ids: set[str] = set()
+            for call in calls:
+                if not isinstance(call, dict):
+                    continue
+                call_id = call.get("id")
+                if not isinstance(call_id, str) or not call_id or call_id in seen_ids:
+                    continue
+                seen_ids.add(call_id)
+                unique_calls.append(call)
+
+            if unique_calls:
+                out.append({**message, "tool_calls": unique_calls})
+                assistant_index = len(out) - 1
+                pending.update(seen_ids)
+            elif str(message.get("content") or "").strip():
+                out.append({key: value for key, value in message.items() if key != "tool_calls"})
+            continue
+
+        if role == "tool":
+            call_id = message.get("tool_call_id")
+            if isinstance(call_id, str) and assistant_index is not None and call_id in pending:
+                out.append(message)
+                pending.remove(call_id)
+                answered.add(call_id)
+                if not pending:
+                    _close_group()
+            # Missing, repeated, or unmatched results are not valid Chat messages.
+            continue
+
+        # Blank assistant messages are also invalid/no-ops in this context.
+        if role == "assistant" and not str(message.get("content") or "").strip():
+            continue
+
+        if assistant_index is not None:
+            deferred.append(message)
+        else:
+            out.append(message)
+
+    _close_group()
+    return out
+
+
 def _convert_input_items(items: list) -> list[dict]:
     """将Responses API的input数组转换为Chat messages
     
@@ -167,9 +255,12 @@ def _convert_input_items(items: list) -> list[dict]:
         # function_call_output → tool消息
         if item_type == "function_call_output":
             _flush_assistant()
+            call_id = item.get("call_id") or item.get("id")
+            if not call_id:
+                continue
             messages.append({
                 "role": "tool",
-                "tool_call_id": item.get("call_id", ""),
+                "tool_call_id": call_id,
                 "content": _extract_text(item.get("output", "")),
             })
             continue
@@ -180,9 +271,9 @@ def _convert_input_items(items: list) -> list[dict]:
             content = _extract_text(item.get("content", ""))
             messages.append({"role": role, "content": content})
 
-    # 刷新最后一条assistant消息
+    # 刷新最后一条assistant消息，并修复跨消息的工具调用配对
     _flush_assistant()
-    return messages
+    return _sanitize_tool_pairing(messages)
 
 
 def responses_request_to_chat(body: dict) -> dict:

@@ -765,6 +765,17 @@ grep projection_applied "$HOME/.workbuddy2api/codebuddy-proxy.jsonl" | jq .
 
 JSONL 每条记录包含 `app_version`、`system_version`、`python_version` 和 `machine` 字段；启动时还会记录 `startup` 事件。
 
+上游连接错误或连接超时最多重试 2 次（分别等待 0.5 秒、1 秒，共 3 次尝试）。
+HTTP 错误及读写失败不重试；收到响应头后不再重放请求。每次尝试保留原有 30 秒
+连接超时，因此持续不可连接时，最终报错可能需要约 91.5 秒。流式和非流式聚合请求均适用。
+
+`upstream_connect_retry` / `upstream_connect_failed` 记录尝试次数、目标主机与端口，
+以及有长度上限的 `exception_chain`，包含异常类型和可用的 `errno` / `winerror`。
+通过 `request_id` 可关联重试、流开始、错误和结束日志。只有收到上游 `[DONE]` 且完成转发
+才记录 `stream_completed`；其余分别记录 `stream_failed`、`stream_incomplete`
+（未收到 `[DONE]` 就 EOF 或触发时长保护）和 `stream_cancelled`。
+`status: null` 表示尚未收到上游 HTTP 响应。
+
 也可以指定日志文件的绝对路径：
 
 ```bash

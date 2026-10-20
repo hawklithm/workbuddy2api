@@ -112,6 +112,51 @@ def test_preflight_transport_error_returns_real_502(fake_upstream):
     assert response.json()["error"]["type"] == "upstream_error"
 
 
+def test_streaming_preflight_retries_connection_and_preserves_real_status(fake_upstream, monkeypatch):
+    import httpx
+
+    upstream = FakeUpstreamResponse(lines=[
+        'data: {"choices":[{"index":0,"delta":{"content":"ok"}}]}',
+        "data: [DONE]",
+    ])
+    client = fake_upstream(upstream)
+    original_send = client.send
+    calls = []
+    records = []
+
+    async def flaky_send(request, *, stream=False):
+        calls.append(request)
+        if len(calls) <= 2:
+            raise httpx.ConnectError("transient connection failure")
+        return await original_send(request, stream=stream)
+
+    async def no_backoff(delay):
+        pass
+
+    client.send = flaky_send
+    monkeypatch.setattr(proxy.asyncio, "sleep", no_backoff)
+    proxy.get_state().write_log = lambda event, **fields: records.append(
+        {"event": event, **fields}
+    )
+
+    with TestClient(proxy.app) as http:
+        response = http.post(
+            "/v1/chat/completions",
+            json={"model": "test", "stream": True,
+                  "messages": [{"role": "user", "content": "hello"}]},
+        )
+
+    assert response.status_code == 200
+    assert "ok" in response.text
+    assert response.text.count("[DONE]") == 1
+    assert len(calls) == 3
+    assert client.closed and upstream.closed
+    retries = [event for event in records if event["event"] == "upstream_connect_retry"]
+    assert [event["attempt"] for event in retries] == [1, 2]
+    completion = next(event for event in records if event["event"] == "stream_completed")
+    assert all(event["request_id"] == completion["request_id"] for event in retries)
+
+
 def test_responses_success_stream_emits_completed_and_closes_connection(fake_upstream):
     chunk = json.dumps({
         "id": "upstream-1", "model": "test", "choices": [

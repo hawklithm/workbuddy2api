@@ -30,6 +30,7 @@ import platform
 import sys
 import time
 import uuid
+from contextlib import AsyncExitStack
 from typing import Any, Optional
 
 import httpx
@@ -792,7 +793,8 @@ def log_upstream_response(protocol: str, text: str, **stats) -> None:
         common["content_preview"] = text[:200] if text else ""
     
     diagnostic("response", **common)
-    state.write_log("stream_completed" if stats.get("stream") else "response",
+    event = f"stream_{stats.get('outcome', 'completed')}" if stats.get("stream") else "response"
+    state.write_log(event,
                    **{k: v for k, v in common.items() 
                       if k not in ("content_preview",)})
 
@@ -1043,11 +1045,20 @@ async def forward_chat(
     if stream:
         # 上游响应头必须在客户端 StreamingResponse 开始之前读取，否则 400 会被包装成 200。
         upstream_client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0))
-        try:
+        preflight_request_id = uuid.uuid4().hex
+
+        async def open_preflight_response():
+            # Build a fresh request for each connect attempt; a request that
+            # received headers (including 4xx) must never be replayed.
             upstream_request = upstream_client.build_request(
                 "POST", url, headers=headers, json=upstream_body
             )
-            upstream_response = await upstream_client.send(upstream_request, stream=True)
+            return await upstream_client.send(upstream_request, stream=True)
+
+        try:
+            upstream_response = await retry_upstream_connection(
+                open_preflight_response, url, protocol, preflight_request_id,
+            )
         except httpx.HTTPError as exc:
             await upstream_client.aclose()
             status = 504 if isinstance(exc, httpx.TimeoutException) else 502
@@ -1099,6 +1110,7 @@ async def forward_chat(
             stream_upstream(
                 url, headers, upstream_body, protocol, original,
                 prepared_upstream=(upstream_client, upstream_response),
+                request_id=preflight_request_id,
             ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "Connection": "close"},
@@ -1132,6 +1144,81 @@ def _build_openai_flush_chunk(residual: str, last_chunk_id: str,
     }
 
 
+def exception_details(exc: BaseException) -> dict[str, Any]:
+    """Keep bounded cause/group details, including native socket error codes."""
+    chain: list[dict[str, Any]] = []
+    seen: set[int] = set()
+
+    def visit(error: BaseException, parent: int | None = None, relation: str = "root") -> None:
+        if id(error) in seen or len(chain) >= 16:
+            return
+        seen.add(id(error))
+        index = len(chain)
+        item: dict[str, Any] = {
+            "type": type(error).__name__, "message": str(error)[:1000],
+            "parent": parent, "relation": relation,
+        }
+        for key in ("errno", "winerror"):
+            value = getattr(error, key, None)
+            if isinstance(value, int):
+                item[key] = value
+        chain.append(item)
+        cause = error.__cause__
+        if cause is not None:
+            visit(cause, index, "cause")
+        # HTTPX/HTTPCore can suppress a context while mapping transport errors.
+        # It still contains the original socket error and is needed for diagnostics.
+        if error.__context__ is not None:
+            relation = "suppressed_context" if error.__suppress_context__ else "context"
+            visit(error.__context__, index, relation)
+        # getattr also supports AnyIO's exception-group backport on Python 3.10.
+        for child in getattr(error, "exceptions", ()):
+            if isinstance(child, BaseException):
+                visit(child, index, "group_member")
+
+    visit(exc)
+    return {"error_type": type(exc).__name__, "exception_chain": chain}
+
+
+async def retry_upstream_connection(open_response, url, protocol, request_id):
+    """Retry only failures to establish a connection, before any HTTP response."""
+    state = get_state()
+    target = httpx.URL(url)
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return await open_response()
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            retrying = attempt < max_attempts
+            delay = 0.5 * 2 ** (attempt - 1) if retrying else 0
+            event = "upstream_connect_retry" if retrying else "upstream_connect_failed"
+            details = {
+                "protocol": protocol, "request_id": request_id,
+                "upstream_host": target.host,
+                "upstream_port": target.port or (443 if target.scheme == "https" else 80),
+                "attempt": attempt, "max_attempts": max_attempts,
+                "retry_delay": delay, "error": str(exc), **exception_details(exc),
+            }
+            diagnostic(event, **details)
+            state.write_log(event, **details)
+            if not retrying:
+                raise
+            await asyncio.sleep(delay)
+
+
+@asynccontextmanager
+async def open_upstream_stream(client, url, headers, body, protocol, request_id):
+    """Open the stream with bounded connect retries; never replay a response."""
+    async with AsyncExitStack() as stack:
+        response = await retry_upstream_connection(
+            lambda: stack.enter_async_context(
+                client.stream("POST", url, headers=headers, json=body)
+            ),
+            url, protocol, request_id,
+        )
+        yield response
+
+
 @asynccontextmanager
 async def _prepared_upstream_response(client: httpx.AsyncClient, response: httpx.Response):
     """Take ownership of the already-open HTTP response and client."""
@@ -1149,6 +1236,7 @@ async def stream_upstream(
     protocol: str,
     original: dict[str, Any] | None,
     prepared_upstream: tuple[httpx.AsyncClient, httpx.Response] | None = None,
+    request_id: str | None = None,
 ):
     """异步流式转发上游响应到客户端。
     
@@ -1159,10 +1247,13 @@ async def stream_upstream(
     """
     state = get_state()
     stream_start_time = time.time()
+    request_id = request_id or uuid.uuid4().hex
+    outcome = "cancelled"
     
     # 【日志】流开始
-    state.write_log("stream_started", protocol=protocol, timestamp=stream_start_time)
-    diagnostic("stream_started", protocol=protocol)
+    state.write_log("stream_started", protocol=protocol, timestamp=stream_start_time,
+                    request_id=request_id)
+    diagnostic("stream_started", protocol=protocol, request_id=request_id)
     
     
     response_id = "resp_" + uuid.uuid4().hex
@@ -1184,7 +1275,7 @@ async def stream_upstream(
     native_tool_name_by_index: dict[int, str] = {}
     
     # 【修复】跟踪上游实际状态码，避免finally块硬编码status=200导致日志误导
-    actual_status = 200
+    actual_status = None
     response_text = ""
     response_text_started = False
     chunk_count = 0
@@ -1204,10 +1295,11 @@ async def stream_upstream(
         async with (nullcontext() if prepared_upstream else httpx.AsyncClient(timeout=timeout_config)) as client:
             async with (
                 _prepared_upstream_response(*prepared_upstream)
-                if prepared_upstream else client.stream("POST", url, headers=headers, json=body)
+                if prepared_upstream else open_upstream_stream(client, url, headers, body, protocol, request_id)
             ) as resp:
+                actual_status = resp.status_code
                 if resp.status_code != 200:
-                    actual_status = resp.status_code  # 【修复】记录实际状态码
+                    outcome = "failed"
                     error_body = await resp.aread()
                     error_text = error_body.decode("utf-8", "replace")
                     
@@ -1249,6 +1341,7 @@ async def stream_upstream(
                     
                     return
                 
+                outcome = "incomplete"
                 diagnostic("upstream_response", protocol=protocol, status=resp.status_code)
                 
                 # 【配置】超时策略 - 双重超时机制
@@ -1586,12 +1679,17 @@ async def stream_upstream(
                         )
                         yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n".encode()
                     yield b"data: [DONE]\n\n"
-    
+
+        outcome = "completed" if done_seen else "incomplete"
+
     except httpx.TimeoutException as exc:
+        outcome = "failed"
         # 【日志】超时
+        details = {"request_id": request_id, **exception_details(exc)}
         diagnostic("stream_timeout", protocol=protocol, chunks=chunk_count,
-            elapsed=round(time.time() - stream_start_time, 2), error=str(exc))
-        state.write_log("stream_timeout", protocol=protocol, chunks=chunk_count, error=str(exc))
+            elapsed=round(time.time() - stream_start_time, 2), error=str(exc), **details)
+        state.write_log("stream_timeout", protocol=protocol, chunks=chunk_count,
+                        error=str(exc), **details)
         
         error_msg = f"stream timeout after {chunk_count} chunks"
         if protocol == "responses" and responses_state:
@@ -1604,10 +1702,13 @@ async def stream_upstream(
             yield f"data: {json.dumps({'error': {'type': 'timeout_error', 'message': error_msg}})}\n\n".encode()
     
     except Exception as exc:
+        outcome = "failed"
         # 【日志】其他错误
+        details = {"request_id": request_id, **exception_details(exc)}
         diagnostic("stream_error", protocol=protocol, chunks=chunk_count,
-            elapsed=round(time.time() - stream_start_time, 2), error=str(exc))
-        state.write_log("stream_error", protocol=protocol, chunks=chunk_count, error=str(exc))
+            elapsed=round(time.time() - stream_start_time, 2), error=str(exc), **details)
+        state.write_log("stream_error", protocol=protocol, chunks=chunk_count,
+                        error=str(exc), **details)
         
         error_msg = f"Upstream stream error: {exc}"
         if protocol == "responses" and responses_state:
@@ -1619,6 +1720,10 @@ async def stream_upstream(
         else:
             yield f"data: {json.dumps({'error': {'type': 'upstream_error', 'message': error_msg}})}\n\n".encode()
     
+    except (asyncio.CancelledError, GeneratorExit):
+        outcome = "cancelled"
+        raise
+
     finally:
         # 【日志】流完成
         if state.verbose_llm:
@@ -1635,7 +1740,8 @@ async def stream_upstream(
         
         log_upstream_response(protocol, logged_text, stream=True,
                             chunk_count=chunk_count, duration=stream_duration,
-                            upstream_done=done_seen)
+                            upstream_done=done_seen, outcome=outcome,
+                            request_id=request_id, status=actual_status)
 
 
 # ============================================================================
@@ -1650,6 +1756,7 @@ async def collect_upstream(
 ) -> dict[str, Any]:
     """聚合上游流式响应为单个 JSON 对象（非流式场景）。"""
     state = get_state()
+    request_id = uuid.uuid4().hex
     
     usage = None
     finish_reason = None
@@ -1662,7 +1769,7 @@ async def collect_upstream(
         # 使用合理的超时配置：连接超时30s，读取超时300s
         timeout_config = httpx.Timeout(30.0, read=300.0)
         async with httpx.AsyncClient(timeout=timeout_config) as client:
-            async with client.stream("POST", url, headers=headers, json=body) as resp:
+            async with open_upstream_stream(client, url, headers, body, protocol, request_id) as resp:
                 if resp.status_code != 200:
                     error_body = await resp.aread()
                     raise HTTPException(
@@ -1733,7 +1840,10 @@ async def collect_upstream(
                                     tool_calls_dict[idx]["function"]["arguments"] += tc["function"]["arguments"]
     
     except httpx.HTTPError as exc:
-        diagnostic("upstream_error", protocol=protocol, error=str(exc))
+        details = {"protocol": protocol, "request_id": request_id,
+                   "error": str(exc), **exception_details(exc)}
+        diagnostic("upstream_error", **details)
+        state.write_log("upstream_error", **details)
         raise HTTPException(status_code=502, detail={"error": {"message": f"upstream error: {exc}", "type": "upstream_error"}})
     
     # 转换为 list 并过滤掉无效的 tool_calls（name 为空的）
@@ -1752,7 +1862,7 @@ async def collect_upstream(
         # collect_upstream 没有保存原始响应，只记录聚合后的内容
         pass
     
-    log_upstream_response(protocol, content, stream=False)
+    log_upstream_response(protocol, content, stream=False, request_id=request_id)
     return {
         "id": "chatcmpl-" + uuid.uuid4().hex,
         "object": "chat.completion",
