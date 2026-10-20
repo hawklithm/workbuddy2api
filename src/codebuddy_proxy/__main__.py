@@ -15,6 +15,7 @@ Usage with uv:
 
 import argparse
 import asyncio
+from contextlib import asynccontextmanager, nullcontext
 import base64
 import hashlib
 import io
@@ -29,7 +30,7 @@ import platform
 import sys
 import time
 import uuid
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AsyncExitStack
 from typing import Any, Optional
 
 import httpx
@@ -1024,6 +1025,16 @@ async def forward_chat(
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
     }
+    # INTL (www.codebuddy.ai) 网关的「会话标识」闸门（2026-10-16 起）。
+    # 缺失 X-Conversation-* 头族会被 400 / code 11128 拒绝。
+    # 仅在国际站注入，避免影响国内站 copilot.tencent.com 的现有逻辑。
+    if "codebuddy.ai" in url:
+        try:
+            headers.update(state.client.conversation_headers(upstream_body))
+            diagnostic("intl_conversation_headers",
+                       conversation_id=headers.get("X-Conversation-ID", "")[:12] + "...")
+        except Exception as exc:  # 头注入失败不应阻断主流程
+            diagnostic("intl_conversation_headers_failed", error=str(exc)[:200])
     
     # 🔍 调试：输出实际发送的IDE识别headers
     if state.logger:
@@ -1032,16 +1043,82 @@ async def forward_chat(
         diagnostic("upstream_ide_headers", **ide_headers)
     
     if stream:
-        # 流式：直接转发
+        # 上游响应头必须在客户端 StreamingResponse 开始之前读取，否则 400 会被包装成 200。
+        upstream_client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0))
+        preflight_request_id = uuid.uuid4().hex
+
+        async def open_preflight_response():
+            # Build a fresh request for each connect attempt; a request that
+            # received headers (including 4xx) must never be replayed.
+            upstream_request = upstream_client.build_request(
+                "POST", url, headers=headers, json=upstream_body
+            )
+            return await upstream_client.send(upstream_request, stream=True)
+
+        try:
+            upstream_response = await retry_upstream_connection(
+                open_preflight_response, url, protocol, preflight_request_id,
+            )
+        except httpx.HTTPError as exc:
+            await upstream_client.aclose()
+            status = 504 if isinstance(exc, httpx.TimeoutException) else 502
+            diagnostic("upstream_connection_error", protocol=protocol, status=status, error=str(exc))
+            return JSONResponse(
+                status_code=status,
+                content={"error": {
+                    "type": "upstream_error",
+                    "message": f"Upstream connection failed: {exc}",
+                    "code": status,
+                }},
+            )
+        except BaseException:
+            await upstream_client.aclose()
+            raise
+
+        if upstream_response.status_code != 200:
+            try:
+                error_body = await upstream_response.aread()
+                error_text = error_body.decode("utf-8", errors="replace")
+                diagnostic("upstream_error", protocol=protocol,
+                           status=upstream_response.status_code, detail=error_text[:500])
+                try:
+                    error_json = json.loads(error_text)
+                except (ValueError, TypeError):
+                    error_json = {}
+                upstream_code = error_json.get("code") if isinstance(error_json, dict) else None
+                error_message = (
+                    error_json.get("msg") or error_json.get("message") or error_text
+                    if isinstance(error_json, dict) else error_text
+                )
+                error_info = {
+                    "type": "upstream_error",
+                    "message": str(error_message)[:1000],
+                    "code": upstream_code or upstream_response.status_code,
+                }
+                error_payload = (
+                    {"type": "error", "error": error_info}
+                    if protocol == "anthropic" else {"error": error_info}
+                )
+                return JSONResponse(
+                    status_code=upstream_response.status_code, content=error_payload
+                )
+            finally:
+                await upstream_response.aclose()
+                await upstream_client.aclose()
+
         return StreamingResponse(
-            stream_upstream(url, headers, upstream_body, protocol, original),
+            stream_upstream(
+                url, headers, upstream_body, protocol, original,
+                prepared_upstream=(upstream_client, upstream_response),
+                request_id=preflight_request_id,
+            ),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "Connection": "close"}
+            headers={"Cache-Control": "no-cache", "Connection": "close"},
         )
-    else:
-        # 非流式：聚合后返回
-        collected = await collect_upstream(url, headers, upstream_body, protocol)
-        return JSONResponse(content=convert_nonstream(collected, protocol, original))
+
+    # 非流式：聚合后返回
+    collected = await collect_upstream(url, headers, upstream_body, protocol)
+    return JSONResponse(content=convert_nonstream(collected, protocol, original))
 
 
 # ============================================================================
@@ -1103,38 +1180,53 @@ def exception_details(exc: BaseException) -> dict[str, Any]:
     return {"error_type": type(exc).__name__, "exception_chain": chain}
 
 
-@asynccontextmanager
-async def open_upstream_stream(client, url, headers, body, protocol, request_id):
-    """Retry connection establishment only; never replay a received response."""
+async def retry_upstream_connection(open_response, url, protocol, request_id):
+    """Retry only failures to establish a connection, before any HTTP response."""
     state = get_state()
     target = httpx.URL(url)
     max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return await open_response()
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            retrying = attempt < max_attempts
+            delay = 0.5 * 2 ** (attempt - 1) if retrying else 0
+            event = "upstream_connect_retry" if retrying else "upstream_connect_failed"
+            details = {
+                "protocol": protocol, "request_id": request_id,
+                "upstream_host": target.host,
+                "upstream_port": target.port or (443 if target.scheme == "https" else 80),
+                "attempt": attempt, "max_attempts": max_attempts,
+                "retry_delay": delay, "error": str(exc), **exception_details(exc),
+            }
+            diagnostic(event, **details)
+            state.write_log(event, **details)
+            if not retrying:
+                raise
+            await asyncio.sleep(delay)
+
+
+@asynccontextmanager
+async def open_upstream_stream(client, url, headers, body, protocol, request_id):
+    """Open the stream with bounded connect retries; never replay a response."""
     async with AsyncExitStack() as stack:
-        for attempt in range(1, max_attempts + 1):
-            try:
-                response = await stack.enter_async_context(
-                    client.stream("POST", url, headers=headers, json=body)
-                )
-            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-                retrying = attempt < max_attempts
-                delay = 0.5 * 2 ** (attempt - 1) if retrying else 0
-                event = "upstream_connect_retry" if retrying else "upstream_connect_failed"
-                details = {
-                    "protocol": protocol, "request_id": request_id,
-                    "upstream_host": target.host,
-                    "upstream_port": target.port or (443 if target.scheme == "https" else 80),
-                    "attempt": attempt, "max_attempts": max_attempts,
-                    "retry_delay": delay, "error": str(exc), **exception_details(exc),
-                }
-                diagnostic(event, **details)
-                state.write_log(event, **details)
-                if not retrying:
-                    raise
-                await asyncio.sleep(delay)
-            else:
-                break
-        # Keep yield outside the retry handler: read/write/close errors must not replay POST.
+        response = await retry_upstream_connection(
+            lambda: stack.enter_async_context(
+                client.stream("POST", url, headers=headers, json=body)
+            ),
+            url, protocol, request_id,
+        )
         yield response
+
+
+@asynccontextmanager
+async def _prepared_upstream_response(client: httpx.AsyncClient, response: httpx.Response):
+    """Take ownership of the already-open HTTP response and client."""
+    try:
+        yield response
+    finally:
+        await response.aclose()
+        await client.aclose()
 
 
 async def stream_upstream(
@@ -1142,7 +1234,9 @@ async def stream_upstream(
     headers: dict[str, str],
     body: dict[str, Any],
     protocol: str,
-    original: dict[str, Any] | None
+    original: dict[str, Any] | None,
+    prepared_upstream: tuple[httpx.AsyncClient, httpx.Response] | None = None,
+    request_id: str | None = None,
 ):
     """异步流式转发上游响应到客户端。
     
@@ -1153,7 +1247,7 @@ async def stream_upstream(
     """
     state = get_state()
     stream_start_time = time.time()
-    request_id = uuid.uuid4().hex
+    request_id = request_id or uuid.uuid4().hex
     outcome = "cancelled"
     
     # 【日志】流开始
@@ -1195,11 +1289,14 @@ async def stream_upstream(
     last_chunk_created: int = 0
     last_chunk_model: str = ""
     try:
-        # 异步HTTP客户端：timeout=None 依赖TCP超时
-        # 使用合理的超时配置：连接超时30s，读取超时300s
+        # Existing direct stream_upstream callers remain supported. The HTTP
+        # endpoint supplies a pre-opened response to preserve upstream status.
         timeout_config = httpx.Timeout(30.0, read=300.0)
-        async with httpx.AsyncClient(timeout=timeout_config) as client:
-            async with open_upstream_stream(client, url, headers, body, protocol, request_id) as resp:
+        async with (nullcontext() if prepared_upstream else httpx.AsyncClient(timeout=timeout_config)) as client:
+            async with (
+                _prepared_upstream_response(*prepared_upstream)
+                if prepared_upstream else open_upstream_stream(client, url, headers, body, protocol, request_id)
+            ) as resp:
                 actual_status = resp.status_code
                 if resp.status_code != 200:
                     outcome = "failed"
@@ -1319,7 +1416,31 @@ async def stream_upstream(
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
-                    
+
+                    if not isinstance(chunk, dict):
+                        continue
+                    if chunk.get("error"):
+                        upstream_error = chunk["error"]
+                        if isinstance(upstream_error, dict):
+                            message = str(upstream_error.get("message") or upstream_error)
+                        else:
+                            message = str(upstream_error)
+                        diagnostic("upstream_stream_error_event", protocol=protocol,
+                                   chunks=chunk_count)
+                        if protocol == "responses" and responses_state:
+                            for event_name, event_data in responses_state.fail(
+                                "upstream_stream_error", message
+                            ):
+                                yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
+                        elif protocol == "anthropic":
+                            payload = {"type": "error", "error": {
+                                "type": "api_error", "message": message
+                            }}
+                            yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
+                        else:
+                            yield f"data: {json.dumps({'error': upstream_error}, ensure_ascii=False)}\n\n".encode()
+                        return
+
                     chunk_count += 1
                     
                     # 【修复 C3】记录最后一个上游 chunk 的元数据，供流结束 flush 复用
@@ -1502,6 +1623,20 @@ async def stream_upstream(
                         for event_name, event_data in events:
                             yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
                 
+                # 未看到上游 [DONE]：不能把断流/超时伪装成成功完成。
+                if not done_seen:
+                    diagnostic("upstream_stream_incomplete", protocol=protocol, chunks=chunk_count)
+                    if protocol == "responses" and responses_state:
+                        for event_name, event_data in responses_state.fail(
+                            "upstream_stream_incomplete", "Upstream stream ended without [DONE]"
+                        ):
+                            yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
+                    elif protocol == "anthropic":
+                        yield b'event: error\ndata: {"type":"error","error":{"type":"api_error","message":"Upstream stream ended without [DONE]"}}\n\n'
+                    else:
+                        yield b'data: {"error":{"type":"upstream_error","message":"Upstream stream ended without [DONE]"}}\n\n'
+                    return
+
                 # 发送结束事件
                 if protocol == "responses" and responses_state:
                     # 【修复】流结束前强制刷新 DSML 缓冲区残留内容
@@ -1556,22 +1691,15 @@ async def stream_upstream(
         state.write_log("stream_timeout", protocol=protocol, chunks=chunk_count,
                         error=str(exc), **details)
         
-        # 【防御性编程】确保发出完整的事件序列
+        error_msg = f"stream timeout after {chunk_count} chunks"
         if protocol == "responses" and responses_state:
-            for event_name, event_data in responses_state.finish():
+            for event_name, event_data in responses_state.fail("upstream_timeout", error_msg):
                 yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
-        elif protocol == "anthropic" and anthropic_state:
-            for event_name, event_data in anthropic_state.finish():
-                yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
-        
-        # 发送错误事件
-        error_chunk = {
-            "error": {
-                "message": f"stream timeout after {chunk_count} chunks",
-                "type": "timeout_error"
-            }
-        }
-        yield f"data: {json.dumps(error_chunk, ensure_ascii=False)}\n\n".encode()
+        elif protocol == "anthropic":
+            payload = {"type": "error", "error": {"type": "api_error", "message": error_msg}}
+            yield f"event: error\ndata: {json.dumps(payload)}\n\n".encode()
+        else:
+            yield f"data: {json.dumps({'error': {'type': 'timeout_error', 'message': error_msg}})}\n\n".encode()
     
     except Exception as exc:
         outcome = "failed"
@@ -1582,22 +1710,15 @@ async def stream_upstream(
         state.write_log("stream_error", protocol=protocol, chunks=chunk_count,
                         error=str(exc), **details)
         
-        # 【防御性编程】确保发出完整的事件序列
+        error_msg = f"Upstream stream error: {exc}"
         if protocol == "responses" and responses_state:
-            for event_name, event_data in responses_state.finish():
+            for event_name, event_data in responses_state.fail("upstream_stream_error", error_msg):
                 yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
-        elif protocol == "anthropic" and anthropic_state:
-            for event_name, event_data in anthropic_state.finish():
-                yield f"event: {event_name}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n".encode()
-        
-        # 发送错误事件
-        error_chunk = {
-            "error": {
-                "message": f"stream error: {exc}",
-                "type": "internal_error"
-            }
-        }
-        yield f"data: {json.dumps(error_chunk, ensure_ascii=False)}\n\n".encode()
+        elif protocol == "anthropic":
+            payload = {"type": "error", "error": {"type": "api_error", "message": error_msg}}
+            yield f"event: error\ndata: {json.dumps(payload)}\n\n".encode()
+        else:
+            yield f"data: {json.dumps({'error': {'type': 'upstream_error', 'message': error_msg}})}\n\n".encode()
     
     except (asyncio.CancelledError, GeneratorExit):
         outcome = "cancelled"
