@@ -697,6 +697,20 @@ Logs include:
 
 Each JSONL record contains `app_version`, `system_version`, `python_version`, and `machine` fields; a `startup` event is also recorded at launch.
 
+Upstream connection errors/timeouts are retried at most twice (0.5s / 1s backoff,
+three attempts total). HTTP errors and read/write failures are not retried;
+once response headers arrive, the request is never replayed. Each attempt keeps
+the existing 30s connection timeout, so a persistent outage can take up to about
+91.5s before the final error. This applies to streaming and aggregated responses.
+
+`upstream_connect_retry` / `upstream_connect_failed` record the attempt number,
+target host/port, and bounded `exception_chain` with exception types and native
+`errno` / `winerror` values when available. `request_id` links these to stream
+start, error, and terminal records. `stream_completed` is reserved for streams
+that received upstream `[DONE]` and finished forwarding; other terminal events
+are `stream_failed`, `stream_incomplete` (EOF/guard limit without `[DONE]`), and
+`stream_cancelled`. `status: null` means no upstream HTTP response was received.
+
 You can also specify an absolute path for the log file:
 
 ```bash
