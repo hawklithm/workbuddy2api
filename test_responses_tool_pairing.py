@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from httpx import ASGITransport, AsyncClient
 
 import codebuddy_proxy.__main__ as proxy
+from codebuddy_proxy.tool_pairing import ToolPairingError
 from codebuddy_proxy.responses_adapter import (
     ResponsesStreamConverter, _convert_input_items, responses_request_to_chat,
 )
@@ -95,32 +96,27 @@ def test_deferred_messages_keep_their_relative_order():
     assert [m["content"] for m in messages[-3:]] == ["guidance", "later", "ack"]
 
 
-def test_incomplete_group_keeps_only_answered_calls():
-    messages = _convert_input_items([
-        {"type": "message", "role": "user", "content": "go"},
-        _call("a"), _call("b"),
-        _result("a"),
-        {"type": "message", "role": "user", "content": "next"},
-    ])
-    _assert_well_formed_tool_groups(messages)
-    assert [c["id"] for c in messages[1]["tool_calls"]] == ["a"]
-    assert messages[2]["tool_call_id"] == "a"
-    assert messages[3]["content"] == "next"
+def test_incomplete_group_cannot_erase_unanswered_execution():
+    with pytest.raises(ToolPairingError, match="unanswered_tool_calls") as error:
+        _convert_input_items([
+            {"type": "message", "role": "user", "content": "go"},
+            _call("a"), _call("b"),
+            _result("a"),
+            {"type": "message", "role": "user", "content": "next"},
+        ])
+    assert error.value.call_ids == ("b",)
 
 
-def test_unanswered_group_removed_but_assistant_text_preserved():
-    messages = _convert_input_items([
-        {"type": "message", "role": "assistant", "content": "I'll run it"},
-        _call("a"),
-        {"type": "message", "role": "user", "content": "continue"},
-    ])
-    assert messages == [
-        {"role": "assistant", "content": "I'll run it"},
-        {"role": "user", "content": "continue"},
-    ]
+def test_unanswered_group_fails_closed():
+    with pytest.raises(ToolPairingError, match="unanswered_tool_calls"):
+        _convert_input_items([
+            {"type": "message", "role": "assistant", "content": "I'll run it"},
+            _call("a"),
+            {"type": "message", "role": "user", "content": "continue"},
+        ])
 
-    messages = _convert_input_items([_call("a")])
-    assert messages == []
+    with pytest.raises(ToolPairingError, match="unanswered_tool_calls"):
+        _convert_input_items([_call("a")])
 
 
 def test_orphan_duplicate_missing_id_outputs_and_empty_assistants_are_dropped():
@@ -128,9 +124,8 @@ def test_orphan_duplicate_missing_id_outputs_and_empty_assistants_are_dropped():
         _result("orphan"),
         {"type": "message", "role": "assistant", "content": ""},
         _call("a"),
-        _call("a"),
         _result("a", "first"),
-        _result("a", "duplicate"),
+        _result("a", "first"),
         {"type": "function_call_output", "output": "missing id"},
         {"type": "message", "role": "user", "content": "next"},
     ])
@@ -267,3 +262,51 @@ def test_responses_http_route_handles_long_interleaved_history(monkeypatch, opti
     else:
         assert len(captured) < 4802
         assert captured[-1]["content"] == "finish"
+
+
+def test_responses_cross_group_pending_call_fails_closed():
+    with pytest.raises(ToolPairingError, match="unanswered_tool_calls"):
+        _convert_input_items([
+            _call("a"), _call("b"), _result("a"),
+            {"type": "message", "role": "assistant", "content": "new"},
+            _call("c"), _result("b"), _result("c"),
+        ])
+
+
+def test_responses_conflicting_duplicate_result_fails_closed():
+    with pytest.raises(ToolPairingError, match="conflicting_duplicate_result"):
+        _convert_input_items([
+            _call("a"), _result("a", "success"), _result("a", "failure"),
+        ])
+
+
+def test_responses_http_route_rejects_incomplete_history(monkeypatch):
+    state = SimpleNamespace(
+        enable_optimize_context=False,
+        verbose_llm=False,
+        write_log=lambda *args, **kwargs: None,
+        json_logger=None,
+        logger=None,
+    )
+    monkeypatch.setattr(proxy, "proxy_state", state)
+    forwarded = []
+
+    async def fake_forward_chat(body, protocol, original=None):
+        forwarded.append(body)
+        raise AssertionError("Invalid history must not be forwarded upstream")
+
+    monkeypatch.setattr(proxy, "forward_chat", fake_forward_chat)
+
+    async def send():
+        transport = ASGITransport(app=proxy.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post("/v1/responses", json={
+                "model": "test",
+                "input": [_call("a"), _call("b"), _result("a")],
+            })
+
+    response = asyncio.run(send())
+    assert response.status_code == 422
+    assert response.json()["detail"]["reason"] == "unanswered_tool_calls"
+    assert response.json()["detail"]["tool_call_ids"] == ["b"]
+    assert not forwarded
