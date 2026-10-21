@@ -859,6 +859,14 @@ uv run --with workbuddy2api python -m codebuddy_proxy --desensitize --optimize-c
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
+### 上游错误 11148 "tool calls and tool results do not match"
+
+CodeBuddy 后端要求每条 Chat `tool` 消息必须紧跟在声明该调用的 assistant 消息之后作答。
+Claude Code / Codex CLI 的历史记录合法地在两者之间夹杂用户文本或重复 `tool_result`，
+从而产生此不匹配。代理在转发前会修复 `/v1/responses` 与 `/v1/messages` 的历史
+（延迟夹杂消息、丢弃孤儿/重复结果以及未应答的工具调用），因此代理路径上不应出现该错误。
+如果 `proxy.log` 中仍出现，说明客户端发送的历史无法配对，请在该客户端新建会话。
+
 ### 端口被占用
 
 ```bash

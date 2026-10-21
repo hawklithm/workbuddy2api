@@ -148,6 +148,97 @@ def _convert_anthropic_message(msg: dict) -> list[dict]:
     return messages
 
 
+def _sanitize_tool_pairing(messages: list[dict]) -> list[dict]:
+    """Keep each Chat tool result adjacent to its declaring assistant tool_calls.
+
+    Anthropic histories legitimately interleave blocks between a tool_use and
+    its tool_result (user text, several tool_use blocks answered in separate
+    turns, tool_result blocks that repeat an already answered call). Chat
+    Completions requires the declared call IDs to be answered together, so
+    postpone intervening messages until that group has finished. Never forward
+    an orphan/duplicate result or an unanswered tool call upstream: the
+    CodeBuddy backend rejects those with 11148
+    ("tool calls and tool results do not match").
+    """
+    out: list[dict] = []
+    deferred: list[dict] = []
+    pending: set[str] = set()
+    answered: set[str] = set()
+    assistant_index: int | None = None
+
+    def _close_group() -> None:
+        nonlocal assistant_index
+        if assistant_index is not None:
+            assistant = out[assistant_index]
+            matched = [
+                call for call in assistant["tool_calls"]
+                if call["id"] in answered
+            ]
+            if matched:
+                assistant["tool_calls"] = matched
+            else:
+                assistant.pop("tool_calls", None)
+                if not str(assistant.get("content") or "").strip():
+                    out.pop(assistant_index)
+
+        assistant_index = None
+        pending.clear()
+        answered.clear()
+        out.extend(deferred)
+        deferred.clear()
+
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+
+        role = message.get("role")
+        calls = message.get("tool_calls") or []
+        if role == "assistant" and calls:
+            _close_group()
+            # A duplicate/missing call ID would make matching ambiguous.
+            unique_calls: list[dict] = []
+            seen_ids: set[str] = set()
+            for call in calls:
+                if not isinstance(call, dict):
+                    continue
+                call_id = call.get("id")
+                if not isinstance(call_id, str) or not call_id or call_id in seen_ids:
+                    continue
+                seen_ids.add(call_id)
+                unique_calls.append(call)
+
+            if unique_calls:
+                out.append({**message, "tool_calls": unique_calls})
+                assistant_index = len(out) - 1
+                pending.update(seen_ids)
+            elif str(message.get("content") or "").strip():
+                out.append({key: value for key, value in message.items() if key != "tool_calls"})
+            continue
+
+        if role == "tool":
+            call_id = message.get("tool_call_id")
+            if isinstance(call_id, str) and assistant_index is not None and call_id in pending:
+                out.append(message)
+                pending.remove(call_id)
+                answered.add(call_id)
+                if not pending:
+                    _close_group()
+            # Missing, repeated, or unmatched results are not valid Chat messages.
+            continue
+
+        # Blank assistant messages are also invalid/no-ops in this context.
+        if role == "assistant" and not str(message.get("content") or "").strip():
+            continue
+
+        if assistant_index is not None:
+            deferred.append(message)
+        else:
+            out.append(message)
+
+    _close_group()
+    return out
+
+
 def anthropic_request_to_chat(body: dict) -> dict:
     """将Anthropic Messages API请求体转换为Chat Completions请求体
     
@@ -169,6 +260,9 @@ def anthropic_request_to_chat(body: dict) -> dict:
     # messages转换
     for msg in body.get("messages", []):
         messages.extend(_convert_anthropic_message(msg))
+
+    # 修复跨消息的工具调用配对，避免上游 11148
+    messages = _sanitize_tool_pairing(messages)
     
     # 构造Chat body
     chat: dict[str, Any] = {

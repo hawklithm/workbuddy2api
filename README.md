@@ -796,6 +796,17 @@ uv run --with workbuddy2api python -m codebuddy_proxy --desensitize --optimize-c
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
+### Upstream error 11148 "tool calls and tool results do not match"
+
+The CodeBuddy backend requires every Chat `tool` message to answer a call
+declared by the immediately preceding assistant message. Claude Code and Codex
+CLI histories legally interleave user text or duplicate a `tool_result`, which
+produces that mismatch. The proxy repairs `/v1/responses` and `/v1/messages`
+histories before forwarding (deferring interleaved messages, dropping orphan or
+duplicate results and unanswered tool calls), so this error should not occur on
+the proxy path. If it appears in `proxy.log`, the client is sending a history
+the repair could not pair; start a fresh conversation in that client.
+
 ### Port already in use
 
 ```bash
