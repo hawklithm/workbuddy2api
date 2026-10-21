@@ -8,8 +8,16 @@ turns, user text between a tool_use and its tool_result, duplicated
 tool_result blocks), so conversion must repair them before forwarding.
 """
 
+import asyncio
 import json
+from types import SimpleNamespace
 
+import pytest
+from fastapi.responses import JSONResponse
+from httpx import ASGITransport, AsyncClient
+
+import codebuddy_proxy.__main__ as proxy
+from codebuddy_proxy.tool_pairing import ToolPairingError
 from codebuddy_proxy.anthropic_adapter import anthropic_request_to_chat
 
 
@@ -82,22 +90,21 @@ def test_duplicate_result_for_answered_call_is_dropped():
         {"role": "assistant", "content": [_tool_use("c1")]},
         {"role": "user", "content": [_tool_result("c1", "r1")]},
         {"role": "assistant", "content": [_tool_use("c2", "Read")]},
-        {"role": "user", "content": [_tool_result("c2", "r2"), _tool_result("c1", "dup")]},
+        {"role": "user", "content": [_tool_result("c2", "r2"), _tool_result("c1", "r1")]},
     ])
     _assert_well_formed_tool_groups(messages)
     assert [m["tool_call_id"] for m in messages if m["role"] == "tool"] == ["c1", "c2"]
 
 
-def test_unanswered_tool_use_is_removed_but_text_kept():
-    """A trailing tool_use with no result is dropped, its text survives."""
-    messages = _convert([
-        {"role": "assistant", "content": [{"type": "text", "text": "I'll run it"}, _tool_use("c1")]},
-        {"role": "user", "content": [{"type": "text", "text": "continue"}]},
-    ])
-    assert messages == [
-        {"role": "assistant", "content": "I'll run it"},
-        {"role": "user", "content": "continue"},
-    ]
+def test_unanswered_tool_use_is_rejected_instead_of_silently_removed():
+    """Missing output must not erase a tool invocation that may have side effects."""
+    with pytest.raises(ToolPairingError, match="unanswered_tool_calls"):
+        _convert([
+            {"role": "assistant", "content": [
+                {"type": "text", "text": "I'll run it"}, _tool_use("c1"),
+            ]},
+            {"role": "user", "content": [{"type": "text", "text": "continue"}]},
+        ])
 
 
 def test_orphan_result_without_declaring_assistant_is_dropped():
@@ -108,33 +115,41 @@ def test_orphan_result_without_declaring_assistant_is_dropped():
     assert messages == [{"role": "assistant", "content": "plain"}]
 
 
-def test_missing_tool_use_id_drops_unmatched_group():
-    """An id-less tool_use generates a random call id; an unmatched result is dropped."""
-    messages = _convert([
-        {"role": "assistant", "content": [{"type": "tool_use", "name": "Bash", "input": {}}]},
-        {"role": "user", "content": [_tool_result("call_generated", "r")]},
-    ])
-    _assert_well_formed_tool_groups(messages)
-    assert messages == []
+def test_missing_tool_use_id_is_not_silently_rewritten():
+    """An unknown tool call ID cannot be reconstructed from unrelated output."""
+    with pytest.raises(ToolPairingError, match="unanswered_tool_calls"):
+        _convert([
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "Bash", "input": {}},
+            ]},
+            {"role": "user", "content": [_tool_result("call_generated", "r")]},
+        ])
 
 
 def test_long_agentic_history_stays_well_formed():
-    """The 59-message Claude Code shape from the reported 11148 failure."""
+    """59 raw messages with mixed text/results and a repeated identical result."""
     items = [{"role": "user", "content": [{"type": "text", "text": "start"}]}]
     for idx in range(29):
         items.append({
             "role": "assistant",
             "content": [{"type": "text", "text": f"step {idx}"}, _tool_use(f"call_{idx}")],
         })
-        items.append({"role": "user", "content": [_tool_result(f"call_{idx}", f"out {idx}")]})
+        results = [_tool_result(f"call_{idx}", f"out {idx}")]
+        if idx == 14:
+            results.insert(0, {"type": "text", "text": "interleaved context"})
+        if idx == 20:
+            results.append(_tool_result(f"call_{idx}", f"out {idx}"))
+        items.append({"role": "user", "content": results})
 
+    assert len(items) == 59
     messages = _convert(items)
     _assert_well_formed_tool_groups(messages)
-    assert len(messages) == 1 + 29 * 2
+    assert len(messages) == 60  # one deferred user text message
+    assert messages[0]["content"] == "start"
+    assert sum(m["role"] == "tool" for m in messages) == 29
 
     chat = anthropic_request_to_chat({"model": "deepseek-v4.1-flash", "messages": items})
-    _assert_well_formed_tool_groups(chat["messages"])
-    assert len(chat["messages"]) == 59
+    assert chat["messages"] == messages
 
 
 def test_interleaved_messages_are_deferred_until_group_completes():
@@ -197,3 +212,97 @@ def test_tool_call_arguments_survive_sanitization():
     ])
     _assert_well_formed_tool_groups(messages)
     assert messages[0]["tool_calls"][0]["function"]["arguments"] == arguments
+
+
+def test_incomplete_parallel_group_is_rejected():
+    with pytest.raises(ToolPairingError, match="unanswered_tool_calls") as error:
+        _convert([
+            {"role": "assistant", "content": [_tool_use("a"), _tool_use("b")]},
+            {"role": "user", "content": [_tool_result("a")]},
+            {"role": "user", "content": [{"type": "text", "text": "next"}]},
+        ])
+    assert error.value.call_ids == ("b",)
+
+
+def test_new_assistant_call_cannot_discard_previous_pending_call():
+    with pytest.raises(ToolPairingError, match="unanswered_tool_calls"):
+        _convert([
+            {"role": "assistant", "content": [_tool_use("a"), _tool_use("b")]},
+            {"role": "user", "content": [_tool_result("a")]},
+            {"role": "assistant", "content": [_tool_use("c")]},
+            {"role": "user", "content": [_tool_result("b"), _tool_result("c")]},
+        ])
+
+
+def test_conflicting_duplicate_result_is_not_silently_dropped():
+    with pytest.raises(ToolPairingError, match="conflicting_duplicate_result"):
+        _convert([
+            {"role": "assistant", "content": [_tool_use("a")]},
+            {"role": "user", "content": [_tool_result("a", "success")]},
+            {"role": "user", "content": [_tool_result("a", "failure")]},
+        ])
+
+
+def test_duplicate_call_id_is_not_arbitrarily_deduplicated():
+    with pytest.raises(ToolPairingError, match="duplicate_tool_call_id"):
+        _convert([
+            {"role": "assistant", "content": [_tool_use("a"), _tool_use("a")]},
+            {"role": "user", "content": [_tool_result("a")]},
+        ])
+
+
+def test_orphan_result_is_dropped_with_diagnostic(caplog):
+    with caplog.at_level("WARNING", logger="codebuddy_proxy.tool_pairing"):
+        messages = _convert([
+            {"role": "user", "content": [_tool_result("unknown", "payload")]},
+            {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+        ])
+    assert messages == [{"role": "user", "content": "hello"}]
+    assert "orphan_result_dropped" in caplog.text
+    assert "payload" not in caplog.text
+
+
+@pytest.mark.parametrize("invalid", [False, True])
+def test_anthropic_http_route_validates_tool_history(monkeypatch, invalid):
+    state = SimpleNamespace(
+        enable_optimize_context=False,
+        verbose_llm=False,
+        write_log=lambda *args, **kwargs: None,
+        json_logger=None,
+        logger=None,
+    )
+    monkeypatch.setattr(proxy, "proxy_state", state)
+    captured = []
+
+    async def fake_forward_chat(body, protocol, original=None):
+        captured.append(body)
+        assert protocol == "anthropic"
+        return JSONResponse({"ok": True})
+
+    monkeypatch.setattr(proxy, "forward_chat", fake_forward_chat)
+    history = [
+        {"role": "user", "content": "run"},
+        {"role": "assistant", "content": [_tool_use("a"), _tool_use("b")]},
+        {"role": "user", "content": [_tool_result("a", "ok")]},
+    ]
+    if not invalid:
+        history.append({"role": "user", "content": [_tool_result("b", "ok")]})
+
+    async def request():
+        async with AsyncClient(
+            transport=ASGITransport(app=proxy.app), base_url="http://test",
+        ) as client:
+            return await client.post("/v1/messages", json={
+                "model": "test", "messages": history, "stream": False,
+            })
+
+    response = asyncio.run(request())
+    if invalid:
+        assert response.status_code == 422
+        assert response.json()["detail"]["code"] == "invalid_tool_history"
+        assert response.json()["detail"]["tool_call_ids"] == ["b"]
+        assert not captured  # bad history must never reach upstream
+    else:
+        assert response.status_code == 200
+        assert len(captured) == 1
+        _assert_well_formed_tool_groups(captured[0]["messages"])
