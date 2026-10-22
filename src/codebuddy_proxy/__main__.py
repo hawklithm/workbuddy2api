@@ -48,7 +48,8 @@ from codebuddy_proxy.backend_profile import (
 )
 from codebuddy_proxy.codebuddy_client_demo import CodeBuddyClient, CodeBuddyError
 from codebuddy_proxy.billing_proxy import forward_billing
-from codebuddy_proxy.role_compat import adapt_developer_roles, uses_legacy_chat_roles
+from codebuddy_proxy.upstream_request import ChatRequestPreparer
+from codebuddy_proxy.protocol_response import format_nonstream_response
 
 # 尝试导入高级功能模块（可选）
 try:
@@ -1035,61 +1036,23 @@ async def forward_chat(
     
     diagnostic("upstream_request", protocol=protocol, **body_summary(body))
     
-    stream = bool(body.get("stream"))
-    upstream_body = dict(body)
-    
-    # 归一化 tool_choice：object 形式 → 函数名字符串（上游只接受 string）
-    if "tool_choice" in upstream_body:
-        upstream_body["tool_choice"] = _normalize_tool_choice(upstream_body["tool_choice"])
-    
-    url = state.client.build_url(state.client.profile.chat_path)
+    prepared = ChatRequestPreparer(
+        client=state.client,
+        enable_desensitize=state.enable_desensitize,
+        desensitize_body=desensitize_body,
+        normalize_tool_choice=_normalize_tool_choice,
+        diagnostic=diagnostic,
+    ).prepare(body, protocol)
+    stream, upstream_body, url, headers = (
+        prepared.stream, prepared.body, prepared.url, prepared.headers,
+    )
 
-    # 国内站当前不接受 developer 角色（400/code 11128）。只对已验证的
-    # copilot.tencent.com 网关做 copy-on-write 转换，不影响客户端请求对象、
-    # 国际站、自定义上游以及已有 assistant/tool 调用历史。
-    messages = upstream_body.get("messages")
-    if (uses_legacy_chat_roles(state.client.profile.key, url)
-            and isinstance(messages, list)):
-        compatible_messages, mapped_count = adapt_developer_roles(messages)
-        if mapped_count:
-            upstream_body["messages"] = compatible_messages
-            diagnostic("upstream_role_compat", protocol=protocol,
-                       backend=state.client.profile.key,
-                       mapping="developer_to_system", count=mapped_count)
-
-    # 在角色兼容转换之后应用脱敏/客户端提示压缩；原来的 developer
-    # 指令现在同 system 一样进入既有处理链路。
-    if state.enable_desensitize:
-        upstream_body = desensitize_body(upstream_body, compact_harness=True)
-    
-    # 始终以流式方式请求上游（聚合或转发）
-    upstream_body["stream"] = True
-    upstream_body.setdefault("stream_options", {"include_usage": True})
-    
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; Genie-IDE/1.0)",
-        **state.client.auth_headers(),
-        "Content-Type": "application/json",
-        "Accept": "text/event-stream",
-    }
-    # INTL (www.codebuddy.ai) 网关的「会话标识」闸门（2026-10-16 起）。
-    # 缺失 X-Conversation-* 头族会被 400 / code 11128 拒绝。
-    # 仅在国际站注入，避免影响国内站 copilot.tencent.com 的现有逻辑。
-    if "codebuddy.ai" in url:
-        try:
-            headers.update(state.client.conversation_headers(upstream_body))
-            diagnostic("intl_conversation_headers",
-                       conversation_id=headers.get("X-Conversation-ID", "")[:12] + "...")
-        except Exception as exc:  # 头注入失败不应阻断主流程
-            diagnostic("intl_conversation_headers_failed", error=str(exc)[:200])
-    
-    # 🔍 调试：输出实际发送的IDE识别headers
+    # Keep the original diagnostics after gateway-specific header injection.
     if state.logger:
-        ide_headers = {k: v for k, v in headers.items() 
-                      if k.startswith("X-IDE-") or k == "X-Product-Version" or k == "X-Machine-Id"}
+        ide_headers = {k: v for k, v in headers.items()
+                       if k.startswith("X-IDE-") or k == "X-Product-Version" or k == "X-Machine-Id"}
         diagnostic("upstream_ide_headers", **ide_headers)
-    
+
     if stream:
         # 上游响应头必须在客户端 StreamingResponse 开始之前读取，否则 400 会被包装成 200。
         upstream_client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0))
@@ -1934,78 +1897,8 @@ async def collect_upstream(
 # ============================================================================
 
 def convert_nonstream(data: dict[str, Any], protocol: str, original: dict[str, Any] | None) -> dict[str, Any]:
-    """将聚合的 OpenAI 格式转换为目标协议格式。"""
-    if protocol == "openai":
-        return data
-    
-    choice = (data.get("choices") or [{}])[0]
-    message = choice.get("message") or {}
-    content = message.get("content", "")
-    
-    if protocol == "anthropic":
-        content_blocks = []
-        if content:
-            content_blocks.append({"type": "text", "text": content})
-        for call in message.get("tool_calls") or []:
-            fn = call.get("function") or {}
-            try:
-                arguments = json.loads(fn.get("arguments", "{}"))
-            except json.JSONDecodeError:
-                arguments = fn.get("arguments", "")
-            content_blocks.append({
-                "type": "tool_use",
-                "id": call.get("id", ""),
-                "name": fn.get("name", ""),
-                "input": arguments
-            })
-        return {
-            "id": "msg_" + uuid.uuid4().hex,
-            "type": "message",
-            "role": "assistant",
-            "model": (original or {}).get("model", data.get("model", "default")),
-            "content": content_blocks,
-            "stop_reason": "tool_use" if message.get("tool_calls") else "end_turn",
-            "stop_sequence": None,
-            "usage": {
-                "input_tokens": (data.get("usage") or {}).get("prompt_tokens", 0),
-                "output_tokens": (data.get("usage") or {}).get("completion_tokens", 0)
-            }
-        }
-    
-    elif protocol == "responses":
-        # 构建 content 数组（文本 + 工具调用）
-        content_parts = []
-        if content:
-            content_parts.append({"type": "output_text", "text": content})
-        
-        # 处理工具调用
-        for call in message.get("tool_calls") or []:
-            fn = call.get("function") or {}
-            try:
-                arguments = json.loads(fn.get("arguments", "{}"))
-            except json.JSONDecodeError:
-                arguments = fn.get("arguments", "")
-            
-            content_parts.append({
-                "type": "function_call",
-                "id": call.get("id", ""),
-                "name": fn.get("name", ""),
-                "arguments": arguments
-            })
-        
-        return {
-            "id": "resp_" + uuid.uuid4().hex,
-            "object": "response",
-            "created_at": now_s(),
-            "status": "completed",
-            "output": [{
-                "type": "message",
-                "role": "assistant",
-                "content": content_parts
-            }]
-        }
-    
-    return data
+    """Convert a collected response via the protocol's registered formatter."""
+    return format_nonstream_response(data, protocol, original, now_s)
 
 
 # ============================================================================
