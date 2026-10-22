@@ -859,6 +859,22 @@ uv run --with workbuddy2api python -m codebuddy_proxy --desensitize --optimize-c
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
+### 上游错误 11148 "tool calls and tool results do not match"
+
+部分 Agent 客户端会生成不符合标准格式的 Anthropic / Responses 工具调用历史。
+CodeBuddy 后端要求 Chat `tool` 结果必须紧跟声明对应 `tool_calls` 的 assistant。
+代理在 `/v1/messages` 与 `/v1/responses` 转换后修复能够安全恢复的历史：
+延后夹杂的非工具消息；对孤儿结果及内容相同的重复结果进行丢弃并记录诊断日志
+（不会记录工具输出正文）。
+
+**不再静默删除无法配对的工具调用。** 如果调用缺少结果、工具调用 ID 重用、
+或重复结果内容冲突，代理返回 HTTP **422**，错误详情包含
+`detail.code=invalid_tool_history` 和对应的 `reason`，不会向上游发起请求。
+再次尝试或新建会话前，应先核查未完成工具是否已经产生副作用，避免重复执行。
+
+此修复不适用于直接访问 `/v1/chat/completions` 的请求，也不能保证完全消除其他
+原因产生的上游 11148 错误。
+
 ### 端口被占用
 
 ```bash

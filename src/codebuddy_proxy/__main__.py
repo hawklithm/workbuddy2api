@@ -35,6 +35,7 @@ from typing import Any, Optional
 
 import httpx
 from fastapi import FastAPI, Request, HTTPException
+from codebuddy_proxy.tool_pairing import ToolPairingError
 from fastapi.responses import JSONResponse, StreamingResponse
 import uvicorn
 from codebuddy_proxy.dsml_parser import DSMLStreamBuffer, parse_all_tool_calls, remove_all_tool_call_markers
@@ -905,7 +906,12 @@ async def create_response(request: Request):
     log_client_request("POST", "/v1/responses", body)
     
     # 转换 Responses → Chat
-    chat_body = responses_request_to_chat(body)
+    try:
+        chat_body = responses_request_to_chat(body)
+    except ToolPairingError as exc:
+        diagnostic("tool_pairing_rejected", protocol="responses", reason=exc.reason,
+                   call_count=len(exc.call_ids))
+        raise HTTPException(status_code=422, detail=exc.as_detail()) from exc
     
     # 消息压缩优化（如果启用）
     if state.enable_optimize_context and HAS_PROJECTION:
@@ -963,7 +969,12 @@ async def create_message(request: Request):
     log_client_request("POST", "/v1/messages", body)
     
     # 转换 Anthropic → Chat
-    chat_body = anthropic_to_chat(body)
+    try:
+        chat_body = anthropic_to_chat(body)
+    except ToolPairingError as exc:
+        diagnostic("tool_pairing_rejected", protocol="anthropic", reason=exc.reason,
+                   call_count=len(exc.call_ids))
+        raise HTTPException(status_code=422, detail=exc.as_detail()) from exc
     diagnostic("request", protocol="anthropic", **body_summary(chat_body))
     
     return await forward_chat(chat_body, "anthropic", original=body)

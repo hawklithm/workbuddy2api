@@ -796,6 +796,24 @@ uv run --with workbuddy2api python -m codebuddy_proxy --desensitize --optimize-c
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
+### Upstream error 11148 "tool calls and tool results do not match"
+
+Some agent clients produce nonconforming Anthropic / Responses tool histories.
+The CodeBuddy backend requires Chat tool results to directly follow the
+declaring assistant `tool_calls`. The proxy now repairs recoverable converted
+histories in `/v1/messages` and `/v1/responses`: interleaved non-tool messages
+are deferred, and orphan or identical duplicate results are dropped with
+diagnostic warnings (no tool output is logged).
+
+Ambiguous histories are **not silently truncated**. If a call has no result, a
+tool-call ID is reused, or duplicate results disagree, the proxy returns HTTP
+**422**, with `detail.code=invalid_tool_history` and a specific `reason`.
+No request is sent upstream in that case. Verify the side effects of any
+unfinished tools before retrying or starting a fresh conversation.
+
+This repair does not apply to direct `/v1/chat/completions` requests and cannot
+guarantee the absence of unrelated upstream 11148 errors.
+
 ### Port already in use
 
 ```bash

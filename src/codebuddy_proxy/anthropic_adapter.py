@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import os
 import time
+from codebuddy_proxy.tool_pairing import sanitize_tool_pairing as _sanitize_tool_pairing
+
 from typing import Any
 
 
@@ -169,6 +171,9 @@ def anthropic_request_to_chat(body: dict) -> dict:
     # messages转换
     for msg in body.get("messages", []):
         messages.extend(_convert_anthropic_message(msg))
+
+    # 修复跨消息的工具调用配对，避免上游 11148
+    messages = _sanitize_tool_pairing(messages, protocol="anthropic")
     
     # 构造Chat body
     chat: dict[str, Any] = {
