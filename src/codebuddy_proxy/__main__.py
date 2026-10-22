@@ -47,6 +47,7 @@ from codebuddy_proxy.backend_profile import (
     resolve_backend_from_args,
 )
 from codebuddy_proxy.codebuddy_client_demo import CodeBuddyClient, CodeBuddyError
+from codebuddy_proxy.billing_proxy import forward_billing
 from codebuddy_proxy.role_compat import adapt_developer_roles, uses_legacy_chat_roles
 
 # 尝试导入高级功能模块（可选）
@@ -818,6 +819,26 @@ async def health():
         "backend": state.client.profile.key,
         "upstream_endpoint": state.client.endpoint,
     }
+
+
+# ============================================================================
+# 端点：/v1/checkin-status 与 /v1/checkin（每日签到透传）
+# ============================================================================
+
+@app.api_route("/v1/checkin-status", methods=["GET", "POST"])
+async def checkin_status():
+    """Accept GET/POST locally; the real upstream billing status endpoint requires POST."""
+    return await forward_billing(
+        get_state(), "POST", "/v2/billing/meter/checkin-status", diagnostic
+    )
+
+
+@app.post("/v1/checkin")
+async def checkin():
+    """POST daily check-in: preserve the upstream HTTP status and raw body."""
+    return await forward_billing(
+        get_state(), "POST", "/v2/billing/meter/daily-checkin", diagnostic
+    )
 
 
 # ============================================================================
