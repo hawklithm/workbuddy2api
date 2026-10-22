@@ -47,6 +47,7 @@ from codebuddy_proxy.backend_profile import (
     resolve_backend_from_args,
 )
 from codebuddy_proxy.codebuddy_client_demo import CodeBuddyClient, CodeBuddyError
+from codebuddy_proxy.billing_proxy import forward_billing
 
 # 尝试导入高级功能模块（可选）
 try:
@@ -823,55 +824,20 @@ async def health():
 # 端点：/v1/checkin-status 与 /v1/checkin（每日签到透传）
 # ============================================================================
 
-async def _billing_post(path: str) -> dict[str, Any]:
-    """用本地已登录会话调用官方 billing 端点并返回原始 JSON。
-
-    自动处理 401：先走 ensure_authenticated 刷新 token 再重试一次。
-    """
-    state = get_state()
-    url = state.client.endpoint.rstrip("/") + path
-    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-        resp = await client.post(url, json={}, headers=state.client.auth_headers())
-        if resp.status_code == 401:
-            # token 过期：触发一次刷新后重试
-            try:
-                await asyncio.to_thread(state.client.ensure_authenticated, False)
-            except Exception:
-                pass
-            resp = await client.post(url, json={}, headers=state.client.auth_headers())
-        try:
-            return resp.json()
-        except Exception:
-            return {"code": resp.status_code, "msg": f"non-JSON response (HTTP {resp.status_code})"}
-
-
-@app.get("/v1/checkin-status")
+@app.api_route("/v1/checkin-status", methods=["GET", "POST"])
 async def checkin_status():
-    """查询每日签到活动状态（透传官方 /v2/billing/meter/checkin-status）。"""
-    state = get_state()
-    try:
-        state.ensure_auth()
-    except Exception as e:
-        raise HTTPException(status_code=503, detail={"error": {"message": f"not authenticated: {e}", "type": "auth_error"}})
-    result = await _billing_post("/v2/billing/meter/checkin-status")
-    return {"status": "ok", "upstream": result}
+    """Accept GET/POST locally; the real upstream billing status endpoint requires POST."""
+    return await forward_billing(
+        get_state(), "POST", "/v2/billing/meter/checkin-status", diagnostic
+    )
 
 
 @app.post("/v1/checkin")
 async def checkin():
-    """执行每日签到（透传官方 /v2/billing/meter/daily-checkin）。
-
-    业务结果原样返回：code=0 且 data 非空为领取成功；已签到/活动结束等
-    业务拒绝通过上游 data.status / msg 区分，这里不做二次解释。
-    """
-    state = get_state()
-    try:
-        state.ensure_auth()
-    except Exception as e:
-        raise HTTPException(status_code=503, detail={"error": {"message": f"not authenticated: {e}", "type": "auth_error"}})
-    result = await _billing_post("/v2/billing/meter/daily-checkin")
-    diagnostic("checkin_claim_result", code=result.get("code"), msg=result.get("msg"))
-    return {"status": "ok", "upstream": result}
+    """POST daily check-in: preserve the upstream HTTP status and raw body."""
+    return await forward_billing(
+        get_state(), "POST", "/v2/billing/meter/daily-checkin", diagnostic
+    )
 
 
 # ============================================================================
