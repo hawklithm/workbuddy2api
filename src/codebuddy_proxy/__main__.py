@@ -48,6 +48,7 @@ from codebuddy_proxy.backend_profile import (
 )
 from codebuddy_proxy.codebuddy_client_demo import CodeBuddyClient, CodeBuddyError
 from codebuddy_proxy.billing_proxy import forward_billing
+from codebuddy_proxy.role_compat import adapt_developer_roles, uses_legacy_chat_roles
 
 # 尝试导入高级功能模块（可选）
 try:
@@ -1041,7 +1042,23 @@ async def forward_chat(
     if "tool_choice" in upstream_body:
         upstream_body["tool_choice"] = _normalize_tool_choice(upstream_body["tool_choice"])
     
-    # 应用脱敏处理
+    url = state.client.build_url(state.client.profile.chat_path)
+
+    # 国内站当前不接受 developer 角色（400/code 11128）。只对已验证的
+    # copilot.tencent.com 网关做 copy-on-write 转换，不影响客户端请求对象、
+    # 国际站、自定义上游以及已有 assistant/tool 调用历史。
+    messages = upstream_body.get("messages")
+    if (uses_legacy_chat_roles(state.client.profile.key, url)
+            and isinstance(messages, list)):
+        compatible_messages, mapped_count = adapt_developer_roles(messages)
+        if mapped_count:
+            upstream_body["messages"] = compatible_messages
+            diagnostic("upstream_role_compat", protocol=protocol,
+                       backend=state.client.profile.key,
+                       mapping="developer_to_system", count=mapped_count)
+
+    # 在角色兼容转换之后应用脱敏/客户端提示压缩；原来的 developer
+    # 指令现在同 system 一样进入既有处理链路。
     if state.enable_desensitize:
         upstream_body = desensitize_body(upstream_body, compact_harness=True)
     
@@ -1050,7 +1067,6 @@ async def forward_chat(
     upstream_body.setdefault("stream_options", {"include_usage": True})
     
     
-    url = state.client.build_url(state.client.profile.chat_path)
     headers = {
         "User-Agent": "Mozilla/5.0 (compatible; Genie-IDE/1.0)",
         **state.client.auth_headers(),
