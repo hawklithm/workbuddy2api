@@ -58,11 +58,12 @@ def environment(monkeypatch):
     return client, state, install, real_async_client
 
 
-@pytest.mark.parametrize("method,path,upstream_path", [
-    ("GET", "/v1/checkin-status", "/v2/billing/meter/checkin-status"),
-    ("POST", "/v1/checkin", "/v2/billing/meter/daily-checkin"),
+@pytest.mark.parametrize("method,path,upstream_method,upstream_path", [
+    ("GET", "/v1/checkin-status", "GET", "/v2/billing/meter/checkin-status"),
+    ("POST", "/v1/checkin-status", "GET", "/v2/billing/meter/checkin-status"),
+    ("POST", "/v1/checkin", "POST", "/v2/billing/meter/daily-checkin"),
 ])
-def test_forward_method_url_headers_and_raw_business_body(environment, method, path, upstream_path):
+def test_forward_method_url_headers_and_raw_business_body(environment, method, path, upstream_method, upstream_path):
     client, state, install, _ = environment
     requests = []
     payload = {"code": 10001, "msg": "already checked in", "data": None}
@@ -80,10 +81,10 @@ def test_forward_method_url_headers_and_raw_business_body(environment, method, p
     assert list(result.json()) == ["code", "msg", "data"]
     assert len(requests) == 1
     upstream = requests[0]
-    assert upstream.method == method
+    assert upstream.method == upstream_method
     assert upstream.url.path == upstream_path
     assert upstream.headers["authorization"] == "Bearer old"
-    if method == "GET":
+    if upstream_method == "GET":
         assert upstream.content == b""
         assert "content-type" not in upstream.headers
     else:
@@ -91,7 +92,8 @@ def test_forward_method_url_headers_and_raw_business_body(environment, method, p
 
 
 @pytest.mark.parametrize("status", [400, 401, 429, 500, 503])
-def test_forwards_upstream_error_status_and_body(environment, status):
+@pytest.mark.parametrize("method", ["GET", "POST"])
+def test_forwards_upstream_error_status_and_body(environment, status, method):
     client, _, install, _ = environment
     client.refresh_outcome = False
     payload = b'{"code":11148,"msg":"upstream error","data":null}'
@@ -103,7 +105,7 @@ def test_forwards_upstream_error_status_and_body(environment, status):
 
     install(handler)
     with TestClient(proxy.app) as app:
-        result = app.get("/v1/checkin-status")
+        result = app.request(method, "/v1/checkin-status")
 
     assert result.status_code == status
     assert result.content == payload
