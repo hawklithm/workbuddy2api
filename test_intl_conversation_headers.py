@@ -9,9 +9,6 @@ X-Conversation-* 头族，缺失即 400 / code 11128。国内站 copilot.tencent
   3. 注入条件严格限定 INTL —— 国内站 URL 不得带这些头
 """
 
-import json
-
-import codebuddy_proxy.__main__ as proxy
 from codebuddy_proxy.codebuddy_client_demo import CodeBuddyClient
 
 REQUIRED_HEADERS = (
@@ -111,26 +108,43 @@ def test_headers_tolerate_missing_or_malformed_body():
 
 
 def test_intl_gate_is_scoped_to_codebuddy_ai():
-    """注入条件必须严格限定 INTL —— 国内站 URL 不得命中。
+    """Verify emitted headers rather than inspecting a particular source file.
 
-    这是作者在 issue #11 里明确要求的「避免影响国内站现有逻辑」。
-    以源码里的判定表达式为准，防止后续重构把范围放宽。
+    The policy is allowed to move between modules during refactoring; the
+    observable contract is that only the international URL receives headers.
     """
-    import inspect
+    from types import SimpleNamespace
 
-    source = inspect.getsource(proxy)
-    # 找到 forward_chat 里注入 conversation headers 的那处守卫
-    marker = "conversation_headers"
-    assert marker in source, "forward_chat 未注入 conversation headers"
+    from codebuddy_proxy.upstream_request import ChatRequestPreparer
 
-    idx = source.index(marker)
-    window = source[max(0, idx - 600):idx]
-    # 只看可执行代码，剔除注释（注释里会提到国内站做说明）
-    code = "\n".join(
-        line for line in window.splitlines()
-        if line.strip() and not line.strip().startswith("#")
-    )
-    assert "codebuddy.ai" in code, \
-        "注入守卫必须包含 codebuddy.ai 判定（仅 INTL）"
-    assert "copilot.tencent.com" not in code, \
-        "注入守卫不得覆盖国内站"
+    class FakeClient:
+        def __init__(self, endpoint: str):
+            self.endpoint = endpoint
+            self.profile = SimpleNamespace(key="global", chat_path="/v2/chat/completions")
+            self.conversation_calls = 0
+
+        def build_url(self, path):
+            return self.endpoint + path
+
+        def auth_headers(self):
+            return {"Authorization": "Bearer test"}
+
+        def conversation_headers(self, body):
+            self.conversation_calls += 1
+            return {name: "test-conversation-id" for name in REQUIRED_HEADERS}
+
+    for endpoint, should_inject in [
+        ("https://www.codebuddy.ai", True),
+        ("https://copilot.tencent.com", False),
+        ("https://example.test", False),
+    ]:
+        client = FakeClient(endpoint)
+        prepared = ChatRequestPreparer(
+            client=client,
+            enable_desensitize=False,
+            desensitize_body=lambda body, **kwargs: body,
+            normalize_tool_choice=lambda choice: choice,
+            diagnostic=lambda *args, **kwargs: None,
+        ).prepare(_body("keep system context"), "openai")
+        assert client.conversation_calls == int(should_inject)
+        assert all((key in prepared.headers) == should_inject for key in REQUIRED_HEADERS)
