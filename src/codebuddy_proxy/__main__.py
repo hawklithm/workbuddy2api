@@ -826,9 +826,9 @@ async def health():
 
 @app.api_route("/v1/checkin-status", methods=["GET", "POST"])
 async def checkin_status():
-    """Accept GET/POST locally; always query the upstream billing status via GET."""
+    """Accept GET/POST locally; the real upstream billing status endpoint requires POST."""
     return await forward_billing(
-        get_state(), "GET", "/v2/billing/meter/checkin-status", diagnostic
+        get_state(), "POST", "/v2/billing/meter/checkin-status", diagnostic
     )
 
 
