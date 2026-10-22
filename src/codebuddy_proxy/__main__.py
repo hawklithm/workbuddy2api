@@ -824,9 +824,9 @@ async def health():
 # 端点：/v1/checkin-status 与 /v1/checkin（每日签到透传）
 # ============================================================================
 
-@app.get("/v1/checkin-status")
+@app.api_route("/v1/checkin-status", methods=["GET", "POST"])
 async def checkin_status():
-    """GET billing status: preserve the upstream HTTP status and raw body."""
+    """Accept GET/POST locally; always query the upstream billing status via GET."""
     return await forward_billing(
         get_state(), "GET", "/v2/billing/meter/checkin-status", diagnostic
     )
