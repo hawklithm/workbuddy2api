@@ -151,6 +151,25 @@ def test_401_refresh_success_uses_new_authorization_once(environment, method, pa
     assert client.refresh_calls == 1
 
 
+def test_second_401_stops_after_single_refresh(environment):
+    client, _, install, _ = environment
+    seen_tokens = []
+
+    def handler(request):
+        seen_tokens.append(request.headers["authorization"])
+        return httpx.Response(401, content=b"still forbidden",
+                              headers={"content-type": "text/plain"})
+
+    install(handler)
+    with TestClient(proxy.app) as app:
+        result = app.post("/v1/checkin")
+
+    assert result.status_code == 401
+    assert result.content == b"still forbidden"
+    assert seen_tokens == ["Bearer old", "Bearer new"]
+    assert client.refresh_calls == 1
+
+
 @pytest.mark.parametrize("failure", [False, RuntimeError("refresh failed"), True])
 def test_refresh_failure_or_unchanged_token_returns_original_401(environment, failure):
     client, _, install, _ = environment
