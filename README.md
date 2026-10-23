@@ -4,6 +4,8 @@
 
 > **中文版文档见 [README_zh.md](README_zh.md).**
 
+For unexplained Windows process exits, use the [independent process monitor](docs/external-process-monitor.md) to collect uv/Python exit codes, lifecycle, memory, health, and available Windows events without restarting the proxy.
+
 ## ✨ Core Features
 
 - **Protocol conversion** - Supports three standard formats: OpenAI Chat Completions, Anthropic Messages API, and Responses

@@ -4,6 +4,8 @@
 
 > **English version: see [README.md](README.md).**
 
+Windows 代理无异常记录却自动退出时，使用[独立进程监控](docs/external-process-monitor.md)，在不重启代理的情况下采集 uv/Python 生命周期、退出码、内存、探活和可读取的系统事件。
+
 ## ✨ 核心特性
 
 - **协议转换** - 支持 OpenAI Chat Completions、Anthropic Messages API 和 Responses 三种标准格式
