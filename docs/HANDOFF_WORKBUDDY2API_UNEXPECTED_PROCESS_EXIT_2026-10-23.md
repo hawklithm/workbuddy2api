@@ -207,6 +207,8 @@ Invoke-RestMethod "http://127.0.0.1:8787/health"
 
 ### 已实现
 
+- 提交 PR：[#18 — independently capture Windows uv/Python process exit evidence](https://github.com/hawklithm/workbuddy2api/pull/18)，目标 main；尚未合并或发布。本次仅部署只读等待监控，未切换真实代理启动方式。
+
 - `scripts/watch_processes.py`：独立进程、标准库 Win32 句柄取证；支持附加 PID、等待已有/将来的 `-m codebuddy_proxy`、显式启动新进程三种模式。
 - 保留 uv/Python/后代句柄，以 `WaitForSingleObject` 确认终止，再读真实 DWORD 退出码和 `GetProcessTimes` 的创建/退出时间。记录 PID/PPID、创建身份、内存、探活、业务日志白名单尾部摘要；不根据写入顺序猜死亡顺序。
 - `scripts/collect_windows_events.ps1`：后台查询 System/Application 错误/警告，以及可读 Security 4688/4689、Sysmon 1/5；按目标 PID 过滤审计事件，60 秒重叠，频道/record_id 可去重，记录截断、无权限、频道不存在和查询失败。不变更系统审计设置。
