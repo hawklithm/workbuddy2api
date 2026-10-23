@@ -50,6 +50,7 @@ from codebuddy_proxy.codebuddy_client_demo import CodeBuddyClient, CodeBuddyErro
 from codebuddy_proxy.billing_proxy import forward_billing
 from codebuddy_proxy.upstream_request import ChatRequestPreparer
 from codebuddy_proxy.protocol_response import format_nonstream_response
+from codebuddy_proxy.process_diagnostics import ProcessDiagnostics
 
 # 尝试导入高级功能模块（可选）
 try:
@@ -93,6 +94,17 @@ except ImportError:
 # 日志配置
 # ============================================================================
 
+class ObservedTimedRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
+    """Make otherwise-suppressed Python logging handler failures observable."""
+
+    def handleError(self, record: logging.LogRecord) -> None:
+        monitor = globals().get("process_diagnostics")
+        exc = sys.exc_info()[1]
+        if monitor is not None and exc is not None:
+            monitor.log_failure("file_logger", exc)
+        super().handleError(record)
+
+
 def setup_logging(log_dir: pathlib.Path) -> logging.Logger:
     """配置滚动日志：按天分片，保留30天。"""
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -103,7 +115,7 @@ def setup_logging(log_dir: pathlib.Path) -> logging.Logger:
     logger.propagate = False
     logger.handlers.clear()
     
-    handler = logging.handlers.TimedRotatingFileHandler(
+    handler = ObservedTimedRotatingFileHandler(
         log_file, when='midnight', interval=1, backupCount=30, encoding='utf-8'
     )
     handler.suffix = "%Y-%m-%d"
@@ -124,7 +136,7 @@ def setup_json_logging(log_file: pathlib.Path) -> logging.Logger:
     logger.propagate = False
     logger.handlers.clear()
 
-    handler = logging.handlers.TimedRotatingFileHandler(
+    handler = ObservedTimedRotatingFileHandler(
         log_file, when="midnight", interval=1, backupCount=30, encoding="utf-8"
     )
     handler.suffix = "%Y-%m-%d"
@@ -211,8 +223,10 @@ class ProxyState:
                 **kwargs,
             }
             self.json_logger.info(json.dumps(record, ensure_ascii=False))
-        except Exception:
-            pass
+        except Exception as exc:
+            monitor = globals().get("process_diagnostics")
+            if monitor is not None:
+                monitor.log_failure("jsonl_write", exc)
     
     def write_body_log(self, event: str, body: bytes, **kwargs) -> None:
         if self.json_logger is None:
@@ -228,18 +242,31 @@ class ProxyState:
                 **kwargs
             }
             self.json_logger.info(json.dumps(record, ensure_ascii=False))
-        except Exception:
-            pass
+        except Exception as exc:
+            monitor = globals().get("process_diagnostics")
+            if monitor is not None:
+                monitor.log_failure("jsonl_body_write", exc)
 
 
 # ============================================================================
 # FastAPI 应用
 # ============================================================================
 
-app = FastAPI(title="CodeBuddy Proxy (FastAPI)", version="2.0")
+app = FastAPI(title="CodeBuddy Proxy (FastAPI)", version="2.0.7")
 
 # 全局状态（在 main() 中初始化）
 proxy_state: ProxyState | None = None
+process_diagnostics: ProcessDiagnostics | None = None
+
+
+async def install_process_asyncio_diagnostics() -> None:
+    """Capture unhandled background task errors in the active Uvicorn loop."""
+    if process_diagnostics is not None:
+        process_diagnostics.install_asyncio(asyncio.get_running_loop())
+        process_diagnostics.install_signal_observers()
+
+
+app.router.add_event_handler("startup", install_process_asyncio_diagnostics)
 
 
 def get_state() -> ProxyState:
@@ -1990,10 +2017,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
-def main():
+def _run_proxy(args: argparse.Namespace) -> int:
     global proxy_state
-
-    args = parse_args()
     try:
         resolved_backend = resolve_backend_from_args(args)
         client = CodeBuddyClient(backend=resolved_backend)
@@ -2068,6 +2093,19 @@ def main():
     
     # 启动 uvicorn
     run_http_server(host=args.host, port=args.port, windows_loop=args.windows_loop)
+    return 0
+
+
+def main() -> int:
+    global process_diagnostics
+    args = parse_args()
+    monitor = ProcessDiagnostics(args.log_file.parent)
+    process_diagnostics = monitor
+    try:
+        return monitor.run(lambda: _run_proxy(args))
+    finally:
+        process_diagnostics = None
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
