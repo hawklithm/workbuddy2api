@@ -302,8 +302,9 @@ def find_proxies():
     command = """
     [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
     $ErrorActionPreference = 'Stop'
-    $rows = @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='uv.exe'" |
-      Where-Object { $_.CommandLine -match '(?:^|\\s)-m\\s+codebuddy_proxy(?:\\s|$)' } |
+    $rows = @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='uv.exe' OR Name='workbuddy2api-evidence.exe' OR Name='workbuddy2api-runtime.exe'" |
+      Where-Object { $_.CommandLine -match '(?:^|\\s)-m\\s+codebuddy_proxy(?:\\s|$)' -and
+        $_.CommandLine -notmatch 'watch_processes\\.py' } |
       ForEach-Object { @{pid=$_.ProcessId; ppid=$_.ParentProcessId; name=$_.Name;
         created_ticks=$_.CreationDate.ToUniversalTime().ToFileTimeUtc()} })
     ConvertTo-Json -InputObject $rows -Compress

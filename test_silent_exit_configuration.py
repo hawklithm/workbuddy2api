@@ -110,3 +110,28 @@ catch { $refused=$_.Exception.Message -like '*dedicated diagnostic image*' }
 @{refused=$refused;journal_written=(Test-Path $backupPath);registry_written=(Test-Path $testRoot)}|ConvertTo-Json
 """)
     assert json.loads(output) == dict(refused=True, journal_written=False, registry_written=False)
+
+
+@pytest.mark.parametrize('name', ['workbuddy2api-runtime.exe', 'workbuddy2api-observer.exe'])
+def test_real_runtime_images_configure_and_rollback_without_shared_python(tmp_path, name):
+    output = run_functions(tmp_path, """
+Set-Scope 'C:\\isolated-test\\IMAGENAME' (Split-Path $backupPath -Parent) $changes $backupPath
+$flags=(Get-ItemProperty ($ifeoRoot+'\\IMAGENAME')).GlobalFlag
+$shared=Test-Path ($ifeoRoot+'\\python.exe')
+Restore-RecordedValues $backupPath
+@{flags=$flags;shared=$shared;removed=(-not(Test-Path ($ifeoRoot+'\\IMAGENAME')))}|ConvertTo-Json
+""".replace('IMAGENAME', name))
+    assert json.loads(output) == dict(flags=512, shared=False, removed=True)
+
+
+def test_enabled_ifeo_filter_is_refused_before_changes(tmp_path):
+    output = run_functions(tmp_path, """
+$base=$ifeoRoot+'\\workbuddy2api-runtime.exe'
+$null=New-Item -Path $base -Force
+$null=New-ItemProperty -Path $base -Name UseFilter -Value 1 -PropertyType DWord
+$refused=$false
+try { Set-Scope 'C:\\isolated-test\\workbuddy2api-runtime.exe' (Split-Path $backupPath -Parent) $changes $backupPath }
+catch { $refused=$_.Exception.Message -like '*path filters*' }
+@{refused=$refused;unchanged=((Get-ItemProperty $base).UseFilter -eq 1);journal_written=(Test-Path $backupPath)}|ConvertTo-Json
+""")
+    assert json.loads(output) == dict(refused=True, unchanged=True, journal_written=False)

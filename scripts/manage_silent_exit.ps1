@@ -89,7 +89,8 @@ function Restore-RecordedValues($backupPath) {
 
 function Set-Scope($imagePath, $dumpFolder, $changes, $backupPath) {
     $imageName = [IO.Path]::GetFileName($imagePath)
-    if ($imageName -notin @('workbuddy-spe-probe.exe','workbuddy2api-evidence.exe')) {
+    if ($imageName -notin @('workbuddy-spe-probe.exe','workbuddy2api-evidence.exe',
+        'workbuddy-native-probe.exe','workbuddy2api-runtime.exe','workbuddy2api-observer.exe')) {
         throw 'Settings are restricted to our dedicated diagnostic image names; python.exe is never configured'
     }
     $baseKey = Join-Path $ifeoRoot $imageName
@@ -105,6 +106,9 @@ function Set-Scope($imagePath, $dumpFolder, $changes, $backupPath) {
     $globalFlags = 0
     if (Test-Path -LiteralPath $baseKey) {
         $key = Get-Item -LiteralPath $baseKey
+        if (($key.GetValueNames() -contains 'Debugger') -or $key.GetValue('UseFilter', 0)) {
+            throw 'Existing debugger or enabled path filters require manual review'
+        }
         if ($key.GetValueNames() -contains 'GlobalFlag') {
             if ($key.GetValueKind('GlobalFlag') -ne [Microsoft.Win32.RegistryValueKind]::DWord) {
                 throw 'Existing non-DWORD GlobalFlag requires manual review'

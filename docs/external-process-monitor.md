@@ -106,3 +106,5 @@ D:\workspace\workbuddy2api\.venv\Scripts\python.exe -m pytest -q --tb=short `
 Review 检查最小权限、无终止/重启接口、句柄释放、PID 重用、259、非阻塞采样、事件过滤/上限/失败、采集延迟和隐私。真实 Wave 关窗、注销/断电、终止者归因尚未验收，不能以隔离测试代替生产复现。
 
 参考：[进程句柄/ID](https://learn.microsoft.com/en-us/windows/win32/procthread/process-handles-and-identifiers)、[WaitForSingleObject](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject)、[4689](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/auditing/event-4689)、[Sysmon](https://learn.microsoft.com/en-us/windows/security/operating-system-security/sysmon/sysmon-events)。
+
+当前 Windows 实际解释器取证入口及回滚以 [silent-process-exit.md](silent-process-exit.md) 为准。2026-10-23 20:38/21:02 的再次退出证实 venv launcher 取证不足；新入口使用两个专用真实解释器映像，原 pythonw 观察器与额外独立 observer 保留。最新回归 267 passed、1 skipped、1 deselected。

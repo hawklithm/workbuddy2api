@@ -1,71 +1,65 @@
-# 静默退出来源取证（Windows，可回滚）
+# Windows 实际解释器退出取证
 
-现有外部监控已经证明 2026-10-23 19:41:31 venv launcher 最先以 FFFFFFFF 结束，解释器随后为 0、uv 为 FFFFFFFF；对临时 launcher 的强制终止复现了相同组合，但原事故触发者仍未知。此阶段增加 Windows Silent Process Exit，争取记录自行退出或跨进程 TerminateProcess 的来源和转储。
+2026-10-23 20:38 现场证实旧配置只覆盖 venv launcher，真正的 Anaconda python.exe 先退出，转储无法说明它的来源。21:02 再次出现启动监控解释器与代理解释器相近退出，顺序与此前不同。尚未确认根因。
 
-## 已验证的部署方式
+## 当前方案
 
-本机完整路径过滤试验未生成预期报告，未用于实际部署。改为在原 `.venv\Scripts` 中创建 `workbuddy2api-evidence.exe`，内容与原 `python.exe` 的 SHA256 完全一致，沿用相同 pyvenv.cfg / site-packages。仅对这个专用映像名设置 IFEO GlobalFlag=0x200 和 SilentProcessExit；**不设置全机 python.exe，不修改原解释器、依赖或业务代码**。
+`scripts/prepare_native_runtime.py` 从 `sys.base_prefix` 复制真实 CPython console/windowed 映像及 Python、VC runtime、Anaconda zlib DLL，生成独立 runtime。不是复制 venv redirector。专用映像名为 `workbuddy2api-runtime.exe` 和 `workbuddy2api-observer.exe`，只对这两个名称配置 Silent Process Exit，不修改共享 python.exe/pythonw.exe 的设置，也不改原 venv 文件。
 
-该更名本身会改变一个调查变量：如果原终止触发者按 python.exe 名称匹配，可能不再复现。因此长时间稳定只能支持隔离结果，不能据此认定原故障已修复。
+bootstrap 保留 DLL 搜索目录句柄，通过 site.addsitedir 使用原 venv 依赖及 editable 源码。sys.prefix 指向诊断 runtime，sys.base_prefix 保持原解释器；这是一项明确的环境差异。原 venv 及基础 Python 仍须保留。复制文件、基础映像/DLL 和原 pyvenv.cfg 的 SHA256 在启动前校验；升级 Python 后需重新验证。
 
-管理员脚本 `scripts/manage_silent_exit.ps1 -Action ValidateAndEnable -StateDirectory 绝对路径` 会：
+`scripts/manage_native_runtime.ps1` 的管理员验证要求：
 
-1. 拒绝覆盖已有静默退出配置；先备份每个拟修改的值及类型，写入原子更新的 registry journal。
-2. 保护本机证据目录 ACL，仅当前用户、SYSTEM、Administrators 访问。
-3. 创建两个独立临时命名启动器，验证未配置的 control 不产生报告、配置的 probe 自退出产生 3000、由本次 PowerShell 终止产生 3001 并识别 PowerShell。
-4. 等待 Windows 在按事故分组的子目录生成目标及发起者 mini dump；没有发起者转储则拒绝部署。所有 Kill 仅针对本次创建的精确 Process 对象。
-5. 撤回临时测试注册表设置，再对通过 SHA256 校验的专用启动器启用取证，写入 result.json。任意失败尝试回滚并记录错误；若存在 rollback_errors 必须先处理，不能把失败当成已恢复。
+- OS 映像、sys.executable 和实际 workload PID 相符，拒绝再次落入 redirector 子进程；确认 FastAPI、SSL、SQLite 和原代理源码可导入。
+- 临时真实解释器正常退出 23、自行 os._exit(29)，分别取得对应 3000。
+- 只终止本脚本创建且 readiness PID 匹配的临时 Process 对象，取得 3001、已知 PowerShell 发起者和目标/发起者两方 mini dump。
+- 临时 probe 配置回滚后，为两个生产映像设置 0x200、ReportingMode=2、IgnoreSelfExits=0、DumpType=0、MaxNumberOfDumpFiles=8；再对两个生产映像执行临时 import/identity 检查，分别确认 3000。这些测试事件不能当作真实事故。
+- 任何失败均尝试按每值 journal 回滚并保留错误。拒绝覆盖已有 SPE 设置或已启用 IFEO filter/debugger；不递归删除注册表，不停止真实代理。
 
-ReportingMode=2（仅本地转储）、IgnoreSelfExits=0、DumpType=0（MINIDUMP_TYPE 的 MiniDumpNormal，非全内存）、MaxNumberOfDumpFiles=8。没有配置 Debugger、MonitorProcess 命令、自启动、自动恢复或停止真实服务。Windows 可能按事故创建转储子目录；应按整次事故归档并管理磁盘，文件数量上限不等于严格总字节配额。
+日志/转储保留在仅当前用户、SYSTEM、Administrators 可访问的 state 目录；mini dump 仍可能包含敏感信息，不上传公开 PR。数量限制不等于总字节配额；启动监控的 stdout/stderr 也没有字节轮转。
 
-## 本次实机状态（2026-10-23）
+## 已部署与下次启动
 
-- 成功状态目录：`C:\Users\marcus\.workbuddy2api\silent-exit\20261023-causal-exit-04`，20:25:58 UTC+8 启用。
-- 原 launcher 与专用副本 SHA256：`A294897BC1A4780C2B8615BE41FDEBA62B6B2B83B13C46A530B299D6C66D29E0`。
-- 临时 self-exit、cross-process 事件及三份转储已取得；cross-process 报告指向本次测试 PowerShell，发起者 dump 可解析到线程栈和上下文。前一轮相同 dump 的离线检查有 28 个线程、28 份栈/上下文。
-- `start_proxy_with_evidence.ps1 -CheckOnly` 返回 ready，未启动代理。配置只对未来使用专用启动器的进程生效，不附加/重启当前真实服务。
-- 之前失败尝试因备份写入兼容、PowerShell 5.1 JSON 数组包裹、转储子目录检查而停止；回滚问题已修正并验证。路径过滤试验的临时配置也已清理。失败状态目录留作审计，不作为已启用实例。
+本机有效状态：`C:\Users\marcus\.workbuddy2api\silent-exit\20261023-native-runtime-04\result.json`，2026-10-23 21:11:10 UTC+8，status=native_runtime_enabled。01/02 为已回滚失败尝试（缺少 Anaconda zlib 导致进程初始化失败）；03 验证成功后已回滚，由含源文件哈希及双生产映像验证的 04 取代。
 
-## 下一次启动
+原 pythonw 观察器保持运行。另有专用观察器 PID 36748 于 21:12:24 启动，只观察，不启动代理，日志在 `C:\Users\marcus\.workbuddy2api\monitor\20261023-211224-5ed62f15`。PID/存活状态应现场核对；没有开机自启或自动重启设置。
+
+下次手动启动（命令保持一致）：
 
 ```powershell
 & 'D:\workspace\workbuddy2api-external-monitor\scripts\start_proxy_with_evidence.ps1'
 ```
 
-脚本自动选择最近成功且未回滚的本机状态，检查注册表、launcher 原件/副本 SHA256，发现已有代理时拒绝重复启动，也不会结束它。随后在原项目目录，用原 venv Python 运行独立 `watch_processes.py --launch`，由它启动专用 launcher：`-m codebuddy_proxy --desensitize --host 0.0.0.0`。
-
-这次没有经过 uv，目标无控制台、stdin=DEVNULL，不适合交互登录；应预先完成认证。启动命令、文件名、控制台和父进程均是隔离变量，必须与历史运行区别记录。原无控制台等待监控仍可观察实际 python.exe，新启动父监控负责专用 launcher 的完整句柄记录，不需要停止旧监控。
-
-终端显示取证目录，原生 stdout/stderr 保存在该目录 `target-stdout.log` / `target-stderr.log`，不在终端实时显示，也不轮转。外部 JSONL 仍按既有规则轮转。用 `/health` 或日志确认服务成功启动，不能只看启动脚本是否返回。
-
-仅检查，不启动：
+只检查配置，不启动：
 
 ```powershell
 & 'D:\workspace\workbuddy2api-external-monitor\scripts\start_proxy_with_evidence.ps1' -CheckOnly
 ```
 
-**继续使用旧 `uv run python -m codebuddy_proxy ...` 仅有原外部监控，不会获得本次专用映像取证。** 如果需要保留 uv 或原控制台，应另设计单变量启动实验，不能混同两种运行条件。
+入口只接受 native_runtime_enabled，拒绝旧 launcher-only 状态；检查哈希及两套 Windows 配置，拒绝已有代理。以无控制台 observer 映像启动独立监控，再启动真实 runtime 映像，不经过 uv 或 venv redirector。入口返回 observer PID、监控目录及启动日志；这只是进程创建确认，健康状态需查看日志。关闭启动终端不会主动执行清理代理，但 Windows Job/会话策略仍可能影响进程。
 
-## 故障后查看与隐私
+取证配置供未来启动生效。此次未由维护者启动/停止/重启真实代理，也没有把仍在运行的进程热切换到新解释器。
 
-独立 JSONL、Windows Application 的 `Microsoft-Windows-ProcessExitMonitor` 3000/3001、上述状态目录 `dumps` 子目录共同保全。3001 的参数有目标路径、终止发起者路径、状态和目标创建时间；创建时间可与外部监控的 created_ticks 对齐，避免同名/重复 PID 误配。现有 Windows 事件采集助手已补充该 provider 的信息级事件，原运行中的监控器下一次调用助手即可读到，无需重启。
+## 配置与回滚
 
-转储可能包含敏感内存（mini dump 也不能保证无凭证），只留本机受限目录，不上传 PR。发起者 PID/线程栈可从其转储进一步分析；报告中的退出码不替代调用来源证据。Windows 未承诺覆盖内核发起终止、所有 Job 回收路径、最后线程退出、断电等情况。没有报告不能直接排除外部终止。
-
-## 回滚
-
-管理员 PowerShell 执行（只恢复本工具记录的值，不停止任何进程）：
+在 64 位管理员 Windows PowerShell 中，新机器/重新验证使用全新 state 目录：
 
 ```powershell
-& 'D:\workspace\workbuddy2api-external-monitor\scripts\manage_silent_exit.ps1' `
-  -Action Rollback `
-  -StateDirectory 'C:\Users\marcus\.workbuddy2api\silent-exit\20261023-causal-exit-04'
+& 'D:\workspace\workbuddy2api-external-monitor\scripts\manage_native_runtime.ps1' -Action ValidateAndEnable -StateDirectory 'C:\Users\marcus\.workbuddy2api\silent-exit\NEW-UNUSED-DIRECTORY'
 ```
 
-回滚检查当前值是否仍等于本工具写入值，发现后来其他工具修改时报告冲突；不覆盖未知更改，不递归删除注册表。仅删除本轮新建且已空的键。诊断 exe 副本和证据目录保留，不删除运行中的文件；不再用于诊断时可在确认无进程使用后由维护者归档。回滚后启动脚本会拒绝使用已撤销状态；原启动方式保持可用。
+已有本工具配置应先使用其 state 回滚，不覆盖。当前配置回滚：
 
-单元回归只在随机 HKCU 测试键检查备份连续更新、保留原值、回滚冲突、拒绝已有配置及拒绝共享 python.exe，从不在单元测试中写 HKLM。管理员实机验证负责上述原生报告/转储验收，两者分别记录。
+```powershell
+& 'D:\workspace\workbuddy2api-external-monitor\scripts\manage_native_runtime.ps1' -Action Rollback -StateDirectory 'C:\Users\marcus\.workbuddy2api\silent-exit\20261023-native-runtime-04'
+```
 
-最终回归 257 passed、1 skipped、1 deselected；排除项为原有 Windows 0600 文件权限断言。Review 重点为白名单映像范围、配置/回滚冲突保护、测试对象所有权、PowerShell 5.1 行为、信息级事件采集、目录权限与转储数据边界。
+回滚只恢复设置，保留文件及证据，不停止任何代理/观察器。旧 launcher-only 配置仍作为历史独立 state 保留；需要撤销时用旧 manage_silent_exit.ps1 配合原 state，不能拿新脚本混用旧 journal。
 
-参考：[微软 Silent Process Exit](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/registry-entries-for-silent-process-exit/)、[监控标志 0x200](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/enable-silent-process-exit-monitoring)。
+## 判断边界及验证
+
+3000 表示受支持路径上的自行退出；3001 可提供跨进程终止发起者，结合目标创建时间、句柄时间线及双方转储分析。未捕获事件不能排除内核终止、部分 Job 清理、最后线程退出、断电等未覆盖路径。改变映像名称可能改变按名称清理行为，即使不再复现也不能单凭稳定性确认根因。
+
+回归：267 passed、1 skipped、1 deselected；排除项仍是原 Windows POSIX 0600 权限断言。新增测试验证真实 OS 映像/PID、最小 PATH 下依赖解析、无控制台 observer/临时子进程的完整退出记录、参数转义、文件变更拒绝、HKCU 私有测试键配置/回滚与冲突保护。原生管理员事件/转储验收另行完成；未做真实代理启动验收。Review 重点为范围、进程所有权、可回滚性、依赖一致性及证据关联。
+
+参考：[Microsoft Silent Process Exit](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/registry-entries-for-silent-process-exit/)、[Python DLL 搜索目录](https://docs.python.org/3.10/library/os.html#os.add_dll_directory)。

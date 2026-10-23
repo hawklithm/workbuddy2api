@@ -274,3 +274,29 @@ Invoke-RestMethod "http://127.0.0.1:8787/health"
 旧 `uv run python -m codebuddy_proxy ...` 仍可运行，但只有上一层退出码监控，**不会启用专用映像的静默退出来源取证**。完整操作/回滚/边界见 [silent-process-exit.md](silent-process-exit.md)。此机制不覆盖所有内核/Job/最后线程退出路径，也不证明过去故障的发起者。
 
 最终回归：**257 passed、1 skipped、1 deselected**，排除的仍是原 Windows 0600 断言。新增 5 个配置/回滚单元测试只用随机 HKCU 测试键；管理员实机验证另行记录。原自动发现测试只有 3 秒观察窗口，短于 CIM 查询 10 秒超时，负载下先结束；将该临时观察窗口修正为 12 秒后回归通过，没有改变真实代理或监控器的运行逻辑。代码 Review 完成，并核实生产两处 python.exe 注册表键未创建、临时 probe 配置已清理、专用映像配置可读、启动前检查 ready。
+
+## 十二、20:38:18 再次退出：已取证，实际解释器来源仍有缺口
+
+用户确认使用新入口后再次自动退出，对当时是否有其他 AI/清理脚本运行表示不确定。本轮只读调查进程及事件、离线解析保存的 dump；没有启动、停止、重启代理，也没有强制终止测试或更改系统取证配置。
+
+持久 pythonw 监控保存的 Windows exit_ticks 表明：实际代理 Python PID 33180 在 20:38:18.253396 最先结束；启动监控实际 Python PID 39968 在 .290291 结束；其 venv launcher PID 123156 在 .297212 结束；专用代理 launcher PID 124092 在 .854554 结束。四者退出码均为 FFFFFFFF。原 pythonw 监控仍存活；新启动监控自身未能写出退出事件。
+
+Windows ProcessExitMonitor 3000（RecordId 146658）及 16601 字节、单线程的转储只对应专用 launcher PID 124092。离线栈包含 RtlExitUserProcess，支持它随后自行退出；不对应最先结束的实际解释器，不能识别后者的终止来源。没有本轮 3001。20:25 的跨进程 3001 属于隔离测试，不能当成本轮证据。
+
+上一版配置只覆盖专用 launcher，实际运行 Python 仍是共享 Anaconda python.exe，未启用退出来源取证。这是已确认的覆盖缺口。多 Python 进程在约 37 ms 内结束而 pythonw 存活，是排查外部清理/终止行为的线索，不足以认定按名批量终止或归因某个客户端。19:41 的 launcher 先退出顺序也不能套用于本轮。
+
+完整本机证据及分析：C:\Users\marcus\.workbuddy2api\evidence\20261023-203818\ANALYSIS.md。原始日志和 dump 仅保留本机，不上传公开 PR。下一阶段需设计实际解释器及监控进程的来源取证，明确共享 python.exe 配置的影响、限量和回滚后实施；保留独立 pythonw 观察器。历史及本轮根因均未确认。
+
+## 十三、21:02 再次退出及实际解释器取证补齐
+
+21:02:24.833883 启动监控实际解释器 PID 170704 最先退出，venv 父 PID 201900 于 .840553 退出；代理实际解释器 PID 258404 于 .912141 退出；专用 launcher PID 159076 于 21:02:25.333252 退出，均 FFFFFFFF。原独立 pythonw 保存了时间线，Application 3000 RecordId 146661 仍只对应旧 launcher。其他项目原先存在的 Python 进程在后续快照中也不见，但缺少它们的精确退出时间/来源，不能据此认定同一原因。本轮证据保存在 C:\Users\marcus\.workbuddy2api\evidence\20261023-210225。
+
+已改为专用真实 CPython 映像运行，覆盖代理 runtime 和无控制台 observer，保留原 pythonw。bootstrap 使用原依赖和源码；sys.prefix 改为诊断 runtime，映像名称/父进程/控制台也是变量。没有修改全机共享 python.exe/pythonw.exe 的 IFEO/SPE。旧启动命令保持，但入口现在拒绝 launcher-only 状态，并自动选择已验证的 native runtime。
+
+有效 state：C:\Users\marcus\.workbuddy2api\silent-exit\20261023-native-runtime-04，21:11:10 enabled。临时 normal PID 136100、abrupt self PID 233756、cross termination PID 19876；已知临时发起者是管理员测试 PowerShell PID 246860。已取得对应 3000/3001、双方 mini dump，生产两映像的临时 import/identity PID 142044、193460 均验证同进程运行且取得 3000。所有强制终止只针对独立创建的测试 Process 对象；未启动、停止或重启真实代理。
+
+额外常驻观察器 PID 36748 于 21:12:24 启动，不启动代理；日志 C:\Users\marcus\.workbuddy2api\monitor\20261023-211224-5ed62f15。原 pythonw 64468/246352 保持运行；没有开机自启或自动重启。状态应现场重查。
+
+完整回归 267 passed、1 skipped、1 deselected，排除原 Windows 0600 权限断言。Review 修正了最小 PATH 下缺少 Anaconda zlib 的初始化失败、跨 PowerShell 版本 Get-FileHash 模块解析、旧监控命令被误识别为代理、源运行时变化拒绝及已有 IFEO filter/debugger 冲突保护。退出测试事件按实际映像路径和退出码筛选，转储检查目标/发起者精确 PID；不得混入真实事故。配置、启动、回滚与限制详见 docs/silent-process-exit.md。
+
+结论仍是根因未知；这轮交付补齐实际解释器取证，不宣称业务故障已修复，也不保证覆盖所有内核/Job 退出路径。原始日志/转储仅保留本机，PR 不包含原始内存或业务日志。
