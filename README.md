@@ -704,6 +704,16 @@ Example output:
 
 ---
 
+### Process diagnostics (2.0.7)
+
+In addition to the existing business logs, `console.log` mirrors Python stdout/stderr
+(including Uvicorn errors and tracebacks), `process-events.jsonl` records process
+startup, exit codes, signals and unhandled exceptions, and `crash.log` captures
+Python fatal fault stacks. These files are written alongside `--log-file`.
+The console and process-event files rotate by size; see
+[process diagnostics](docs/process-diagnostics-2.0.7.md) for details.
+**Console logs may contain sensitive data: review before sharing.**
+
 ### Logging
 
 Logs include:

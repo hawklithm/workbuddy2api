@@ -769,6 +769,15 @@ grep projection_applied "$HOME/.workbuddy2api/codebuddy-proxy.jsonl" | jq .
 
 ---
 
+### 进程诊断（2.0.7）
+
+除原有业务日志外，`console.log` 留存 Python stdout/stderr（包括 Uvicorn 异常和
+traceback），`process-events.jsonl` 记录进程启动、退出码、信号及未处理异常，
+`crash.log` 用于 Python 底层致命错误堆栈。文件均存放在 `--log-file` 所在目录。
+控制台和进程事件日志按大小轮转。详细说明见
+[进程诊断指南](docs/process-diagnostics-2.0.7.md)。
+**控制台日志可能包含敏感信息，公开前请先脱敏。**
+
 ### 日志
 
 日志包含：
