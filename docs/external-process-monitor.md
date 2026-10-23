@@ -2,6 +2,8 @@
 
 此工具用于回答「uv 和 Python 谁先退出、Windows 记录的退出码/退出时间是什么」。它不判断根因、不自动重启、不导入代理代码；兼容 main 2.0.6 和 PR #17 的 2.0.7。仅依赖 Python 3.10+ 标准库和 Windows PowerShell。
 
+需要进一步捕获终止发起者时，参见[Silent Process Exit 取证和诊断启动命令](silent-process-exit.md)。本机已验证并配置专用诊断映像；旧 `uv run python ...` 不会触发这层 Windows 取证。
+
 ## 三种模式
 
 | 模式 | 行为 |

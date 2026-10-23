@@ -46,7 +46,15 @@ foreach ($channel in $channels) {
                 $items += @(Read-WindowEvents @{LogName=$channel; FilterXPath=$query})
             }
             $items = @($items | Sort-Object RecordId -Descending -Unique)
-        } else { $items = @(Read-WindowEvents @{FilterHashtable=$filter}) }
+        } else {
+            $items = @(Read-WindowEvents @{FilterHashtable=$filter})
+            if ($channel -eq 'Application') {
+                # Silent Process Exit reports are informational/classic events, not errors.
+                $exitFilter = @{LogName=$channel; ProviderName='Microsoft-Windows-ProcessExitMonitor'; StartTime=$start; EndTime=$end}
+                $items += @(Read-WindowEvents @{FilterHashtable=$exitFilter})
+                $items = @($items | Sort-Object RecordId -Descending -Unique)
+            }
+        }
         $rows = @()
         foreach ($item in ($items | Select-Object -First 200)) {
             $xml = [xml]$item.ToXml()
@@ -59,6 +67,12 @@ foreach ($channel in $channels) {
                     'AppPath','ModulePath','ReportId')) {
                     $data[$node.Name] = [string]$node.'#text'
                 }
+            }
+            if ($item.ProviderName -eq 'Microsoft-Windows-ProcessExitMonitor') {
+                # Only this provider's documented image/status/creation-time parameters.
+                $values = @($item.Properties | ForEach-Object { [string]$_.Value })
+                $data['report_type'] = if (($item.Id -band 65535) -eq 3001) { 'cross_process' } else { 'self_exit' }
+                $data['parameters'] = $values
             }
             if ($channel -eq 'Security' -or $channel -like '*Sysmon*') {
                 $matchesTarget = $false

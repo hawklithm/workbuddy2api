@@ -230,13 +230,15 @@ def test_watch_mode_waits_without_starting_proxy(tmp_path, owned):
 def test_watch_discovers_real_temporary_module(tmp_path, owned):
     # This isolated module shares only the invocation name, never imports or starts the proxy.
     module = tmp_path / "codebuddy_proxy.py"
-    module.write_text("import time; time.sleep(15)\n", encoding="utf-8")
+    module.write_text("import time; time.sleep(30)\n", encoding="utf-8")
     env = os.environ.copy()
     env["PYTHONPATH"] = str(tmp_path)
     target = subprocess.Popen([sys.executable, "-m", "codebuddy_proxy"], cwd=tmp_path, env=env,
                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        proc = monitor(owned, tmp_path / "monitor", "--watch-proxy", duration="3")
+        # Discovery invokes CIM in a worker with a 10-second timeout. A 3-second
+        # observer lifetime can end before a healthy query returns on a busy host.
+        proc = monitor(owned, tmp_path / "monitor", "--watch-proxy", duration="12")
         row = wait_for(tmp_path / "monitor", lambda r: r["event"] == "process_observed" and r["pid"] == target.pid)
         assert row["name"].lower() == "python.exe"
         target.terminate()

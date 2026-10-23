@@ -238,3 +238,39 @@ Invoke-RestMethod "http://127.0.0.1:8787/health"
 等待模式有约 5 秒加 CIM 延迟的发现窗口，短命进程可能漏采；手动附加也不能恢复先前已死亡进程退出码。需要更强根进程覆盖时，由维护者在下次受控启动选择 `--launch`，不要为切换监控而现在重启真实服务。
 
 **根因分层：历史服务消失且缺失内部退出事件已证实；真正退出机制、终止调用者、是否 native/资源问题仍未排除。退出码可缩小范围，不足以单独证明外部 kill。**
+
+## 十、19:41:31 再次退出：已取得真实状态及隔离复现
+
+用户 19:27 重新启动代理，确认故障时没有操作终端。监控记录：venv launcher 84896 于 **19:41:31.066082** 先退出、状态 **FFFFFFFF**；实际解释器 236188 于 **19:41:31.070364** 退出、状态 **0**；uv 189208 于 **19:41:31.070937** 退出、状态 **FFFFFFFF**。以上为 UTC+8，按 Windows exit_ticks 排序，不按事件行顺序。
+
+本轮业务日志 5 个 stream_started 均有 HTTP 200 完成记录，最后 19:41:29；19:41:30.533 最近健康探测仍成功。Python 内部仍无本轮退出事件或 traceback，crash.log 空。原 PowerShell/Wave/wavesrv 仍在。System/Application 无已取得的匹配崩溃警告/错误，Security/Sysmon 缺口不变。内存采样未见持续增长，不能排除采样间隔内瞬时问题。
+
+用相同 uv/venv 运行独立临时等待任务，以 readiness 文件验证工作解释器及其父 launcher 后，只强制终止该临时 launcher，复现 **launcher FFFFFFFF → interpreter 0 → uv FFFFFFFF**；直接强制终止临时解释器则三层均 FFFFFFFF，组合不同。未操作真实服务。最初探索性枚举误收 uv 探测进程，已改为 readiness 精确识别，并仅使用最终复现结果。
+
+强线索是 launcher 层异常终止后连带实际解释器，尚无原事故终止调用方或 Job/控制台事件证据；不能认定 Wave、安全软件或外部 kill 已证实。code=0 也不能解释成实际解释器正常收尾。下一步重点取得 launcher 终止来源，而非先改业务协议。
+
+已保全六份代理/监控日志、Wave 日志、SHA256、完整流式请求配对和复现脚本/结果于本机 `C:\Users\marcus\.workbuddy2api\evidence\20261023-194131`，详见该目录 `ANALYSIS.md`；敏感原日志不上传。本次没有启动、停止或重启真实代理。监控器继续等待。
+
+## 十一、Silent Process Exit 已验证及部署（20:25:58 UTC+8）
+
+用户授权实施下一层取证后，经 Windows UAC 运行了隔离验证。为避免全机 python.exe 影响，生产配置仅针对原 venv 内新增的 **workbuddy2api-evidence.exe**；它与原 python.exe 字节及 SHA256 完全相同，沿用同一 pyvenv.cfg 和 site-packages。原 python.exe 的 IFEO/SilentProcessExit 均未配置。完整路径过滤试验未拿到报告，未用于生产；临时设置已清理。
+
+最终验证拿到 self-exit 3000、cross-process 3001，后者明确指向本次测试 PowerShell，且生成临时目标与发起者两方 mini dump（含线程栈/上下文）。所有 Kill 仅对测试创建的精确 Process 对象；没有启动、停止或重启真实代理。原独立监控继续运行，采集助手已补充 ProcessExitMonitor 信息级事件并核实可读。
+
+- 管理/回滚脚本：`scripts/manage_silent_exit.ps1`，有每值原始状态备份、冲突保护和失败回滚；现有静默退出配置会拒绝覆盖。
+- 成功状态：`C:\Users\marcus\.workbuddy2api\silent-exit\20261023-causal-exit-04\result.json`，status=enabled_for_future_starts。转储在同目录 dumps 的事故子目录；仅当前用户/SYSTEM/Administrators 访问。
+- 参数：GlobalFlag 0x200、ReportingMode 2、IgnoreSelfExits 0、DumpType 0（mini）、MaxNumberOfDumpFiles 8；没有 Debugger、MonitorProcess 回调、自启或自动重启设置。
+- 启动前检查已返回 ready；用专用映像运行的临时 import 测试确认 sys.prefix 为原 `.venv`、FastAPI 来自原 site-packages。此正常退出测试可能留下自退出报告/转储，不能当作真实代理事故。
+- 前期试验暴露了 PowerShell 原子备份、JSON 数组反序列化和 Windows 转储子目录检查问题，已修正；失败状态目录保留但不作为已启用实例。当前临时测试 IFEO/SPE 键均不存在。
+
+**下次运行需使用新入口：**
+
+```powershell
+& 'D:\workspace\workbuddy2api-external-monitor\scripts\start_proxy_with_evidence.ps1'
+```
+
+它先校验配置和哈希，拒绝重复启动现有代理，然后由外部监控父进程启动专用 launcher。原生 stdout/stderr 保存在显示的取证目录，不实时回显。此方式不经过 uv、无交互 stdin；更名/父进程/控制台都是隔离变量，不能据稳定性直接认定根因。
+
+旧 `uv run python -m codebuddy_proxy ...` 仍可运行，但只有上一层退出码监控，**不会启用专用映像的静默退出来源取证**。完整操作/回滚/边界见 [silent-process-exit.md](silent-process-exit.md)。此机制不覆盖所有内核/Job/最后线程退出路径，也不证明过去故障的发起者。
+
+最终回归：**257 passed、1 skipped、1 deselected**，排除的仍是原 Windows 0600 断言。新增 5 个配置/回滚单元测试只用随机 HKCU 测试键；管理员实机验证另行记录。原自动发现测试只有 3 秒观察窗口，短于 CIM 查询 10 秒超时，负载下先结束；将该临时观察窗口修正为 12 秒后回归通过，没有改变真实代理或监控器的运行逻辑。代码 Review 完成，并核实生产两处 python.exe 注册表键未创建、临时 probe 配置已清理、专用映像配置可读、启动前检查 ready。
