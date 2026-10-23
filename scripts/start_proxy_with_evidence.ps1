@@ -78,5 +78,5 @@ $process = Start-Process -FilePath $manifest.observer -ArgumentList $argumentLin
 Start-Sleep -Seconds 2
 if ($process.HasExited) { throw "Observer exited during startup; inspect $launchRoot" }
 @{status='observer_started';observer_pid=$process.Id;launch_logs=$launchRoot;
-  monitor_output=(Get-Content (Join-Path $launchRoot 'observer-stdout.log') -Raw -ErrorAction SilentlyContinue);
+  monitor_output=([string](Get-Content -LiteralPath (Join-Path $launchRoot 'observer-stdout.log') -Raw)).Trim();
   health_verified=$false;automatic_restart=$false} | ConvertTo-Json

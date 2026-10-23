@@ -300,3 +300,11 @@ Windows ProcessExitMonitor 3000（RecordId 146658）及 16601 字节、单线程
 完整回归 267 passed、1 skipped、1 deselected，排除原 Windows 0600 权限断言。Review 修正了最小 PATH 下缺少 Anaconda zlib 的初始化失败、跨 PowerShell 版本 Get-FileHash 模块解析、旧监控命令被误识别为代理、源运行时变化拒绝及已有 IFEO filter/debugger 冲突保护。退出测试事件按实际映像路径和退出码筛选，转储检查目标/发起者精确 PID；不得混入真实事故。配置、启动、回滚与限制详见 docs/silent-process-exit.md。
 
 结论仍是根因未知；这轮交付补齐实际解释器取证，不宣称业务故障已修复，也不保证覆盖所有内核/Job 退出路径。原始日志/转储仅保留本机，PR 不包含原始内存或业务日志。
+
+## 十四、用户手动启动验收与输出修正（21:18–21:22）
+
+用户于 21:18:39 通过入口启动，本轮 observer PID 92096、实际 runtime PID 120080，健康日志至 21:22 连续 HTTP 200，说明新入口已实际启动代理且探活成功。日志目录 C:\Users\marcus\.workbuddy2api\monitor\20261023-211839-daa868e0。启动结果 health_verified=false 仅表示启动脚本本身未等待健康验收。
+
+PowerShell 5.1 的 Get-Content 字符串包含 PSPath/PSDrive 等扩展属性，直接送进 ConvertTo-Json 导致 monitor_output 变成庞大对象。已在启动输出处转换并 Trim 成普通字符串，使用当前打开的重定向日志实测序列化只含目录。保持 Get-Content 的共享读取方式；不使用可能与重定向写入冲突的 File.ReadAllText。此次未重启任何进程。
+
+21:21 快照中此前 64468/246352 的 pythonw 及额外 observer 36748 已不在，36748 最后日志为 21:18:17，未取得其确切退出来源。不能继续声称原两套常驻观察器仍存活；当前确认存活的是用户此次启动的 observer 92096 与代理 120080。此状态变动需保留为后续独立调查项。
