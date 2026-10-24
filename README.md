@@ -415,7 +415,8 @@ and only to accounts with the same region and endpoint. Each account is tried
 at most once per request. The proxy skips a candidate only when the request's
 model is cooling down there; other models on that account remain eligible. A
 missing or invalid model does not create a model cooldown or trigger failover.
-If every eligible account returns `429`, the original `429` is returned.
+If all tried accounts return `429`, the final status remains `429`, and the
+last upstream response's `Retry-After` header is preserved when present.
 Cooldowns are tracked per account and model, using upstream `Retry-After` or a
 default 60 seconds when that value is missing or invalid. The setting and model
 cooldowns persist across restarts. Old v1 account-wide cooldowns had no model
