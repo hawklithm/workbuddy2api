@@ -15,7 +15,9 @@ Usage with uv:
 
 import argparse
 import asyncio
+import copy
 from contextlib import asynccontextmanager, nullcontext
+from contextvars import ContextVar
 import base64
 import hashlib
 import io
@@ -29,6 +31,7 @@ import pathlib
 import platform
 import sys
 import time
+import tempfile
 import uuid
 from contextlib import AsyncExitStack
 from typing import Any, Optional
@@ -44,6 +47,8 @@ from codebuddy_proxy.backend_profile import (
     BackendProfile,
     ResolvedBackend,
     DOMESTIC_PROFILE,
+    GLOBAL_PROFILE,
+    resolve_backend,
     resolve_backend_from_args,
 )
 from codebuddy_proxy.codebuddy_client_demo import CodeBuddyClient, CodeBuddyError
@@ -51,6 +56,7 @@ from codebuddy_proxy.billing_proxy import forward_billing
 from codebuddy_proxy.upstream_request import ChatRequestPreparer
 from codebuddy_proxy.protocol_response import format_nonstream_response
 from codebuddy_proxy.process_diagnostics import ProcessDiagnostics
+from codebuddy_proxy.admin_api import create_admin_router
 
 # 尝试导入高级功能模块（可选）
 try:
@@ -180,8 +186,12 @@ class ProxyState:
         verbose_llm: bool = False,
         logger: logging.Logger | None = None,
         json_logger: logging.Logger | None = None,
+        account_manager=None,
     ):
-        self.client = client
+        self._client = client
+        self.account_manager = account_manager
+        self.account_runtime = account_manager
+        self.managed_auth = account_manager is not None
         self.mock_dir = mock_dir
         self.log_file = log_file
         self.enable_desensitize = enable_desensitize
@@ -191,13 +201,47 @@ class ProxyState:
         self.json_logger = json_logger
         self.runtime_info = get_runtime_info()
         self.started_at = time.time()
+        checkins = getattr(account_manager, "checkins", None)
+        if checkins is not None:
+            checkins.configure_logging(self.log_checkin)
+
+    def log_checkin(self, event: str, **fields) -> None:
+        """Send safe check-in events to existing files and the process console."""
+        self.write_log(event, **fields)
+        summary = json.dumps(fields, ensure_ascii=False)
+        if self.logger is not None:
+            self.logger.info("%s: %s", event, summary)
+        try:
+            print(f"[Checkin] {event} {summary}", flush=True)
+        except (OSError, UnicodeError):
+            pass
+
+    @property
+    def client(self):
+        if self.account_manager is not None:
+            return self.account_manager.client or self._client
+        return self._client
+
+    @client.setter
+    def client(self, value):
+        self._client = value
+
+    def for_request(self):
+        """Pin the account before any await, including refresh and billing retries."""
+        snapshot = copy.copy(self)
+        snapshot._client = self.client
+        snapshot.account_manager = None
+        return snapshot
     
     def ensure_auth(self) -> None:
         """确保已认证；认证失败（token 过期/网络错误/登录未完成）返回结构化 401 而非 500。"""
         if self.mock_dir is not None:
             return
         try:
-            self.client.ensure_authenticated()
+            if self.managed_auth:
+                self.client.ensure_authenticated(open_browser=False, allow_login=False)
+            else:
+                self.client.ensure_authenticated()
         except HTTPException:
             raise  # 已是结构化异常，原样透传（如 503 proxy not initialized）
         except Exception as exc:
@@ -205,9 +249,9 @@ class ProxyState:
                 status_code=401,
                 detail={
                     "error": {
-                        "message": "认证失败：token 无效或已过期，请重新登录（--login）",
+                        "message": "认证失败：请在 /admin 关联或切换账号，或重新登录（--login）",
                         "type": "authentication_error",
-                        "details": str(exc)[:200],
+                        "details": type(exc).__name__ if self.managed_auth else str(exc)[:200],
                     }
                 },
             )
@@ -257,6 +301,21 @@ app = FastAPI(title="CodeBuddy Proxy (FastAPI)", version="2.0.7")
 # 全局状态（在 main() 中初始化）
 proxy_state: ProxyState | None = None
 process_diagnostics: ProcessDiagnostics | None = None
+_request_state: ContextVar[Any] = ContextVar("account_request_state", default=None)
+
+
+@app.middleware("http")
+async def pin_account_at_request_entry(request: Request, call_next):
+    # Capture before body parsing or other awaits. Each downstream task also
+    # inherits this context, including streaming responses.
+    if proxy_state is None or not request.url.path.startswith("/v1/"):
+        return await call_next(request)
+    state = proxy_state.for_request() if isinstance(proxy_state, ProxyState) else proxy_state
+    token = _request_state.set(state)
+    try:
+        return await call_next(request)
+    finally:
+        _request_state.reset(token)
 
 
 async def install_process_asyncio_diagnostics() -> None:
@@ -269,10 +328,45 @@ async def install_process_asyncio_diagnostics() -> None:
 app.router.add_event_handler("startup", install_process_asyncio_diagnostics)
 
 
+async def start_account_checkin() -> None:
+    if isinstance(proxy_state, ProxyState) and proxy_state.account_manager is not None:
+        await proxy_state.account_manager.checkins.start()
+
+
+app.router.add_event_handler("startup", start_account_checkin)
+
+
+async def close_account_manager() -> None:
+    if isinstance(proxy_state, ProxyState) and proxy_state.account_manager is not None:
+        await proxy_state.account_manager.checkins.close()
+        proxy_state.account_manager.close()
+
+
+app.router.add_event_handler("shutdown", close_account_manager)
+
+
 def get_state() -> ProxyState:
     if proxy_state is None:
         raise HTTPException(status_code=503, detail={"error": {"message": "proxy not initialized", "type": "internal_error"}})
     return proxy_state
+
+
+def get_request_state():
+    pinned = _request_state.get()
+    if pinned is not None:
+        return pinned
+    state = get_state()
+    return state.for_request() if isinstance(state, ProxyState) else state
+
+
+def get_account_manager():
+    manager = getattr(get_state(), "account_manager", None)
+    if manager is None:
+        raise HTTPException(status_code=503, detail="Account management is unavailable in this mode")
+    return manager
+
+
+app.include_router(create_admin_router(get_account_manager))
 
 
 # ============================================================================
@@ -857,7 +951,7 @@ async def health():
 async def checkin_status():
     """Accept GET/POST locally; the real upstream billing status endpoint requires POST."""
     return await forward_billing(
-        get_state(), "POST", "/v2/billing/meter/checkin-status", diagnostic
+        get_request_state(), "POST", "/v2/billing/meter/checkin-activity-status", diagnostic
     )
 
 
@@ -865,7 +959,7 @@ async def checkin_status():
 async def checkin():
     """POST daily check-in: preserve the upstream HTTP status and raw body."""
     return await forward_billing(
-        get_state(), "POST", "/v2/billing/meter/daily-checkin", diagnostic
+        get_request_state(), "POST", "/v2/billing/meter/daily-checkin", diagnostic
     )
 
 
@@ -935,7 +1029,7 @@ async def parse_request_body(request: Request) -> Any:
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
-    state = get_state()
+    state = get_request_state()
     body = await parse_request_body(request)
     
     log_client_request("POST", "/v1/chat/completions", body)
@@ -950,7 +1044,7 @@ async def chat_completions(request: Request):
 
 @app.post("/v1/responses")
 async def create_response(request: Request):
-    state = get_state()
+    state = get_request_state()
     body = await parse_request_body(request)
     
     log_client_request("POST", "/v1/responses", body)
@@ -1013,7 +1107,7 @@ async def create_response(request: Request):
 
 @app.post("/v1/messages")
 async def create_message(request: Request):
-    state = get_state()
+    state = get_request_state()
     body = await parse_request_body(request)
     
     log_client_request("POST", "/v1/messages", body)
@@ -1052,14 +1146,71 @@ def _normalize_tool_choice(tool_choice: Any) -> Any:
     return tool_choice
 
 
+def _retry_after_header(response) -> dict[str, str]:
+    retry_after = getattr(response, "headers", {}).get("Retry-After")
+    return {"Retry-After": retry_after} if retry_after is not None else {}
+
+
 async def forward_chat(
     body: dict[str, Any],
     protocol: str,
     original: dict[str, Any] | None = None
 ) -> StreamingResponse | JSONResponse:
-    """转发 chat 请求到 CodeBuddy 上游，支持流式和非流式。"""
-    state = get_state()
-    state.ensure_auth()
+    """Forward with bounded account failover before sending a client response."""
+    state = get_request_state()
+    manager = getattr(state, "account_runtime", None)
+    attempted: set[str] = set()
+    max_attempts = 1
+    if manager is not None:
+        max_attempts = max(1, len(manager.snapshot()["accounts"]))
+    for attempt in range(max_attempts):
+        response = await _forward_chat_once(body, protocol, original, state)
+        if response.status_code != 429:
+            return response
+        retry_state = await rate_limited_account(
+            state, response.headers.get("Retry-After"), attempted, model=body.get("model"),
+        )
+        if retry_state is None or attempt + 1 == max_attempts:
+            return response
+        state = retry_state
+    return response
+
+
+async def rate_limited_account(state, retry_after, attempted, *, model):
+    """Record the original identity; late failures cannot override manual switches."""
+    manager = getattr(state, "account_runtime", None)
+    if manager is None:
+        return None
+    try:
+        account_id = manager.account_id_for_client(state.client)
+        if account_id is not None:
+            attempted.add(account_id)
+        candidate = await asyncio.to_thread(
+            manager.handle_rate_limit, state.client, retry_after,
+            model=model, excluded_account_ids=set(attempted),
+        )
+        next_id = manager.account_id_for_client(candidate) if candidate is not None else None
+        state.write_log(
+            "account_rate_limited", account_id=account_id, model=model, switched_to=next_id,
+        )
+        if candidate is None or next_id is None or next_id in attempted:
+            return None
+        retry_state = copy.copy(state)
+        retry_state._client = candidate
+        retry_state.account_manager = None
+        return retry_state
+    except Exception as exc:
+        # Persistence or selection failures must not hide the provider's 429.
+        state.write_log("account_rate_limit_record_failed", error_type=type(exc).__name__)
+        return None
+
+
+async def _forward_chat_once(body, protocol, original, state):
+    """One account attempt; any returned stream has already passed HTTP preflight."""
+    if isinstance(state, ProxyState) and state.managed_auth:
+        await asyncio.to_thread(state.ensure_auth)
+    else:
+        state.ensure_auth()
     
     diagnostic("upstream_request", protocol=protocol, **body_summary(body))
     
@@ -1138,7 +1289,8 @@ async def forward_chat(
                     if protocol == "anthropic" else {"error": error_info}
                 )
                 return JSONResponse(
-                    status_code=upstream_response.status_code, content=error_payload
+                    status_code=upstream_response.status_code, content=error_payload,
+                    headers=_retry_after_header(upstream_response),
                 )
             finally:
                 await upstream_response.aclose()
@@ -1155,7 +1307,14 @@ async def forward_chat(
         )
 
     # 非流式：聚合后返回
-    collected = await collect_upstream(url, headers, upstream_body, protocol)
+    try:
+        collected = await collect_upstream(url, headers, upstream_body, protocol)
+    except HTTPException as exc:
+        if exc.status_code != 429:
+            raise
+        return JSONResponse(
+            status_code=429, content={"detail": exc.detail}, headers=exc.headers,
+        )
     return JSONResponse(content=convert_nonstream(collected, protocol, original))
 
 
@@ -1812,7 +1971,8 @@ async def collect_upstream(
                     error_body = await resp.aread()
                     raise HTTPException(
                         status_code=resp.status_code,
-                        detail={"error": {"message": error_body.decode("utf-8", "replace")[:500], "type": "upstream_error"}}
+                        detail={"error": {"message": error_body.decode("utf-8", "replace")[:500], "type": "upstream_error"}},
+                        headers=_retry_after_header(resp),
                     )
                 
                 async for line in resp.aiter_lines():
@@ -1973,6 +2133,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--session-file", type=pathlib.Path,
                         help="会话文件路径（默认按 backend profile 隔离）")
+    parser.add_argument(
+        "--accounts-dir", type=pathlib.Path,
+        default=pathlib.Path.home() / ".workbuddy2api" / "accounts",
+        help="独立账号库目录；管理页位于 /admin",
+    )
     parser.add_argument("--mock-dir", type=pathlib.Path,
                         help="只使用指定目录中的真实响应 fixture，不访问 CodeBuddy 后端")
     default_log_file = pathlib.Path(
@@ -2017,11 +2182,92 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
+def initialize_account_manager(args, resolved_backend):
+    """Import legacy identities once and restore a persisted active account.
+
+    Reading legacy files never refreshes or rewrites them. A forced login
+    always uses a temporary session, so --login cannot overwrite an old user.
+    """
+    from codebuddy_proxy.account_store import AccountStore
+    from codebuddy_proxy.account_manager import AccountManager
+
+    store = AccountStore(args.accounts_dir)
+    initial_import = not store.index_file.exists()
+    explicit = bool(args.global_mode or args.endpoint is not None
+                    or args.session_file is not None
+                    or os.getenv("CODEBUDDY_ENDPOINT"))
+    candidates = [resolved_backend]
+    for profile in (DOMESTIC_PROFILE, GLOBAL_PROFILE):
+        candidate = resolve_backend(profile=profile, environment={})
+        if candidate not in candidates:
+            candidates.append(candidate)
+    selected_uid = None
+    for candidate in candidates:
+        # Migration is one-time. Re-reading a legacy file after its account
+        # was deleted must not silently associate that identity again.
+        if not initial_import and not (args.session_file is not None
+                                       and candidate is resolved_backend):
+            continue
+        try:
+            old = CodeBuddyClient(backend=candidate)
+        except CodeBuddyError:
+            if args.session_file is not None and candidate is resolved_backend:
+                raise
+            print(f"Skipped incompatible legacy session for {candidate.profile.key}", file=sys.stderr)
+            continue
+        account = old.session.get("account") or {}
+        auth = old.session.get("auth") or {}
+        if not isinstance(account, dict) or not isinstance(auth, dict):
+            continue
+        uid = account.get("uid")
+        if not uid or not (auth.get("accessToken") or auth.get("refreshToken")):
+            continue
+        if candidate is resolved_backend:
+            selected_uid = str(uid).strip()
+        known = any(
+            row["backend"] == old.profile.key and row["endpoint"] == old.endpoint
+            and str(row["uid"]) == str(uid) for row in store.list_accounts()
+        )
+        if not known:
+            store.import_client(old)
+    if args.login:
+        with tempfile.TemporaryDirectory(prefix="login-", dir=store.root) as temporary:
+            login_backend = resolve_backend(
+                profile=resolved_backend.profile, endpoint=resolved_backend.endpoint,
+                session_file=pathlib.Path(temporary) / "session.json", environment={},
+            )
+            login_client = CodeBuddyClient(backend=login_backend)
+            login_client.login(open_browser=not args.no_browser)
+            store.import_client(login_client, activate=True)
+    elif explicit:
+        matching = [row for row in store.list_accounts()
+                    if row["backend"] == resolved_backend.profile.key
+                    and row["endpoint"] == resolved_backend.endpoint
+                    and (args.session_file is None or str(row["uid"]) == selected_uid)]
+        if matching:
+            chosen = next((row for row in matching if row["active"]), matching[0])
+            store.set_active(chosen["id"])
+        else:
+            store.clear_active()
+    manager = AccountManager(store)
+    # The empty fallback preserves the requested profile for health/models.
+    # Managed requests cannot start browser login or write to a legacy file.
+    fallback = CodeBuddyClient(backend=resolve_backend(
+        profile=resolved_backend.profile, endpoint=resolved_backend.endpoint,
+        session_file=store.root / ".unlinked-session.json", environment={},
+    ))
+    return manager, manager.client or fallback
+
+
 def _run_proxy(args: argparse.Namespace) -> int:
     global proxy_state
     try:
         resolved_backend = resolve_backend_from_args(args)
-        client = CodeBuddyClient(backend=resolved_backend)
+        manager = None
+        if args.mock_dir is not None:
+            client = CodeBuddyClient(backend=resolved_backend)
+        else:
+            manager, client = initialize_account_manager(args, resolved_backend)
     except (CodeBuddyError, ValueError) as exc:
         print(f"错误: {exc}", file=sys.stderr)
         return 1
@@ -2030,10 +2276,6 @@ def _run_proxy(args: argparse.Namespace) -> int:
     log_dir = args.log_file.parent if args.log_file else pathlib.Path("logs")
     logger = setup_logging(log_dir)
     json_logger = setup_json_logging(args.log_file)
-    
-    # 处理登录
-    if args.login:
-        client.login(open_browser=not args.no_browser)
     
     # 创建全局状态
     proxy_state = ProxyState(
@@ -2045,6 +2287,7 @@ def _run_proxy(args: argparse.Namespace) -> int:
         verbose_llm=args.verbose_llm,
         logger=logger,
         json_logger=json_logger,
+        account_manager=manager,
     )
     proxy_state.write_log(
         "startup",
@@ -2086,13 +2329,19 @@ def _run_proxy(args: argparse.Namespace) -> int:
     # 启动信息输出到 stdout
     print(f"CodeBuddy proxy listening on http://{args.host}:{args.port}")
     print("Endpoints: /v1/models /v1/chat/completions /v1/responses /v1/messages /health")
+    if manager is not None:
+        print(f"Account manager: http://127.0.0.1:{args.port}/admin (local access only)")
     
     # 同时记录到日志
     logger.info(f"CodeBuddy proxy listening on http://{args.host}:{args.port}")
     logger.info("Endpoints: /v1/models /v1/chat/completions /v1/responses /v1/messages /health")
     
     # 启动 uvicorn
-    run_http_server(host=args.host, port=args.port, windows_loop=args.windows_loop)
+    try:
+        run_http_server(host=args.host, port=args.port, windows_loop=args.windows_loop)
+    finally:
+        if manager is not None:
+            manager.close()
     return 0
 
 

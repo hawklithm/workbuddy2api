@@ -15,7 +15,9 @@ For unexplained Windows process exits, use the [independent process monitor](doc
 - **DSML parsing** - Automatically detects and converts DeepSeek Markup Language (DSML) tool calls
 - **Streaming responses** - SSE streaming output, returning generated content in real time, with built-in 60-second timeout protection
 - **Domestic and international backends** - Uses domestic CodeBuddy by default and switches to the international CodeBuddy service with `--global`, with isolated sessions and model catalogs
-- **Multi-account management** - Supports isolation of multiple login states for easy switching between work/personal accounts
+- **Multi-account management** - Link domestic and Global accounts, switch the active account, and remove non-active accounts from the local admin page
+- **Model-level 429 handling** - Track cooldowns per account and model, with optional same-region failover
+- **Daily check-in** - Check in manually or enable background checks for all linked accounts
 
 ---
 
@@ -51,11 +53,13 @@ uv sync
 uv run python -m codebuddy_proxy --desensitize
 ```
 
-On first use, when login is required:
+On first use, start the proxy and open the local account manager:
 
 ```bash
-uv run python -m codebuddy_proxy --login --desensitize
+uv run python -m codebuddy_proxy --desensitize
 ```
+
+Then visit `http://127.0.0.1:8787/admin` and link a domestic or Global account.
 
 ## Quick Start
 
@@ -65,8 +69,8 @@ uv run python -m codebuddy_proxy --login --desensitize
 # Use the latest version (recommended)
 uv run --with workbuddy2api python -m codebuddy_proxy --desensitize
 
-# First use: log in and start
-uv run --with workbuddy2api python -m codebuddy_proxy --login --desensitize
+# First use: start, then link an account at http://127.0.0.1:8787/admin
+uv run --with workbuddy2api python -m codebuddy_proxy --desensitize
 
 # International service: first login and start
 uv run --with workbuddy2api python -m codebuddy_proxy --global --login --desensitize
@@ -82,12 +86,23 @@ Listens on `http://127.0.0.1:8787` by default.
 The proxy supports both CodeBuddy regions. Domestic mode remains the default,
 so existing startup commands continue to work unchanged.
 
-| Mode | Startup option | Upstream endpoint | Default session file |
-| --- | --- | --- | --- |
-| Domestic (default) | none | `https://copilot.tencent.com` | `~/.codebuddy-session.json` |
-| International | `--global` | `https://www.codebuddy.ai` | `~/.codebuddy-global-session.json` |
+| Mode | Startup option | Upstream endpoint |
+| --- | --- | --- |
+| Domestic (default) | none | `https://copilot.tencent.com` |
+| International | `--global` | `https://www.codebuddy.ai` |
 
-First login and daily startup for the international service:
+Linked accounts are stored separately by region in `~/.workbuddy2api/accounts`.
+Use `--accounts-dir DIR` to choose another local directory. With no explicit
+selector, the proxy restores the saved active account. On the first migration,
+matching legacy session files are imported once and kept; deleting an imported
+account does not import it again. Explicit `--global` or `--endpoint` selects a
+matching account, while `--session-file` can import that file again. If there is
+no match, the proxy starts without an active account. `--login` uses a temporary
+session file to add or refresh an account without replacing a legacy file.
+
+The account manager can add accounts for either region while the proxy is
+running. For a terminal-driven login, the existing `--login` option remains
+available:
 
 ```bash
 # First login
@@ -103,16 +118,18 @@ If the package is installed as a command, the equivalent short form is
 `workbuddy2api --global --login`. When running from source, use
 `uv run python -m codebuddy_proxy --global --login`.
 
-`--global` changes only the upstream service. Codex CLI, Claude Code/CC Switch,
-OpenCode, and other clients continue to use the same local proxy URLs. The
-selected profile also controls the model catalog returned by `/v1/models`.
+`--global` selects the Global backend and a matching account when one exists.
+Codex CLI, Claude Code/CC Switch, OpenCode, and other clients continue to use
+the same local proxy URLs. The selected profile also controls the model catalog
+returned by `/v1/models`.
 
-Domestic and international sessions are intentionally isolated. An explicit
-`--session-file` takes precedence, but its saved backend and endpoint must match
-the current startup options. The proxy refuses mismatched credentials and does
-not modify the original file.
+Domestic and international accounts remain isolated. An explicit
+`--session-file` is imported only when its saved backend and endpoint match the
+current startup options. The proxy refuses mismatched credentials and does not
+modify the original file.
 
-For a custom international endpoint, always use a dedicated session file:
+For a custom international endpoint, use a dedicated session file when
+importing or creating a login from the command line:
 
 ```bash
 uv run --with workbuddy2api python -m codebuddy_proxy \
@@ -309,6 +326,7 @@ Select the model inside OMP with `/model codebuddy/hy3` (or set it as the defaul
 --global                 Use the international CodeBuddy backend (default domestic)
 --endpoint ENDPOINT      CodeBuddy backend address (overrides the profile default)
 --session-file PATH      Session file path (isolated by profile by default)
+--accounts-dir DIR       Account library directory (default ~/.workbuddy2api/accounts)
 --log-file PATH          JSONL log file (default ~/.workbuddy2api/codebuddy-proxy.jsonl)
 --desensitize            Enable desensitization (recommended)
 --optimize-context       Enable message compression (recommended for Codex CLI)
@@ -369,15 +387,57 @@ uv run --with workbuddy2api python -m codebuddy_proxy --desensitize --optimize-c
 
 ### Multi-account switching
 
-```bash
-# Account 1
-uv run --with workbuddy2api python -m codebuddy_proxy --session-file ~/.codebuddy-work.json --login \
-  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
+Start the proxy and open [http://127.0.0.1:8787/admin](http://127.0.0.1:8787/admin).
+Choose **Domestic** or **Global**, then link the account in the browser window.
+The first linked account becomes active automatically; linking another account
+does not change the account currently in use. Use **Set active** to switch, or
+remove a non-active account from the same page. The selection is saved for the
+next proxy start. Switching affects new requests; requests already in progress
+continue with the account selected when they began.
 
-# Account 2
-uv run --with workbuddy2api python -m codebuddy_proxy --session-file ~/.codebuddy-personal.json --login \
-  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
-```
+![Account manager with check-in controls and redacted account identifiers](docs/images/account-manager-checkin.png)
+
+The screenshot uses synthetic demo accounts. Account UIDs are covered, and no
+credentials or session contents are shown. Accounts are kept separately by
+backend, normalized endpoint, and user ID in `~/.workbuddy2api/accounts`; use
+`--accounts-dir DIR` to choose another local directory. The manager remains
+available before any account is linked. Its page and API are restricted to
+loopback access, and API responses do not include tokens or session data.
+
+Use the language selector at the top of the page to switch between Chinese and
+English. The choice is remembered in this browser; without a saved preference,
+the page follows the browser language. Switching languages keeps ongoing login
+and account operations running.
+
+Automatic account switching after an upstream HTTP `429` is off by default.
+When enabled, a request can fail over only before any response has been sent,
+and only to accounts with the same region and endpoint. Each account is tried
+at most once per request. The proxy skips a candidate only when the request's
+model is cooling down there; other models on that account remain eligible. A
+missing or invalid model does not create a model cooldown or trigger failover.
+If every eligible account returns `429`, the original `429` is returned.
+Cooldowns are tracked per account and model, using upstream `Retry-After` or a
+default 60 seconds when that value is missing or invalid. The setting and model
+cooldowns persist across restarts. Old v1 account-wide cooldowns had no model
+identity and are not carried forward during upgrade. The page shows a separate
+remaining countdown and source for each model, and refreshes account state
+periodically and immediately when a hidden page becomes visible again.
+
+The account list also shows each linked account's check-in status for today
+(Beijing time). The **Check in** action is available for every account, including
+the active one; it checks the account first and does nothing when today's check-in
+is already complete. The global automatic check-in setting is off by default and
+applies to all linked accounts without changing the active account. The page saves
+this setting and displays status; the proxy performs automatic checks and check-ins
+in the background, including when the management page is closed. When enabled, the
+proxy checks all linked accounts immediately and on startup. At Beijing midnight it
+checks them, waits a random 0–10 minutes, then checks again before signing; disabling
+it cancels pending scheduled work. Unknown status is never treated as permission to
+sign. The setting persists; after restart, check-in status is confirmed by querying
+the upstream service again.
+
+The command-line `--login` flow and `--session-file` option remain available for
+terminal use and importing an existing session.
 
 ### Listening on all interfaces (LAN sharing)
 
@@ -393,10 +453,19 @@ All endpoints do not require an extra token in the request by default; the proxy
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/health` | Query local service and auth status |
+| GET | `/admin` | Open the local account manager |
 | GET | `/v1/models` | Query the CodeBuddy model list |
 | POST | `/v1/chat/completions` | OpenAI Chat Completions, supports tools and streaming |
 | POST | `/v1/responses` | Responses API, compatible with Codex CLI |
 | POST | `/v1/messages` | Anthropic Messages API, compatible with Claude Code / CC Switch |
+
+Account-management endpoints live under `/admin/api` and are restricted to
+loopback clients. Write requests require the `X-Account-Manager: 1` header, and
+cross-origin requests are rejected. `GET /admin/api/accounts` reports active
+account, cooldown, and cached check-in state. `GET /admin/api/accounts/{id}/checkin-status`
+checks that account against the upstream service; `POST /admin/api/accounts/{id}/checkin`
+checks first and signs only when needed. `GET` and `PATCH /admin/api/settings` read
+and save the automatic-switch and automatic-check-in preferences independently.
 
 ### `/health` - health check
 

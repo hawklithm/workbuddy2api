@@ -59,8 +59,8 @@ def environment(monkeypatch):
 
 
 @pytest.mark.parametrize("method,path,upstream_method,upstream_path", [
-    ("GET", "/v1/checkin-status", "POST", "/v2/billing/meter/checkin-status"),
-    ("POST", "/v1/checkin-status", "POST", "/v2/billing/meter/checkin-status"),
+    ("GET", "/v1/checkin-status", "POST", "/v2/billing/meter/checkin-activity-status"),
+    ("POST", "/v1/checkin-status", "POST", "/v2/billing/meter/checkin-activity-status"),
     ("POST", "/v1/checkin", "POST", "/v2/billing/meter/daily-checkin"),
 ])
 def test_forward_method_url_headers_and_raw_business_body(environment, method, path, upstream_method, upstream_path):

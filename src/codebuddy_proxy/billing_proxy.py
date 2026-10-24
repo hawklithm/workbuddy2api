@@ -26,6 +26,9 @@ def _upstream_response(response: httpx.Response) -> Response:
     content_type = response.headers.get("content-type")
     if content_type:
         headers["content-type"] = content_type
+    retry_after = response.headers.get("Retry-After")
+    if retry_after is not None:
+        headers["Retry-After"] = retry_after
     return Response(
         content=response.content,
         status_code=response.status_code,
@@ -52,25 +55,31 @@ async def forward_billing(
     another concurrent request already updated the access token). If refresh
     fails, preserve the original upstream 401 instead of blindly retrying.
     """
-    state.ensure_auth()
-    url = state.client.build_url(path)
+    # Capture once: an account switch while awaiting a response must never
+    # refresh the new account or send its credentials to the old endpoint.
+    account_client = state.client
+    if getattr(state, "managed_auth", False):
+        await asyncio.to_thread(state.ensure_auth)
+    else:
+        state.ensure_auth()
+    url = account_client.build_url(path)
     method = method.upper()
     kwargs = {"json": {}} if method == "POST" else {}
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
         try:
-            headers = state.client.auth_headers()
+            headers = account_client.auth_headers()
             response = await client.request(method, url, headers=headers, **kwargs)
 
             if response.status_code == 401:
                 async with _refresh_lock:
-                    latest_headers = state.client.auth_headers()
+                    latest_headers = account_client.auth_headers()
                     old_token = headers.get("Authorization")
                     new_token = latest_headers.get("Authorization")
 
                     if new_token == old_token:
                         try:
-                            refreshed = await asyncio.to_thread(state.client.refresh)
+                            refreshed = await asyncio.to_thread(account_client.refresh)
                         except Exception as exc:
                             diagnostic(
                                 "billing_auth_refresh_failed",
@@ -80,7 +89,7 @@ async def forward_billing(
                         if not refreshed:
                             diagnostic("billing_auth_refresh_failed", path=path, reason="not_refreshed")
                             return _upstream_response(response)
-                        latest_headers = state.client.auth_headers()
+                        latest_headers = account_client.auth_headers()
                         new_token = latest_headers.get("Authorization")
 
                     if not new_token or new_token == old_token:
@@ -96,4 +105,16 @@ async def forward_billing(
             diagnostic("billing_upstream_failed", path=path, reason=type(exc).__name__)
             return _transport_error(502, "upstream_connection_error")
 
+    if response.status_code == 429:
+        manager = getattr(state, "account_runtime", None)
+        if manager is not None:
+            try:
+                # Billing has no model dimension: it must neither cool down
+                # inference models nor change the selected account.
+                await asyncio.to_thread(
+                    manager.handle_rate_limit, account_client,
+                    response.headers.get("Retry-After"), model=None, allow_switch=False,
+                )
+            except Exception as exc:
+                diagnostic("billing_rate_limit_record_failed", error_type=type(exc).__name__)
     return _upstream_response(response)
