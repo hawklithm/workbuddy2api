@@ -15,7 +15,9 @@ For unexplained Windows process exits, use the [independent process monitor](doc
 - **DSML parsing** - Automatically detects and converts DeepSeek Markup Language (DSML) tool calls
 - **Streaming responses** - SSE streaming output, returning generated content in real time, with built-in 60-second timeout protection
 - **Domestic and international backends** - Uses domestic CodeBuddy by default and switches to the international CodeBuddy service with `--global`, with isolated sessions and model catalogs
-- **Multi-account management** - Link domestic and Global accounts, switch the active account, and remove saved accounts from the local admin page
+- **Multi-account management** - Link domestic and Global accounts, switch the active account, and remove non-active accounts from the local admin page
+- **Model-level 429 handling** - Track cooldowns per account and model, with optional same-region failover
+- **Daily check-in** - Check in manually or enable background checks for all linked accounts
 
 ---
 
@@ -389,18 +391,31 @@ Start the proxy and open [http://127.0.0.1:8787/admin](http://127.0.0.1:8787/adm
 Choose **Domestic** or **Global**, then link the account in the browser window.
 The first linked account becomes active automatically; linking another account
 does not change the account currently in use. Use **Set active** to switch, or
-delete a saved account from the same page. The selection is saved for the next
-proxy start. The page and its management API are restricted to local access.
+remove a non-active account from the same page. The selection is saved for the
+next proxy start. Switching affects new requests; requests already in progress
+continue with the account selected when they began.
+
+![Account manager with check-in controls and redacted account identifiers](docs/images/account-manager-checkin.png)
+
+The screenshot uses synthetic demo accounts. Account UIDs are covered, and no
+credentials or session contents are shown. Accounts are kept separately by
+backend, normalized endpoint, and user ID in `~/.workbuddy2api/accounts`; use
+`--accounts-dir DIR` to choose another local directory. The manager remains
+available before any account is linked. Its page and API are restricted to
+loopback access, and API responses do not include tokens or session data.
+
 Use the language selector at the top of the page to switch between Chinese and
 English. The choice is remembered in this browser; without a saved preference,
 the page follows the browser language. Switching languages keeps ongoing login
 and account operations running.
 
-Automatic account switching after an upstream `429` is off by default. When
-enabled, the proxy tries accounts with the same region and endpoint, at most once
-per account for each request. It skips an account only while the model used by
-that request is cooling down there; other models on the same account remain
-eligible. If every eligible account returns `429`, the original `429` is returned.
+Automatic account switching after an upstream HTTP `429` is off by default.
+When enabled, a request can fail over only before any response has been sent,
+and only to accounts with the same region and endpoint. Each account is tried
+at most once per request. The proxy skips a candidate only when the request's
+model is cooling down there; other models on that account remain eligible. A
+missing or invalid model does not create a model cooldown or trigger failover.
+If every eligible account returns `429`, the original `429` is returned.
 Cooldowns are tracked per account and model, using upstream `Retry-After` or a
 default 60 seconds when that value is missing or invalid. The setting and model
 cooldowns persist across restarts. Old v1 account-wide cooldowns had no model
