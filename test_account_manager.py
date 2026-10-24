@@ -144,6 +144,13 @@ def _wait_for(manager, job_id, status):
     raise AssertionError(f"login did not reach {status}: {manager.get_login(job_id)}")
 
 
+def _model_cooldown(account, model):
+    return next(
+        (item for item in account.get("model_cooldowns", []) if item["model"] == model),
+        None,
+    )
+
+
 def test_login_imports_only_after_success_and_does_not_switch_existing_account(tmp_path):
     store = FakeStore(tmp_path)
     made_clients = []
@@ -367,19 +374,28 @@ def test_rate_limit_snapshot_defaults_and_runtime_state_persist_without_credenti
         manager.set_settings(True)
 
         before = time.time()
-        assert manager.handle_rate_limit(client, "invalid retry value") is None
+        assert manager.handle_rate_limit(
+            client, "invalid retry value", model="model-a"
+        ) is None
         snapshot = manager.snapshot()
         limited = snapshot["accounts"][0]
         assert snapshot["settings"]["auto_switch_on_429"] is True
         assert snapshot["server_time"] >= before
-        assert limited["rate_limited"] is True
-        assert limited["cooldown_source"] == "default"
-        assert limited["cooldown_until"] == pytest.approx(before + 60, abs=1)
-        assert 1 <= limited["cooldown_remaining_seconds"] <= 60
-        assert limited["last_rate_limited_at"] == pytest.approx(before, abs=1)
+        assert "rate_limited" not in limited
+        assert "cooldown_until" not in limited
+        cooldown = _model_cooldown(limited, "model-a")
+        assert cooldown is not None
+        assert cooldown["rate_limited"] is True
+        assert cooldown["cooldown_source"] == "default"
+        assert cooldown["cooldown_until"] == pytest.approx(before + 60, abs=1)
+        assert 1 <= cooldown["cooldown_remaining_seconds"] <= 60
+        assert cooldown["last_rate_limited_at"] == pytest.approx(before, abs=1)
 
         state_file = tmp_path / "account-manager-state-v1.json"
         raw_state = state_file.read_text(encoding="utf-8")
+        parsed_state = json.loads(raw_state)
+        assert parsed_state["version"] == 2
+        assert parsed_state["cooldowns"][account_id]["model-a"]["source"] == "default"
         assert "token-rate-limited" not in raw_state
         assert "accessToken" not in raw_state
     finally:
@@ -389,9 +405,13 @@ def test_rate_limit_snapshot_defaults_and_runtime_state_persist_without_credenti
     try:
         assert reopened.get_settings()["auto_switch_on_429"] is True
         restored = reopened.snapshot()["accounts"][0]
-        assert restored["rate_limited"] is True
-        assert restored["cooldown_source"] == "default"
-        assert restored["cooldown_until"] == pytest.approx(limited["cooldown_until"])
+        restored_cooldown = _model_cooldown(restored, "model-a")
+        assert restored_cooldown is not None
+        assert restored_cooldown["rate_limited"] is True
+        assert restored_cooldown["cooldown_source"] == "default"
+        assert restored_cooldown["cooldown_until"] == pytest.approx(
+            cooldown["cooldown_until"]
+        )
     finally:
         reopened.close()
 
@@ -413,16 +433,22 @@ def test_retry_after_zero_and_http_date_are_supported_and_expire_without_poll_wr
             datetime.fromtimestamp(date_deadline, timezone.utc), usegmt=True
         )
         monkeypatch.setattr("codebuddy_proxy.account_manager.time.time", lambda: fixed_now)
-        assert manager.handle_rate_limit(zero_client, "0") is None
-        assert manager.handle_rate_limit(date_client, date_value) is None
+        assert manager.handle_rate_limit(zero_client, "0", model="model-zero") is None
+        assert manager.handle_rate_limit(
+            date_client, date_value, model="model-date"
+        ) is None
 
         rows = {item["uid"]: item for item in manager.snapshot()["accounts"]}
-        assert rows["zero"]["rate_limited"] is False
-        assert rows["zero"]["cooldown_source"] is None
-        assert rows["zero"]["last_rate_limited_at"] == pytest.approx(fixed_now)
-        assert rows["date"]["rate_limited"] is True
-        assert rows["date"]["cooldown_source"] == "retry_after"
-        assert rows["date"]["cooldown_until"] == pytest.approx(date_deadline, abs=1)
+        zero_cooldown = _model_cooldown(rows["zero"], "model-zero")
+        date_cooldown = _model_cooldown(rows["date"], "model-date")
+        assert zero_cooldown["rate_limited"] is False
+        assert zero_cooldown["cooldown_source"] == "retry_after"
+        assert zero_cooldown["cooldown_until"] == pytest.approx(fixed_now)
+        assert zero_cooldown["cooldown_remaining_seconds"] == 0
+        assert zero_cooldown["last_rate_limited_at"] == pytest.approx(fixed_now)
+        assert date_cooldown["rate_limited"] is True
+        assert date_cooldown["cooldown_source"] == "retry_after"
+        assert date_cooldown["cooldown_until"] == pytest.approx(date_deadline, abs=1)
 
         persisted_before_expiry = (tmp_path / "account-manager-state-v1.json").read_text(
             encoding="utf-8"
@@ -431,10 +457,13 @@ def test_retry_after_zero_and_http_date_are_supported_and_expire_without_poll_wr
             "codebuddy_proxy.account_manager.time.time", lambda: fixed_now + 76
         )
         expired = {item["uid"]: item for item in manager.snapshot()["accounts"]}["date"]
-        assert expired["rate_limited"] is False
-        assert expired["cooldown_until"] is None
-        assert expired["cooldown_remaining_seconds"] == 0
-        assert expired["last_rate_limited_at"] == pytest.approx(fixed_now)
+        expired_cooldown = _model_cooldown(expired, "model-date")
+        assert expired_cooldown is not None
+        assert expired_cooldown["rate_limited"] is False
+        assert expired_cooldown["cooldown_until"] == pytest.approx(date_deadline, abs=1)
+        assert expired_cooldown["cooldown_remaining_seconds"] == 0
+        assert expired_cooldown["cooldown_source"] == "retry_after"
+        assert expired_cooldown["last_rate_limited_at"] == pytest.approx(fixed_now)
         assert (
             tmp_path / "account-manager-state-v1.json"
         ).read_text(encoding="utf-8") == persisted_before_expiry
@@ -454,24 +483,127 @@ def test_auto_switch_is_opt_in_region_scoped_and_respects_exclusions(tmp_path):
     store.import_client(other_region)
     manager = AccountManager(store)
     try:
-        assert manager.handle_rate_limit(original, "30") is None
+        assert manager.handle_rate_limit(original, "30", model="model-a") is None
         assert store.active_account_id == original_id
 
         manager.set_settings(True)
         switched = manager.handle_rate_limit(
-            original, "30", excluded_account_ids={excluded_id}
+            original,
+            "30",
+            model="model-a",
+            excluded_account_ids={excluded_id},
         )
         assert switched is candidate
         assert store.active_account_id == candidate_id
 
         # A delayed 429 from the old request records the longer deadline but
         # cannot rotate away from the account that is now active.
-        latest = manager.handle_rate_limit(original, "5")
+        latest = manager.handle_rate_limit(original, "5", model="model-a")
         assert latest is None
         assert store.active_account_id == candidate_id
         row = next(item for item in manager.snapshot()["accounts"] if item["id"] == original_id)
-        assert row["cooldown_remaining_seconds"] > 0
-        assert row["cooldown_source"] == "retry_after"
+        cooldown = _model_cooldown(row, "model-a")
+        assert cooldown["cooldown_remaining_seconds"] > 0
+        assert cooldown["cooldown_source"] == "retry_after"
+    finally:
+        manager.close()
+
+
+def test_cooldowns_are_isolated_by_exact_model_and_candidate_model(tmp_path):
+    store = FakeStore(tmp_path)
+    original = StoredClient("domestic", "original")
+    blocked_for_model_a = StoredClient("domestic", "blocked-a")
+    cooled_for_model_b = StoredClient("domestic", "cooled-b")
+    original_id = store.import_client(original, activate=True)
+    blocked_id = store.import_client(blocked_for_model_a)
+    model_b_id = store.import_client(cooled_for_model_b)
+    manager = AccountManager(store)
+    try:
+        # Inactive 429s only mark their request model. The candidate cooled for
+        # model-b must remain eligible for a model-a failover.
+        manager.handle_rate_limit(blocked_for_model_a, "90", model="model-a")
+        manager.handle_rate_limit(cooled_for_model_b, "90", model="model-b")
+        manager.set_settings(True)
+
+        switched = manager.handle_rate_limit(original, "45", model="model-a")
+        assert switched is cooled_for_model_b
+        assert store.active_account_id == model_b_id
+
+        rows = {row["id"]: row for row in manager.snapshot()["accounts"]}
+        assert "rate_limited" not in rows[original_id]
+        assert _model_cooldown(rows[original_id], "model-a")["rate_limited"] is True
+        assert _model_cooldown(rows[blocked_id], "model-a")["rate_limited"] is True
+        assert _model_cooldown(rows[model_b_id], "model-b")["rate_limited"] is True
+        assert _model_cooldown(rows[model_b_id], "model-a") is None
+    finally:
+        manager.close()
+
+
+def test_model_keys_preserve_case_and_model_less_or_invalid_events_are_noops(
+    tmp_path,
+):
+    store = FakeStore(tmp_path)
+    client = StoredClient("domestic", "model-keys")
+    account_id = store.import_client(client, activate=True)
+    store.import_client(StoredClient("domestic", "model-keys-backup"))
+    manager = AccountManager(store)
+    try:
+        manager.handle_rate_limit(client, "30", model="Model-X")
+        manager.handle_rate_limit(client, "45", model="model-x")
+        manager.set_settings(True)
+        snapshot = manager.snapshot()
+        row = snapshot["accounts"][0]
+        assert [item["model"] for item in row["model_cooldowns"]] == [
+            "Model-X",
+            "model-x",
+        ]
+        state_file = tmp_path / "account-manager-state-v1.json"
+        before = state_file.read_text(encoding="utf-8")
+
+        for invalid_model in (None, "", "   ", "bad\nmodel", "x" * 257, 7):
+            assert manager.handle_rate_limit(
+                client, "120", model=invalid_model
+            ) is None
+
+        after = state_file.read_text(encoding="utf-8")
+        assert after == before
+        assert store.active_account_id == account_id
+        assert [
+            item["model"] for item in manager.snapshot()["accounts"][0]["model_cooldowns"]
+        ] == ["Model-X", "model-x"]
+    finally:
+        manager.close()
+
+
+def test_failed_model_cooldown_write_rolls_back_nested_memory_and_disk(
+    tmp_path, monkeypatch
+):
+    import codebuddy_proxy.account_manager as account_manager_module
+
+    store = FakeStore(tmp_path)
+    client = StoredClient("domestic", "rollback")
+    store.import_client(client, activate=True)
+    manager = AccountManager(store)
+    try:
+        manager.handle_rate_limit(client, "60", model="model-a")
+        state_file = tmp_path / "account-manager-state-v1.json"
+        original_text = state_file.read_text(encoding="utf-8")
+        original_deadline = _model_cooldown(
+            manager.snapshot()["accounts"][0], "model-a"
+        )["cooldown_until"]
+
+        def failed_write(_path, _payload):
+            raise OSError("private runtime-state path")
+
+        monkeypatch.setattr(account_manager_module, "_atomic_json", failed_write)
+        with pytest.raises(AccountManagerError) as failure:
+            manager.handle_rate_limit(client, "120", model="model-a")
+        assert failure.value.message == "无法保存账号管理状态"
+
+        row = manager.snapshot()["accounts"][0]
+        assert _model_cooldown(row, "model-a")["cooldown_until"] == original_deadline
+        assert _model_cooldown(row, "model-b") is None
+        assert state_file.read_text(encoding="utf-8") == original_text
     finally:
         manager.close()
 
@@ -490,7 +622,7 @@ def test_concurrent_429s_from_same_active_account_only_switch_once(tmp_path):
 
     def rate_limit():
         barrier.wait(timeout=2)
-        return manager.handle_rate_limit(original, "45")
+        return manager.handle_rate_limit(original, "45", model="model-a")
 
     try:
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -502,7 +634,7 @@ def test_concurrent_429s_from_same_active_account_only_switch_once(tmp_path):
         assert store.active_account_id == candidate_id
         assert store.set_active_calls.count(candidate_id) == 1
         row = next(item for item in manager.snapshot()["accounts"] if item["id"] == original_id)
-        assert row["rate_limited"] is True
+        assert _model_cooldown(row, "model-a")["rate_limited"] is True
     finally:
         manager.close()
 
@@ -528,21 +660,22 @@ def test_cooldown_max_deadline_manual_switch_and_refreshable_candidate(tmp_path,
         manager.set_settings(True)
         fixed_now = 1_800_000_000.0
         monkeypatch.setattr("codebuddy_proxy.account_manager.time.time", lambda: fixed_now)
-        assert manager.handle_rate_limit(original, "120") is refreshable
+        assert manager.handle_rate_limit(original, "120", model="model-a") is refreshable
         assert store.active_account_id == refreshable_id
 
         # The later shorter default cooldown must not reduce the original 120s.
-        assert manager.handle_rate_limit(original, None) is None
+        assert manager.handle_rate_limit(original, None, model="model-a") is None
         original_row = next(
             item for item in manager.snapshot()["accounts"] if item["id"] == original_id
         )
-        assert original_row["cooldown_until"] == fixed_now + 120
-        assert original_row["cooldown_source"] == "retry_after"
+        original_cooldown = _model_cooldown(original_row, "model-a")
+        assert original_cooldown["cooldown_until"] == fixed_now + 120
+        assert original_cooldown["cooldown_source"] == "retry_after"
 
         # Even with automation enabled, an explicit selection is preserved if
         # a previously active client's 429 arrives afterward.
         manager.activate(original_id)
-        assert manager.handle_rate_limit(refreshable, "10") is None
+        assert manager.handle_rate_limit(refreshable, "10", model="model-a") is None
         assert store.active_account_id == original_id
     finally:
         manager.close()
@@ -556,7 +689,7 @@ def test_cooldown_is_cleared_when_account_is_deleted_and_bad_runtime_file_is_pre
     inactive_id = store.import_client(inactive)
     manager = AccountManager(store)
     try:
-        manager.handle_rate_limit(inactive, "45")
+        manager.handle_rate_limit(inactive, "45", model="model-a")
         state_file = tmp_path / "account-manager-state-v1.json"
         manager.delete(inactive_id)
         state = json.loads(state_file.read_text(encoding="utf-8"))
@@ -574,6 +707,30 @@ def test_cooldown_is_cleared_when_account_is_deleted_and_bad_runtime_file_is_pre
         '{"version":1,"settings":{"auto_switch_on_429":false,"default_cooldown_seconds":60,"auto_checkin_enabled":1},"cooldowns":{}}',
         '{"version":1,"settings":{"auto_switch_on_429":false,"default_cooldown_seconds":60,"unexpected":false},"cooldowns":{}}',
         '{"version":1,"version":1,"settings":{"auto_switch_on_429":false,"default_cooldown_seconds":60},"cooldowns":{}}',
+        '{"version":2,"settings":{"auto_switch_on_429":false,"default_cooldown_seconds":60,"auto_checkin_enabled":false},"cooldowns":{"account-1":{"\n":{"deadline":1,"last_rate_limited_at":1,"source":"default"}}}}',
+        '{"version":2,"settings":{"auto_switch_on_429":false,"default_cooldown_seconds":60,"auto_checkin_enabled":false},"cooldowns":{"account-1":{"model":{"deadline":1,"last_rate_limited_at":1,"source":"unknown"}}}}',
+        '{"version":2,"settings":{"auto_switch_on_429":false,"default_cooldown_seconds":60,"auto_checkin_enabled":false},"cooldowns":{"account-1":{"model":{"deadline":1,"last_rate_limited_at":1}}}}',
+    )
+    corrupted_values += (
+        json.dumps(
+            {
+                "version": 2,
+                "settings": {
+                    "auto_switch_on_429": False,
+                    "default_cooldown_seconds": 60,
+                    "auto_checkin_enabled": False,
+                },
+                "cooldowns": {
+                    "account-1": {
+                        "m" * 257: {
+                            "deadline": 1,
+                            "last_rate_limited_at": 1,
+                            "source": "default",
+                        }
+                    }
+                },
+            }
+        ),
     )
     for corrupted in corrupted_values:
         state_file.write_text(corrupted, encoding="utf-8")
@@ -596,7 +753,7 @@ def test_failed_cooldown_persistence_aborts_account_deletion(tmp_path, monkeypat
     inactive_id = store.import_client(inactive)
     manager = AccountManager(store)
     try:
-        manager.handle_rate_limit(inactive, "45")
+        manager.handle_rate_limit(inactive, "45", model="model-a")
         state_file = tmp_path / "account-manager-state-v1.json"
         original_state = state_file.read_text(encoding="utf-8")
 
@@ -613,7 +770,7 @@ def test_failed_cooldown_persistence_aborts_account_deletion(tmp_path, monkeypat
             account for account in manager.snapshot()["accounts"]
             if account["id"] == inactive_id
         )
-        assert row["rate_limited"] is True
+        assert _model_cooldown(row, "model-a")["rate_limited"] is True
         assert state_file.read_text(encoding="utf-8") == original_state
     finally:
         manager.close()
@@ -627,7 +784,7 @@ def test_failed_store_deletion_restores_persisted_cooldown(tmp_path, monkeypatch
     inactive_id = store.import_client(inactive)
     manager = AccountManager(store)
     try:
-        manager.handle_rate_limit(inactive, "45")
+        manager.handle_rate_limit(inactive, "45", model="model-a")
         state_file = tmp_path / "account-manager-state-v1.json"
         original_state = json.loads(state_file.read_text(encoding="utf-8"))
 
@@ -643,7 +800,7 @@ def test_failed_store_deletion_restores_persisted_cooldown(tmp_path, monkeypatch
             account for account in manager.snapshot()["accounts"]
             if account["id"] == inactive_id
         )
-        assert row["rate_limited"] is True
+        assert _model_cooldown(row, "model-a")["rate_limited"] is True
         restored_state = json.loads(state_file.read_text(encoding="utf-8"))
         assert restored_state["cooldowns"][inactive_id] == original_state["cooldowns"][inactive_id]
     finally:
@@ -684,7 +841,20 @@ def test_fake_store_without_root_keeps_runtime_settings_in_memory(tmp_path):
         manager.close()
 
 
-def test_legacy_runtime_settings_migrate_on_write_without_losing_cooldowns(tmp_path):
+@pytest.mark.parametrize(
+    "legacy_settings",
+    (
+        {"auto_switch_on_429": True, "default_cooldown_seconds": 60},
+        {
+            "auto_switch_on_429": True,
+            "default_cooldown_seconds": 60,
+            "auto_checkin_enabled": False,
+        },
+    ),
+)
+def test_v1_runtime_settings_migrate_on_write_and_discard_ambiguous_cooldowns(
+    tmp_path, legacy_settings
+):
     store = FakeStore(tmp_path)
     client = StoredClient("domestic", "legacy")
     store.import_client(client, activate=True)
@@ -694,10 +864,7 @@ def test_legacy_runtime_settings_migrate_on_write_without_losing_cooldowns(tmp_p
         json.dumps(
             {
                 "version": 1,
-                "settings": {
-                    "auto_switch_on_429": True,
-                    "default_cooldown_seconds": 60,
-                },
+                "settings": legacy_settings,
                 "cooldowns": {
                     "account-1": {
                         "deadline": deadline,
@@ -717,16 +884,19 @@ def test_legacy_runtime_settings_migrate_on_write_without_losing_cooldowns(tmp_p
             "default_cooldown_seconds": 60,
             "auto_checkin_enabled": False,
         }
-        assert manager.snapshot()["accounts"][0]["cooldown_until"] == pytest.approx(deadline)
+        original_text = state_path.read_text(encoding="utf-8")
+        assert manager.snapshot()["accounts"][0]["model_cooldowns"] == []
+        assert state_path.read_text(encoding="utf-8") == original_text
 
         manager.set_settings(auto_checkin_enabled=True)
         persisted = json.loads(state_path.read_text(encoding="utf-8"))
+        assert persisted["version"] == 2
         assert persisted["settings"] == {
             "auto_switch_on_429": True,
             "default_cooldown_seconds": 60,
             "auto_checkin_enabled": True,
         }
-        assert persisted["cooldowns"]["account-1"]["deadline"] == pytest.approx(deadline)
+        assert persisted["cooldowns"] == {}
     finally:
         manager.close()
 
@@ -764,7 +934,7 @@ def test_checkin_setting_callback_only_follows_successful_transitions(tmp_path, 
         manager.close()
 
 
-def test_checkin_rate_limit_records_cooldown_without_switching_active(tmp_path):
+def test_model_less_rate_limit_does_not_record_or_switch(tmp_path):
     store = FakeStore(tmp_path)
     checked_client = StoredClient("domestic", "checked-client")
     backup_client = StoredClient("domestic", "backup-client")
@@ -773,16 +943,13 @@ def test_checkin_rate_limit_records_cooldown_without_switching_active(tmp_path):
     manager = AccountManager(store)
     try:
         manager.set_settings(True)
-        assert manager.handle_rate_limit(
-            checked_client, "45", allow_switch=False
-        ) is None
+        assert manager.handle_rate_limit(checked_client, "45") is None
         assert store.active_account_id == original_id
         row = next(
             account
             for account in manager.snapshot()["accounts"]
             if account["id"] == original_id
         )
-        assert row["rate_limited"] is True
-        assert row["cooldown_source"] == "retry_after"
+        assert row["model_cooldowns"] == []
     finally:
         manager.close()

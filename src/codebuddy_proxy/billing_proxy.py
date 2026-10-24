@@ -109,11 +109,11 @@ async def forward_billing(
         manager = getattr(state, "account_runtime", None)
         if manager is not None:
             try:
-                # A check-in belongs to its original account. Select for future
-                # requests, but never repeat this business operation as someone else.
+                # Billing has no model dimension: it must neither cool down
+                # inference models nor change the selected account.
                 await asyncio.to_thread(
                     manager.handle_rate_limit, account_client,
-                    response.headers.get("Retry-After"),
+                    response.headers.get("Retry-After"), model=None, allow_switch=False,
                 )
             except Exception as exc:
                 diagnostic("billing_rate_limit_record_failed", error_type=type(exc).__name__)

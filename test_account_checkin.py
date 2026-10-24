@@ -49,8 +49,8 @@ class FakeManager:
     def has_account(self, account_id):
         return account_id in self.store.clients
 
-    def handle_rate_limit(self, client, retry_after, *, allow_switch=True):
-        self.rate_limits.append((client.account_id, retry_after, allow_switch))
+    def handle_rate_limit(self, client, retry_after, *, model=None, allow_switch=True):
+        self.rate_limits.append((client.account_id, retry_after, model, allow_switch))
         return None
 
 
@@ -407,7 +407,7 @@ def test_explicit_rejection_confirmed_unchecked_can_be_retried_once_later():
         assert succeeded["status"] == "checked"
         assert post_calls == 2
         assert status_calls == 4
-        assert manager.rate_limits == [("acct-a", None, False)]
+        assert manager.rate_limits == [("acct-a", None, None, False)]
         await service.close()
 
     run(scenario())
@@ -821,5 +821,5 @@ def test_default_billing_requester_is_bound_to_target_and_records_429_without_sw
     assert auth_options == [
         ("acct-b", {"open_browser": False, "allow_login": False})
     ]
-    assert manager.rate_limits == [("acct-b", "37", False)]
+    assert manager.rate_limits == [("acct-b", "37", None, False)]
     assert manager.active_account_id == "acct-a"

@@ -18,7 +18,8 @@ from codebuddy_proxy.billing_proxy import forward_billing
 
 
 BEIJING = timezone(timedelta(hours=8), name="Asia/Shanghai")
-STATUS_PATH = "/v2/billing/meter/checkin-status"
+# The legacy checkin-status endpoint can return an empty, inactive activity.
+STATUS_PATH = "/v2/billing/meter/checkin-activity-status"
 CHECKIN_PATH = "/v2/billing/meter/daily-checkin"
 _SAFE_ERRORS = frozenset(
     {
@@ -518,7 +519,7 @@ class AccountCheckinService:
             return
         try:
             result = await asyncio.to_thread(
-                handler, client, retry_after, allow_switch=False
+                handler, client, retry_after, model=None, allow_switch=False
             )
             if hasattr(result, "__await__"):
                 await result

@@ -7,6 +7,7 @@ import json
 import math
 import re
 import time
+import unicodedata
 from datetime import date as calendar_date
 from importlib import resources
 from typing import Any, Callable
@@ -34,11 +35,7 @@ _PUBLIC_ACCOUNT_FIELDS = (
     "uid",
     "nickname",
     "active",
-    "rate_limited",
-    "cooldown_until",
-    "cooldown_remaining_seconds",
-    "last_rate_limited_at",
-    "cooldown_source",
+    "model_cooldowns",
     "checkin",
 )
 _PUBLIC_JOB_FIELDS = ("id", "backend", "status", "auth_url", "error", "account_id")
@@ -210,33 +207,8 @@ def _safe_snapshot(value: Any) -> dict[str, Any]:
                     for key in _PUBLIC_ACCOUNT_FIELDS[:6]
                     if key in account
                 }
-                rate_limited = account.get("rate_limited")
-                cooldown_until = account.get("cooldown_until")
-                remaining = account.get("cooldown_remaining_seconds")
-                last_limited_at = account.get("last_rate_limited_at")
-                source = account.get("cooldown_source")
-                safe.update(
-                    {
-                        "rate_limited": rate_limited if type(rate_limited) is bool else False,
-                        "cooldown_until": (
-                            float(cooldown_until)
-                            if _finite_number(cooldown_until)
-                            else None
-                        ),
-                        "cooldown_remaining_seconds": (
-                            remaining
-                            if type(remaining) is int and remaining >= 0
-                            else 0
-                        ),
-                        "last_rate_limited_at": (
-                            float(last_limited_at)
-                            if _finite_number(last_limited_at)
-                            else None
-                        ),
-                        "cooldown_source": (
-                            source if source in ("retry_after", "default") else None
-                        ),
-                    }
+                safe["model_cooldowns"] = _safe_model_cooldowns(
+                    account.get("model_cooldowns")
                 )
                 safe["checkin"] = _safe_checkin(account.get("checkin"))
                 safe_accounts.append(safe)
@@ -256,6 +228,62 @@ def _finite_number(value: Any) -> bool:
         return math.isfinite(float(value))
     except (OverflowError, TypeError, ValueError):
         return False
+
+
+def _safe_model_name(value: Any) -> str | None:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 256
+        or not value.strip()
+        or any(unicodedata.category(char) in {"Cc", "Cs"} for char in value)
+    ):
+        return None
+    return value
+
+
+def _safe_model_cooldowns(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    result = []
+    for record in value:
+        if not isinstance(record, dict):
+            continue
+        model = _safe_model_name(record.get("model"))
+        if model is None:
+            continue
+        result.append(
+            {
+                "model": model,
+                "rate_limited": (
+                    record.get("rate_limited")
+                    if type(record.get("rate_limited")) is bool
+                    else False
+                ),
+                "cooldown_until": (
+                    float(record["cooldown_until"])
+                    if _finite_number(record.get("cooldown_until"))
+                    else None
+                ),
+                "cooldown_remaining_seconds": (
+                    record["cooldown_remaining_seconds"]
+                    if type(record.get("cooldown_remaining_seconds")) is int
+                    and record["cooldown_remaining_seconds"] >= 0
+                    else 0
+                ),
+                "last_rate_limited_at": (
+                    float(record["last_rate_limited_at"])
+                    if _finite_number(record.get("last_rate_limited_at"))
+                    else None
+                ),
+                "cooldown_source": (
+                    record.get("cooldown_source")
+                    if record.get("cooldown_source") in ("retry_after", "default")
+                    else None
+                ),
+            }
+        )
+    return result
 
 
 def _safe_settings(value: Any) -> dict[str, Any]:

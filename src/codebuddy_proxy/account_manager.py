@@ -19,6 +19,7 @@ import re
 import tempfile
 import threading
 import time
+import unicodedata
 import uuid
 from typing import Any, Callable
 from urllib.parse import urlsplit
@@ -46,14 +47,11 @@ _PUBLIC_ACCOUNT_FIELDS = (
     "uid",
     "nickname",
     "active",
-    "rate_limited",
-    "cooldown_until",
-    "cooldown_remaining_seconds",
-    "last_rate_limited_at",
-    "cooldown_source",
+    "model_cooldowns",
     "checkin",
 )
-_RUNTIME_STATE_VERSION = 1
+_RUNTIME_STATE_VERSION = 2
+_LEGACY_RUNTIME_STATE_VERSION = 1
 _RUNTIME_STATE_FILENAME = "account-manager-state-v1.json"
 _DEFAULT_COOLDOWN_SECONDS = 60
 _RETRY_AFTER_SECONDS_RE = re.compile(r"^[0-9]+$")
@@ -106,7 +104,7 @@ class AccountManager:
             "default_cooldown_seconds": _DEFAULT_COOLDOWN_SECONDS,
             "auto_checkin_enabled": False,
         }
-        self._cooldowns: dict[str, dict[str, Any]] = {}
+        self._cooldowns: dict[str, dict[str, dict[str, Any]]] = {}
         self._load_runtime_state()
         self._closed = False
         self._jobs: dict[str, _LoginJob] = {}
@@ -145,28 +143,36 @@ class AccountManager:
                     account_id = account.get("id")
                     if not isinstance(account_id, str):
                         account_id = None
-                    cooldown = self._cooldowns.get(account_id)
-                    deadline = cooldown.get("deadline") if cooldown else None
-                    active_cooldown = (
-                        cooldown is not None
-                        and isinstance(deadline, (int, float))
-                        and deadline > server_time
-                    )
+                    cooldowns = self._cooldowns.get(account_id, {})
+                    model_cooldowns = []
+                    for model, cooldown in sorted(cooldowns.items()):
+                        deadline = cooldown.get("deadline")
+                        active_cooldown = (
+                            isinstance(deadline, (int, float))
+                            and deadline > server_time
+                        )
+                        model_cooldowns.append(
+                            {
+                                "model": model,
+                                "rate_limited": active_cooldown,
+                                # Keep the original deadline and source as
+                                # history after expiry; only the active flag
+                                # and remaining duration change.
+                                "cooldown_until": deadline,
+                                "cooldown_remaining_seconds": (
+                                    max(0, math.ceil(deadline - server_time))
+                                    if active_cooldown
+                                    else 0
+                                ),
+                                "last_rate_limited_at": cooldown.get(
+                                    "last_rate_limited_at"
+                                ),
+                                "cooldown_source": cooldown.get("source"),
+                            }
+                        )
                     safe.update(
                         {
-                            "rate_limited": active_cooldown,
-                            "cooldown_until": deadline if active_cooldown else None,
-                            "cooldown_remaining_seconds": (
-                                max(0, math.ceil(deadline - server_time))
-                                if active_cooldown
-                                else 0
-                            ),
-                            "last_rate_limited_at": (
-                                cooldown.get("last_rate_limited_at") if cooldown else None
-                            ),
-                            "cooldown_source": (
-                                cooldown.get("source") if active_cooldown else None
-                            ),
+                            "model_cooldowns": model_cooldowns,
                         }
                     )
                     safe_accounts.append(safe)
@@ -215,11 +221,17 @@ class AccountManager:
         client: Any,
         retry_after: Any,
         *,
+        model: str | None = None,
         excluded_account_ids: set[str] | None = None,
         allow_switch: bool = True,
     ) -> Any | None:
-        """Record a 429 cooldown and optionally switch within the same region."""
+        """Record a model-scoped 429 and optionally switch within the same region."""
 
+        model_key = _valid_model_name(model)
+        if model_key is None:
+            # Billing and other model-less endpoints must not affect chat
+            # failover or impose a cooldown on every model for this account.
+            return None
         identity = _client_identity(client)
         if identity is None:
             return None
@@ -232,17 +244,32 @@ class AccountManager:
             delay, source = _cooldown_delay(retry_after, now)
             deadline = now + delay
             with self._runtime_lock:
-                previous = self._cooldowns.get(account_id)
+                account_cooldowns = self._cooldowns.get(account_id)
+                had_account_cooldowns = account_cooldowns is not None
+                if account_cooldowns is None:
+                    account_cooldowns = {}
+                    self._cooldowns[account_id] = account_cooldowns
+                had_previous = model_key in account_cooldowns
+                previous = account_cooldowns.get(model_key)
                 if previous is not None and previous.get("deadline", 0) > now:
                     if previous["deadline"] > deadline:
                         deadline = previous["deadline"]
                         source = previous["source"]
-                self._cooldowns[account_id] = {
+                account_cooldowns[model_key] = {
                     "deadline": deadline,
                     "last_rate_limited_at": now,
                     "source": source,
                 }
-                self._save_runtime_state_locked()
+                try:
+                    self._save_runtime_state_locked()
+                except Exception:
+                    if had_previous:
+                        account_cooldowns[model_key] = previous
+                    else:
+                        account_cooldowns.pop(model_key, None)
+                        if not account_cooldowns and not had_account_cooldowns:
+                            self._cooldowns.pop(account_id, None)
+                    raise
 
         excluded = {
             item for item in (excluded_account_ids or set()) if isinstance(item, str)
@@ -268,7 +295,7 @@ class AccountManager:
                         or candidate.get("endpoint") != endpoint
                     ):
                         continue
-                    cooldown = self._cooldowns.get(candidate_id)
+                    cooldown = self._cooldowns.get(candidate_id, {}).get(model_key)
                     if (
                         cooldown is not None
                         and cooldown.get("deadline", 0) > time.time()
@@ -410,22 +437,22 @@ class AccountManager:
             raise AccountManagerError("账号管理状态文件损坏，未修改任何数据", status_code=503) from None
         if not isinstance(value, dict) or set(value) != {"version", "settings", "cooldowns"}:
             raise AccountManagerError("账号管理状态文件损坏，未修改任何数据", status_code=503)
-        if (
-            type(value.get("version")) is not int
-            or value.get("version") != _RUNTIME_STATE_VERSION
+        version = value.get("version")
+        if type(version) is not int or version not in (
+            _LEGACY_RUNTIME_STATE_VERSION,
+            _RUNTIME_STATE_VERSION,
         ):
             raise AccountManagerError("账号管理状态文件版本不受支持，未修改任何数据", status_code=503)
         settings = value.get("settings")
+        setting_fields = set(settings) if isinstance(settings, dict) else set()
+        legacy_fields = {"auto_switch_on_429", "default_cooldown_seconds"}
+        current_fields = legacy_fields | {"auto_checkin_enabled"}
         if (
             not isinstance(settings, dict)
-            or set(settings)
-            not in (
-                {"auto_switch_on_429", "default_cooldown_seconds"},
-                {
-                    "auto_switch_on_429",
-                    "default_cooldown_seconds",
-                    "auto_checkin_enabled",
-                },
+            or setting_fields not in (
+                (legacy_fields, current_fields)
+                if version == _LEGACY_RUNTIME_STATE_VERSION
+                else (current_fields,)
             )
             or type(settings.get("auto_switch_on_429")) is not bool
             or type(settings.get("default_cooldown_seconds")) is not int
@@ -439,24 +466,56 @@ class AccountManager:
         cooldowns = value.get("cooldowns")
         if not isinstance(cooldowns, dict):
             raise AccountManagerError("账号管理状态文件损坏，未修改任何数据", status_code=503)
-        loaded: dict[str, dict[str, Any]] = {}
-        for account_id, record in cooldowns.items():
-            if (
-                not isinstance(account_id, str)
-                or not account_id
-                or len(account_id) > 256
-                or not isinstance(record, dict)
-                or set(record) != {"deadline", "last_rate_limited_at", "source"}
-                or not _finite_number(record.get("deadline"))
-                or not _finite_number(record.get("last_rate_limited_at"))
-                or record.get("source") not in ("retry_after", "default")
-            ):
-                raise AccountManagerError("账号管理状态文件损坏，未修改任何数据", status_code=503)
-            loaded[account_id] = {
-                "deadline": float(record["deadline"]),
-                "last_rate_limited_at": float(record["last_rate_limited_at"]),
-                "source": record["source"],
-            }
+        loaded: dict[str, dict[str, dict[str, Any]]] = {}
+        if version == _LEGACY_RUNTIME_STATE_VERSION:
+            # A legacy account-wide cooldown cannot safely be assigned to a
+            # particular model.  Validate its full shape, then discard it.
+            for account_id, record in cooldowns.items():
+                if (
+                    not isinstance(account_id, str)
+                    or not account_id
+                    or len(account_id) > 256
+                    or not isinstance(record, dict)
+                    or set(record) != {"deadline", "last_rate_limited_at", "source"}
+                    or not _finite_number(record.get("deadline"))
+                    or not _finite_number(record.get("last_rate_limited_at"))
+                    or record.get("source") not in ("retry_after", "default")
+                ):
+                    raise AccountManagerError(
+                        "账号管理状态文件损坏，未修改任何数据", status_code=503
+                    )
+        else:
+            for account_id, model_records in cooldowns.items():
+                if (
+                    not isinstance(account_id, str)
+                    or not account_id
+                    or len(account_id) > 256
+                    or not isinstance(model_records, dict)
+                ):
+                    raise AccountManagerError(
+                        "账号管理状态文件损坏，未修改任何数据", status_code=503
+                    )
+                loaded_records: dict[str, dict[str, Any]] = {}
+                for model, record in model_records.items():
+                    if (
+                        _valid_model_name(model) != model
+                        or not isinstance(record, dict)
+                        or set(record)
+                        != {"deadline", "last_rate_limited_at", "source"}
+                        or not _finite_number(record.get("deadline"))
+                        or not _finite_number(record.get("last_rate_limited_at"))
+                        or record.get("source") not in ("retry_after", "default")
+                    ):
+                        raise AccountManagerError(
+                            "账号管理状态文件损坏，未修改任何数据", status_code=503
+                        )
+                    loaded_records[model] = {
+                        "deadline": float(record["deadline"]),
+                        "last_rate_limited_at": float(record["last_rate_limited_at"]),
+                        "source": record["source"],
+                    }
+                if loaded_records:
+                    loaded[account_id] = loaded_records
         self._settings = {
             "auto_switch_on_429": settings["auto_switch_on_429"],
             "default_cooldown_seconds": _DEFAULT_COOLDOWN_SECONDS,
@@ -472,8 +531,12 @@ class AccountManager:
             "version": _RUNTIME_STATE_VERSION,
             "settings": dict(self._settings),
             "cooldowns": {
-                account_id: dict(record)
-                for account_id, record in self._cooldowns.items()
+                account_id: {
+                    model: dict(record)
+                    for model, record in model_records.items()
+                }
+                for account_id, model_records in self._cooldowns.items()
+                if model_records
             },
         }
         try:
@@ -762,6 +825,18 @@ def _finite_number(value: Any) -> bool:
         return math.isfinite(float(value))
     except (OverflowError, TypeError, ValueError):
         return False
+
+
+def _valid_model_name(model: Any) -> str | None:
+    """Return a model identifier only when it is safe to key and persist."""
+
+    if not isinstance(model, str) or not model or len(model) > 256:
+        return None
+    if not model.strip() or any(
+        unicodedata.category(char) in {"Cc", "Cs"} for char in model
+    ):
+        return None
+    return model
 
 
 def _client_identity(client: Any) -> tuple[str, str, str] | None:

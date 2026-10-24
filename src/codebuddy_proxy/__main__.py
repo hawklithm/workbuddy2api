@@ -951,7 +951,7 @@ async def health():
 async def checkin_status():
     """Accept GET/POST locally; the real upstream billing status endpoint requires POST."""
     return await forward_billing(
-        get_request_state(), "POST", "/v2/billing/meter/checkin-status", diagnostic
+        get_request_state(), "POST", "/v2/billing/meter/checkin-activity-status", diagnostic
     )
 
 
@@ -1168,7 +1168,7 @@ async def forward_chat(
         if response.status_code != 429:
             return response
         retry_state = await rate_limited_account(
-            state, response.headers.get("Retry-After"), attempted,
+            state, response.headers.get("Retry-After"), attempted, model=body.get("model"),
         )
         if retry_state is None or attempt + 1 == max_attempts:
             return response
@@ -1176,7 +1176,7 @@ async def forward_chat(
     return response
 
 
-async def rate_limited_account(state, retry_after, attempted):
+async def rate_limited_account(state, retry_after, attempted, *, model):
     """Record the original identity; late failures cannot override manual switches."""
     manager = getattr(state, "account_runtime", None)
     if manager is None:
@@ -1187,11 +1187,11 @@ async def rate_limited_account(state, retry_after, attempted):
             attempted.add(account_id)
         candidate = await asyncio.to_thread(
             manager.handle_rate_limit, state.client, retry_after,
-            excluded_account_ids=set(attempted),
+            model=model, excluded_account_ids=set(attempted),
         )
         next_id = manager.account_id_for_client(candidate) if candidate is not None else None
         state.write_log(
-            "account_rate_limited", account_id=account_id, switched_to=next_id,
+            "account_rate_limited", account_id=account_id, model=model, switched_to=next_id,
         )
         if candidate is None or next_id is None or next_id in attempted:
             return None

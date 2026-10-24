@@ -60,17 +60,20 @@
     button { color: inherit; }
     .shell { width: min(940px, calc(100% - 32px)); margin: 0 auto; padding: 52px 0 72px; }
     .hero { margin-bottom: 28px; }
+    .hero-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
     .eyebrow {
       display: flex;
       align-items: center;
       gap: 9px;
-      margin-bottom: 12px;
+      margin-bottom: 0;
       color: var(--accent);
       font-size: 12px;
       font-weight: 750;
       letter-spacing: .1em;
       text-transform: uppercase;
     }
+    .language-picker { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+    .language-picker select { min-height: 34px; padding: 0 9px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--text); font: inherit; }
     .eyebrow::before { width: 22px; height: 2px; border-radius: 2px; background: currentColor; content: ""; }
     h1 { margin: 0; font-size: clamp(29px, 5vw, 42px); line-height: 1.15; letter-spacing: -.035em; }
     .lead { max-width: 630px; margin: 12px 0 0; color: var(--muted); font-size: 15px; line-height: 1.7; }
@@ -154,6 +157,8 @@
     .account-meta { display: flex; flex-wrap: wrap; gap: 5px 14px; margin-top: 7px; color: var(--muted); font-size: 12px; line-height: 1.5; }
     .account-meta span { max-width: min(100%, 360px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .pill.cooldown-pill { background: var(--danger-soft); color: var(--danger); }
+    .model-cooldowns { display: flex; flex-wrap: wrap; gap: 5px; width: 100%; }
+    .pill.model-cooldown { max-width: min(100%, 520px); }
     .checkin-info { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 7px; color: var(--muted); font-size: 12px; line-height: 1.5; }
     .checkin-info .checkin-state { color: var(--text); font-weight: 680; }
     .checkin-info .checkin-state.error { color: var(--danger); }
@@ -194,9 +199,18 @@
 <body>
   <main class="shell">
     <header class="hero">
-      <div class="eyebrow">CodeBuddy · 本机代理</div>
-      <h1>账号管理</h1>
-      <p class="lead">在这里关联、切换和管理 CodeBuddy 登录账号。账号凭据由本机代理保存，页面不会显示会话内容。</p>
+      <div class="hero-top">
+        <div class="eyebrow" data-i18n="hero.brand">CodeBuddy · 本机代理</div>
+        <label class="language-picker" for="language-select">
+          <span data-i18n="language.label">语言</span>
+          <select id="language-select" aria-label="页面语言" data-i18n-aria-label="language.select">
+            <option value="zh-CN">中文</option>
+            <option value="en">English</option>
+          </select>
+        </label>
+      </div>
+      <h1 data-i18n="hero.title">账号管理</h1>
+      <p class="lead" data-i18n="hero.lead">在这里关联、切换和管理 CodeBuddy 登录账号。账号凭据由本机代理保存，页面不会显示会话内容。</p>
     </header>
 
     <div id="notice" class="notice" role="status" aria-live="polite"></div>
@@ -205,30 +219,30 @@
       <section class="panel" aria-labelledby="login-heading">
         <div class="panel-heading">
           <div>
-            <h2 id="login-heading">关联账号</h2>
-            <p class="section-note">选择账号所属区域，登录完成后会保存到本机账号库。</p>
+            <h2 id="login-heading" data-i18n="login.heading">关联账号</h2>
+            <p class="section-note" data-i18n="login.description">选择账号所属区域，登录完成后会保存到本机账号库。</p>
           </div>
         </div>
-        <div class="region-picker" role="group" aria-label="选择 CodeBuddy 区域">
-          <button class="region-option" type="button" data-backend="domestic" aria-pressed="true">国内</button>
-          <button class="region-option" type="button" data-backend="global" aria-pressed="false">Global</button>
+        <div class="region-picker" role="group" aria-label="选择 CodeBuddy 区域" data-i18n-aria-label="region.group">
+          <button class="region-option" type="button" data-backend="domestic" aria-pressed="true" data-i18n="region.domestic">国内</button>
+          <button class="region-option" type="button" data-backend="global" aria-pressed="false" data-i18n="region.global">Global</button>
         </div>
         <div class="associate-row">
           <button id="associate-button" class="button primary" type="button"><span>关联所选区域</span></button>
-          <p class="hint">登录页面会在新窗口打开；请在该窗口完成 CodeBuddy 登录。</p>
+          <p class="hint" data-i18n="login.hint">登录页面会在新窗口打开；请在该窗口完成 CodeBuddy 登录。</p>
         </div>
         <div id="login-progress" class="login-progress" aria-live="polite">
           <div class="progress-top">
             <div>
-              <p id="progress-title" class="progress-title">正在准备登录</p>
-              <p id="progress-copy" class="progress-copy">正在向本机代理请求登录地址。</p>
+              <p id="progress-title" class="progress-title" data-i18n="progress.preparing">正在准备登录</p>
+              <p id="progress-copy" class="progress-copy" data-i18n="progress.requestAddress">正在向本机代理请求登录地址。</p>
             </div>
             <span id="progress-spinner" class="spinner" aria-hidden="true"></span>
           </div>
           <div class="progress-actions">
-            <a id="manual-auth-link" class="auth-link" href="#" target="_blank" rel="noopener noreferrer" hidden>手动打开登录页</a>
-            <button id="retry-button" class="button small" type="button" hidden>重试关联</button>
-            <button id="cancel-button" class="button small" type="button" disabled>取消</button>
+            <a id="manual-auth-link" class="auth-link" href="#" target="_blank" rel="noopener noreferrer" hidden data-i18n="login.openManually">手动打开登录页</a>
+            <button id="retry-button" class="button small" type="button" hidden data-i18n="button.retryAssociation">重试关联</button>
+            <button id="cancel-button" class="button small" type="button" disabled data-i18n="button.cancel">取消</button>
           </div>
         </div>
       </section>
@@ -236,38 +250,38 @@
       <section class="panel" aria-labelledby="accounts-heading">
         <div class="panel-heading">
           <div>
-            <h2 id="accounts-heading">已关联账号</h2>
-            <p class="section-note">当前账号会用于新发起的代理请求。</p>
+            <h2 id="accounts-heading" data-i18n="accounts.heading">已关联账号</h2>
+            <p class="section-note" data-i18n="accounts.description">当前账号会用于新发起的代理请求。</p>
           </div>
           <div class="toolbar">
-            <button id="refresh-button" class="button small" type="button" aria-label="刷新账号列表">刷新列表</button>
+            <button id="refresh-button" class="button small" type="button" aria-label="刷新账号列表" data-i18n="button.refresh" data-i18n-aria-label="button.refreshAria">刷新列表</button>
           </div>
         </div>
         <div id="account-list" class="account-list" aria-live="polite"></div>
         <div class="settings-row">
           <div class="settings-copy">
-            <strong>遇到 429 自动切换账号</strong>
-            <p>仅尝试同一区域、同一服务地址且未冷却的账号；每个请求对每个账号最多尝试一次。默认关闭。</p>
+            <strong data-i18n="settings.autoSwitch.title">遇到 429 自动切换账号</strong>
+            <p data-i18n="settings.autoSwitch.description">仅排除同一区域、同一服务地址中“本次请求模型仍在冷却”的账号；同一账号的其他模型仍可用。每个请求对每个账号最多尝试一次。默认关闭。</p>
           </div>
-          <label class="switch-control" aria-label="遇到 429 自动切换账号">
-            <input id="auto-switch-toggle" type="checkbox" aria-label="遇到 429 自动切换账号">
+          <label class="switch-control" aria-label="遇到 429 自动切换账号" data-i18n-aria-label="settings.autoSwitch.title">
+            <input id="auto-switch-toggle" type="checkbox" aria-label="遇到 429 自动切换账号" data-i18n-aria-label="settings.autoSwitch.title">
             <span class="switch-track" aria-hidden="true"></span>
           </label>
         </div>
-        <p id="settings-status" class="settings-status" aria-live="polite">正在读取自动切换设置…</p>
+        <p id="settings-status" class="settings-status" aria-live="polite" data-i18n="settings.autoSwitch.loading">正在读取自动切换设置…</p>
         <div class="settings-row">
           <div class="settings-copy">
-            <strong>全局自动签到</strong>
-            <p>开启后由代理立即检查全部关联账号，并按北京时间计划自动签到。未知状态不会自动签到；关闭后会取消待执行计划。默认关闭。</p>
+            <strong data-i18n="settings.autoCheckin.title">全局自动签到</strong>
+            <p data-i18n="settings.autoCheckin.description">开启后由代理立即检查全部关联账号，并按北京时间计划自动签到。未知状态不会自动签到；关闭后会取消待执行计划。默认关闭。</p>
           </div>
-          <label class="switch-control" aria-label="全局自动签到">
-            <input id="auto-checkin-toggle" type="checkbox" aria-label="全局自动签到">
+          <label class="switch-control" aria-label="全局自动签到" data-i18n-aria-label="settings.autoCheckin.title">
+            <input id="auto-checkin-toggle" type="checkbox" aria-label="全局自动签到" data-i18n-aria-label="settings.autoCheckin.title">
             <span class="switch-track" aria-hidden="true"></span>
           </label>
         </div>
-        <p id="checkin-settings-status" class="settings-status" aria-live="polite">正在读取自动签到设置…</p>
+        <p id="checkin-settings-status" class="settings-status" aria-live="polite" data-i18n="settings.autoCheckin.loading">正在读取自动签到设置…</p>
         <p id="sync-status" class="sync-status" role="status" aria-live="polite" hidden></p>
-        <p class="footer-note">账号管理仅供本机使用。切换账号会影响之后发起的新请求，已经开始的请求会继续使用原账号。</p>
+        <p class="footer-note" data-i18n="footer.note">账号管理仅供本机使用。切换账号会影响之后发起的新请求，已经开始的请求会继续使用原账号。</p>
       </section>
     </div>
   </main>
@@ -281,7 +295,450 @@
       const LOGIN_TIMEOUT_MS = 310000;
       const ACCOUNT_REFRESH_VISIBLE_MS = 15000;
       const ACCOUNT_REFRESH_HIDDEN_MS = 60000;
+      const LANGUAGE_STORAGE_KEY = "codebuddy.admin.language";
+      const STRINGS = {
+        "zh-CN": {
+          "page.title": "CodeBuddy 账号管理",
+          "language.label": "语言",
+          "language.select": "页面语言",
+          "hero.brand": "CodeBuddy · 本机代理",
+          "hero.title": "账号管理",
+          "hero.lead": "在这里关联、切换和管理 CodeBuddy 登录账号。账号凭据由本机代理保存，页面不会显示会话内容。",
+          "login.heading": "关联账号",
+          "login.description": "选择账号所属区域，登录完成后会保存到本机账号库。",
+          "login.hint": "登录页面会在新窗口打开；请在该窗口完成 CodeBuddy 登录。",
+          "region.group": "选择 CodeBuddy 区域",
+          "region.domestic": "国内",
+          "region.global": "Global",
+          "login.associate": "关联所选区域",
+          "login.preparingButton": "正在准备登录…",
+          "login.openManually": "手动打开登录页",
+          "button.retryAssociation": "重试关联",
+          "button.cancel": "取消",
+          "button.refresh": "刷新列表",
+          "button.refreshAria": "刷新账号列表",
+          "accounts.heading": "已关联账号",
+          "accounts.description": "当前账号会用于新发起的代理请求。",
+          "settings.autoSwitch.title": "遇到 429 自动切换账号",
+          "settings.autoSwitch.description": "仅排除同一区域、同一服务地址中“本次请求模型仍在冷却”的账号；同一账号的其他模型仍可用。每个请求对每个账号最多尝试一次。默认关闭。",
+          "settings.autoSwitch.loading": "正在读取自动切换设置…",
+          "settings.autoCheckin.title": "全局自动签到",
+          "settings.autoCheckin.description": "开启后由代理立即检查全部关联账号，并按北京时间计划自动签到。未知状态不会自动签到；关闭后会取消待执行计划。默认关闭。",
+          "settings.autoCheckin.loading": "正在读取自动签到设置…",
+          "footer.note": "账号管理仅供本机使用。切换账号会影响之后发起的代理请求，已经开始的请求会继续使用原账号。",
+          "empty.loading": "正在读取账号列表…",
+          "empty.failedTitle": "账号列表暂时无法读取",
+          "empty.failedText": "请检查本机代理连接，然后点击“刷新列表”重试。",
+          "empty.noAccountsTitle": "还没有关联账号",
+          "empty.noAccountsText": "选择上方的国内或 Global 区域，完成登录后账号会显示在这里。",
+          "account.defaultName": "CodeBuddy 账号",
+          "account.uid": "UID：{uid}",
+          "account.active": "当前账号",
+          "button.checkinQuery": "查询签到",
+          "button.checkin": "签到",
+          "button.activate": "设为当前",
+          "button.delete": "删除",
+          "checkin.today": "今日签到：{status}",
+          "checkin.unknown": "未知",
+          "checkin.unchecked": "未签到",
+          "checkin.checked": "已签到",
+          "checkin.checking": "查询中",
+          "checkin.signing": "签到中",
+          "checkin.error": "失败",
+          "checkin.nextPlan": "下次计划：{time} 北京时间",
+          "checkin.errorContext": "错误详情：{detail}",
+          "checkin.statusNotice": "「{name}」今日签到状态：{status}。",
+          "checkin.resultNotice": "签到状态：{status}。",
+          "checkin.queryFailed": "查询签到状态失败，请重试。",
+          "checkin.signFailed": "签到失败，请重试。",
+          "checkin.success": "签到成功。",
+          "cooldown.badge": "模型 {model} · 冷却 {time} · {source}",
+          "cooldown.upstream": "上游指定",
+          "cooldown.default": "默认估算",
+          "status.switchReady": "已从本机代理读取设置；上游未提供有效等待时间时，默认冷却 {seconds} 秒。",
+          "status.checkinReady": "自动签到设置已从本机代理读取。",
+          "status.switchReadFailed": "暂时无法读取设置，自动切换保持关闭；页面会继续重试。",
+          "status.checkinReadFailed": "暂时无法读取设置，自动签到保持关闭；页面会继续重试。",
+          "status.saving": "正在保存设置…",
+          "status.saveUnconfirmed": "保存结果未确认，正在重新读取设置…",
+          "status.switchUnconfirmed": "暂时无法确认代理中的设置；页面会继续定期同步。",
+          "status.checkinUnconfirmed": "暂时无法确认代理中的自动签到设置；页面会继续定期同步。",
+          "status.syncRecovered": "账号状态已恢复同步。",
+          "status.syncFailed": "暂时无法同步账号状态，页面会在稍后重试。",
+          "status.syncUnavailable": "账号列表暂时无法同步，请检查本机代理后重试。",
+          "notice.detail": "详情：{detail}",
+          "notice.checkinQueryFailed": "查询签到状态失败，请重试。",
+          "notice.checkinSignFailed": "签到失败，请重试。",
+          "notice.checkinStatus": "「{name}」今日签到状态：{status}。",
+          "notice.checkinSuccess": "签到成功。",
+          "notice.checkinResult": "签到状态：{status}。",
+          "notice.autoSwitchOn": "已开启遇到 429 时自动切换账号。",
+          "notice.autoSwitchOff": "已关闭遇到 429 时自动切换账号。",
+          "notice.autoCheckinOn": "已开启，代理正在检查全部关联账号。",
+          "notice.autoCheckinOff": "已关闭全局自动签到。",
+          "notice.settingsSaveUnconfirmed": "设置保存结果未确认，页面会重新同步。{detail}",
+          "notice.checkinSettingSaveUnconfirmed": "自动签到设置结果未确认，页面会重新同步。{detail}",
+          "notice.switchSuccess": "已切换到「{name}」。之后发起的新请求会使用此账号。",
+          "notice.switchRefreshFailed": "账号已切换，但列表暂时无法刷新。请点击“刷新列表”确认当前状态。",
+          "notice.switchFailed": "切换账号失败：{detail}",
+          "notice.deleteConfirm": "确定删除「{name}」吗？此操作会移除本机保存的该账号登录态。",
+          "notice.deleteSuccess": "已删除「{name}」。",
+          "notice.deleteRefreshFailed": "账号已删除，但列表暂时无法刷新。请点击“刷新列表”确认当前状态。",
+          "notice.deleteFailed": "删除账号失败：{detail}",
+          "notice.loginListFailed": "关联已完成，但账号列表暂时无法读取。请点击“刷新列表”确认结果。",
+          "notice.loginFirstActive": "关联成功。当前没有其他账号，因此已自动设为当前账号。",
+          "notice.loginAdded": "「{name}」关联成功，当前账号保持不变。",
+          "notice.loginSuccess": "关联成功，账号列表已刷新。",
+          "notice.loginCancelled": "登录已取消。",
+          "notice.loginStartFailed": "无法启动登录：{detail}",
+          "notice.loginTimeout": "登录超时，请确认本机代理仍在运行后重试。",
+          "notice.loginTaskPending": "代理尚未确认任务状态，页面会继续查询。",
+          "notice.loginCancelUnconfirmed": "取消请求未确认：{detail}",
+          "notice.loginConnectionRestored": "本机代理连接已恢复，正在同步登录状态。",
+          "notice.loginReadFailed": "无法读取登录状态：{detail}",
+          "notice.loginUnknownStatus": "代理返回了未知登录状态，正在继续查询。",
+          "notice.cancelFailed": "取消请求失败：{detail}",
+          "progress.preparing": "正在准备登录",
+          "progress.requestAddress": "正在向本机代理请求登录地址。",
+          "progress.popupOpened": "登录窗口已打开，正在获取认证地址。",
+          "progress.popupBlocked": "浏览器拦截了新窗口，正在获取认证地址；之后可手动打开登录页。",
+          "progress.inPopupTitle": "请在新窗口完成登录",
+          "progress.popupReady": "完成登录后，此页面会自动更新账号列表。",
+          "progress.popupManual": "新窗口未能打开，或已关闭登录窗口。请使用下方链接手动打开登录页。",
+          "progress.complete": "关联完成",
+          "progress.saved": "登录态已安全保存到本机账号库。",
+          "progress.cancelled": "登录已取消",
+          "progress.noChange": "没有新增或替换账号登录态。你可以重新发起关联。",
+          "progress.failed": "关联失败",
+          "progress.errorDetails": "登录失败详情：{detail}",
+          "progress.timeoutConfirm": "登录超时，正在确认任务状态",
+          "progress.cancelRequested": "已请求取消登录任务；页面会继续确认最终状态。",
+          "progress.readTemporarilyFailed": "暂时无法读取登录状态",
+          "progress.jobStillTracked": "登录任务仍在跟踪，页面会继续查询。你也可以点击取消重试。",
+          "progress.unknownStatus": "登录状态无法识别",
+          "progress.continueQuery": "页面会继续查询任务状态。你可以点击取消，或稍后重试。",
+          "progress.overFiveMinutes": "登录超过 5 分钟",
+          "progress.confirmingFinal": "仍在确认任务最终状态；可再次点击取消重试。",
+          "progress.cannotStart": "无法启动登录",
+          "progress.loginDetails": "登录错误详情：{detail}",
+          "progress.cancelling": "正在取消登录任务…",
+          "progress.cancelRetry": "任务仍在跟踪，页面会继续查询状态；你可以再次点击取消。",
+          "popup.title": "正在准备 CodeBuddy 登录",
+          "popup.body": "正在连接本机代理并准备登录页面…",
+          "source.details": "详情：{detail}",
+          "source.checkinError": "签到错误：{detail}",
+          "error.generic": "发生错误，请重试。",
+          "error.http": "请求失败（HTTP {status}）。请稍后重试。",
+          "error.connection": "无法连接本机代理，请确认代理仍在运行后重试。",
+          "error.invalidSnapshot": "账号列表响应格式无效，请刷新后重试。",
+          "error.invalidSettings": "代理返回的设置格式无效，请重试。",
+          "error.invalidCheckinStatus": "代理返回的签到状态格式无效。",
+          "error.invalidCheckinResult": "代理返回的签到结果格式无效。",
+          "error.invalidAuthUrl": "代理返回的登录地址无效，请取消后重试。",
+          "error.invalidJob": "登录任务响应格式无效，请重试。",
+          "error.invalidJobId": "代理未返回有效的登录任务编号，请重试。",
+          "error.unknownJob": "代理返回了未知登录任务状态，请重试。",
+          "error.startTimeout": "本机代理准备登录超时，请确认服务仍在运行后重试。",
+          "error.startLogin": "无法启动登录，请重试。",
+          "error.loginIncomplete": "登录未能完成，请检查登录窗口后重试。",
+          "error.cancelNotConfirmed": "代理尚未确认取消，请稍后重试。",
+          "error.connectionTest": "无法读取登录状态，请重试。",
+          "error.cancelRetry": "请稍后重试。",
+          "error.accountNotFound": "未找到该账号",
+          "error.switchBeforeDelete": "请先切换到其他账号，再删除此账号",
+          "error.settingRequired": "至少需要设置一个账号管理开关",
+          "error.autoSwitchBoolean": "auto_switch_on_429 必须为布尔值",
+          "error.autoCheckinBoolean": "auto_checkin_enabled 必须为布尔值",
+          "error.backendValue": "backend 必须为 domestic 或 global",
+          "error.managerDirectory": "账号管理状态目录无效，未修改任何数据",
+          "error.managerFile": "账号管理状态文件无效，未修改任何数据",
+          "error.managerCorrupt": "账号管理状态文件损坏，未修改任何数据",
+          "error.managerVersion": "账号管理状态文件版本不受支持，未修改任何数据",
+          "error.managerSave": "无法保存账号管理状态",
+          "error.managerClosed": "账号管理器已关闭",
+          "error.tooManyJobs": "当前登录任务较多，请稍后重试",
+          "error.loginTimeout": "登录超时，请重新尝试",
+          "error.loginInvalid": "登录信息无效，请重新尝试",
+          "error.loginFailed": "登录失败，请稍后重新尝试",
+          "error.jobNotFound": "未找到该登录任务",
+          "error.requestRejected": "请求被拒绝",
+          "error.invalidRequest": "请求格式无效",
+          "error.adminFailed": "管理请求失败",
+          "error.localOnly": "仅允许本机访问管理页面",
+          "error.invalidHost": "管理页面 Host 无效",
+          "error.invalidOrigin": "管理页面 Origin 无效",
+          "error.crossSite": "跨站管理请求已拒绝",
+          "error.missingMarker": "缺少管理请求标记",
+          "error.requestTooLarge": "请求内容过大",
+          "error.invalidJson": "请求 JSON 无效",
+          "error.jsonObject": "请求 JSON 必须为对象",
+          "error.accountOrJobNotFound": "未找到请求的账号或任务",
+          "error.invalidParams": "请求参数无效",
+          "error.invalidSettingsBody": "仅接受非空布尔值账号管理设置",
+          "error.checkinUnavailable": "签到活动未开放",
+          "error.checkinStatusFailed": "签到状态查询失败",
+          "error.checkinRequestFailed": "签到请求失败",
+          "error.checkinUnconfirmed": "签到结果未确认",
+          "error.accountDoesNotExist": "账号不存在"
+        },
+        en: {
+          "page.title": "CodeBuddy Account Manager",
+          "language.label": "Language",
+          "language.select": "Page language",
+          "hero.brand": "CodeBuddy · Local Proxy",
+          "hero.title": "Account manager",
+          "hero.lead": "Link, switch, and manage CodeBuddy accounts here. Credentials are stored by the local proxy; session contents are never shown on this page.",
+          "login.heading": "Link an account",
+          "login.description": "Choose the account region. The account will be saved locally after sign-in.",
+          "login.hint": "Sign-in opens in a new window. Complete CodeBuddy sign-in there.",
+          "region.group": "Choose a CodeBuddy region",
+          "region.domestic": "Domestic",
+          "region.global": "Global",
+          "login.associate": "Link selected region",
+          "login.preparingButton": "Preparing sign-in…",
+          "login.openManually": "Open sign-in page manually",
+          "button.retryAssociation": "Retry linking",
+          "button.cancel": "Cancel",
+          "button.refresh": "Refresh list",
+          "button.refreshAria": "Refresh account list",
+          "accounts.heading": "Linked accounts",
+          "accounts.description": "New proxy requests use the current account.",
+          "settings.autoSwitch.title": "Switch accounts automatically on 429",
+          "settings.autoSwitch.description": "Skip only same-region, same-endpoint accounts whose cooldown for this request's model is still active. Other models on the same account remain available. Try each account at most once per request. Off by default.",
+          "settings.autoSwitch.loading": "Loading automatic-switch setting…",
+          "settings.autoCheckin.title": "Automatic check-in for all accounts",
+          "settings.autoCheckin.description": "When enabled, the proxy checks every linked account and checks in on its Beijing-time schedule. Unknown status is never signed automatically. Turning it off cancels pending work. Off by default.",
+          "settings.autoCheckin.loading": "Loading automatic check-in setting…",
+          "footer.note": "Account management is local only. Switching affects new proxy requests; requests already in progress keep using their original account.",
+          "empty.loading": "Loading accounts…",
+          "empty.failedTitle": "Accounts are temporarily unavailable",
+          "empty.failedText": "Check the local proxy, then select Refresh list to try again.",
+          "empty.noAccountsTitle": "No linked accounts yet",
+          "empty.noAccountsText": "Choose Domestic or Global above and finish sign-in to add an account here.",
+          "account.defaultName": "CodeBuddy account",
+          "account.uid": "UID: {uid}",
+          "account.active": "Current",
+          "button.checkinQuery": "Check status",
+          "button.checkin": "Check in",
+          "button.activate": "Set active",
+          "button.delete": "Delete",
+          "checkin.today": "Today's check-in: {status}",
+          "checkin.unknown": "Unknown",
+          "checkin.unchecked": "Not checked in",
+          "checkin.checked": "Checked in",
+          "checkin.checking": "Checking…",
+          "checkin.signing": "Checking in…",
+          "checkin.error": "Failed",
+          "checkin.nextPlan": "Next planned check-in: {time} Beijing time",
+          "checkin.errorContext": "Error details: {detail}",
+          "checkin.statusNotice": "{name}: today's check-in status is {status}.",
+          "checkin.resultNotice": "Check-in status: {status}.",
+          "checkin.queryFailed": "Could not check today's status. Try again.",
+          "checkin.signFailed": "Check-in failed. Try again.",
+          "checkin.success": "Check-in succeeded.",
+          "cooldown.badge": "Model {model} · cooling down {time} · {source}",
+          "cooldown.upstream": "upstream specified",
+          "cooldown.default": "estimated default",
+          "status.switchReady": "Setting loaded from the local proxy; default cooldown: {seconds} seconds when the upstream provides no valid wait time.",
+          "status.checkinReady": "Automatic check-in setting loaded from the local proxy.",
+          "status.switchReadFailed": "Could not load the setting yet. Automatic switching stays off while the page retries.",
+          "status.checkinReadFailed": "Could not load the setting yet. Automatic check-in stays off while the page retries.",
+          "status.saving": "Saving setting…",
+          "status.saveUnconfirmed": "Save result is unconfirmed; reading the setting again…",
+          "status.switchUnconfirmed": "Could not confirm the proxy setting. The page will keep syncing periodically.",
+          "status.checkinUnconfirmed": "Could not confirm automatic check-in setting. The page will keep syncing periodically.",
+          "status.syncRecovered": "Account status synchronization has recovered.",
+          "status.syncFailed": "Account status could not be synced. The page will retry shortly.",
+          "status.syncUnavailable": "Account list could not be synced. Check the local proxy and try again.",
+          "notice.detail": "Details: {detail}",
+          "notice.checkinQueryFailed": "Could not check today's status. Try again.",
+          "notice.checkinSignFailed": "Check-in failed. Try again.",
+          "notice.checkinStatus": "{name}: today's check-in status is {status}.",
+          "notice.checkinSuccess": "Check-in succeeded.",
+          "notice.checkinResult": "Check-in status: {status}.",
+          "notice.autoSwitchOn": "Automatic account switching on 429 is enabled.",
+          "notice.autoSwitchOff": "Automatic account switching on 429 is disabled.",
+          "notice.autoCheckinOn": "Enabled. The proxy is checking all linked accounts.",
+          "notice.autoCheckinOff": "Global automatic check-in is disabled.",
+          "notice.settingsSaveUnconfirmed": "The setting save result is unconfirmed; the page will sync again. {detail}",
+          "notice.checkinSettingSaveUnconfirmed": "The automatic check-in save result is unconfirmed; the page will sync again. {detail}",
+          "notice.switchSuccess": "Switched to “{name}”. New requests will use this account.",
+          "notice.switchRefreshFailed": "The account was switched, but the list could not be refreshed. Select Refresh list to confirm.",
+          "notice.switchFailed": "Could not switch accounts: {detail}",
+          "notice.deleteConfirm": "Delete “{name}”? This removes its saved sign-in from the local proxy.",
+          "notice.deleteSuccess": "Deleted “{name}”.",
+          "notice.deleteRefreshFailed": "The account was deleted, but the list could not be refreshed. Select Refresh list to confirm.",
+          "notice.deleteFailed": "Could not delete the account: {detail}",
+          "notice.loginListFailed": "Linking completed, but the account list is unavailable. Select Refresh list to confirm.",
+          "notice.loginFirstActive": "Account linked. It was set as active because there were no other accounts.",
+          "notice.loginAdded": "“{name}” was linked. The current account was not changed.",
+          "notice.loginSuccess": "Account linked and list refreshed.",
+          "notice.loginCancelled": "Sign-in was cancelled.",
+          "notice.loginStartFailed": "Could not start sign-in: {detail}",
+          "notice.loginTimeout": "Sign-in timed out. Check that the local proxy is running and try again.",
+          "notice.loginTaskPending": "The proxy has not confirmed the task status yet. The page will keep checking.",
+          "notice.loginCancelUnconfirmed": "Cancellation is unconfirmed: {detail}",
+          "notice.loginConnectionRestored": "The local proxy connection is back. Syncing sign-in status.",
+          "notice.loginReadFailed": "Could not read sign-in status: {detail}",
+          "notice.loginUnknownStatus": "The proxy returned an unknown sign-in status. The page will keep checking.",
+          "notice.cancelFailed": "Could not cancel the task: {detail}",
+          "progress.preparing": "Preparing sign-in",
+          "progress.requestAddress": "Requesting a sign-in address from the local proxy.",
+          "progress.popupOpened": "The sign-in window is open. Getting the authorization address.",
+          "progress.popupBlocked": "The browser blocked the new window. Getting the authorization address; you can open it manually afterward.",
+          "progress.inPopupTitle": "Finish sign-in in the new window",
+          "progress.popupReady": "This page will refresh the account list when sign-in completes.",
+          "progress.popupManual": "The new window was blocked or closed. Use the link below to open the sign-in page manually.",
+          "progress.complete": "Account linked",
+          "progress.saved": "Sign-in was saved securely in the local account store.",
+          "progress.cancelled": "Sign-in cancelled",
+          "progress.noChange": "No sign-in was added or replaced. You can start linking again.",
+          "progress.failed": "Linking failed",
+          "progress.errorDetails": "Sign-in details: {detail}",
+          "progress.timeoutConfirm": "Sign-in timed out; confirming task status",
+          "progress.cancelRequested": "A cancellation was requested. The page will keep checking the final status.",
+          "progress.readTemporarilyFailed": "Sign-in status is temporarily unavailable",
+          "progress.jobStillTracked": "The sign-in task is still being tracked. The page will keep checking; you can also select Cancel to retry.",
+          "progress.unknownStatus": "Sign-in status is unrecognized",
+          "progress.continueQuery": "The page will keep checking the task. You can cancel or try again later.",
+          "progress.overFiveMinutes": "Sign-in has taken over 5 minutes",
+          "progress.confirmingFinal": "Still confirming the final task status. Select Cancel again to retry.",
+          "progress.cannotStart": "Could not start sign-in",
+          "progress.loginDetails": "Sign-in error details: {detail}",
+          "progress.cancelling": "Cancelling sign-in task…",
+          "progress.cancelRetry": "The task is still being tracked. The page will keep checking; you can select Cancel again.",
+          "popup.title": "Preparing CodeBuddy sign-in",
+          "popup.body": "Connecting to the local proxy and preparing the sign-in page…",
+          "source.details": "Details: {detail}",
+          "source.checkinError": "Check-in error: {detail}",
+          "error.generic": "An error occurred. Try again.",
+          "error.http": "Request failed (HTTP {status}). Try again later.",
+          "error.connection": "Could not connect to the local proxy. Check that it is running and try again.",
+          "error.invalidSnapshot": "The account list response is invalid. Refresh and try again.",
+          "error.invalidSettings": "The proxy returned an invalid setting response. Try again.",
+          "error.invalidCheckinStatus": "The proxy returned an invalid check-in status.",
+          "error.invalidCheckinResult": "The proxy returned an invalid check-in result.",
+          "error.invalidAuthUrl": "The proxy returned an invalid sign-in address. Cancel and try again.",
+          "error.invalidJob": "The sign-in task response is invalid. Try again.",
+          "error.invalidJobId": "The proxy did not return a valid sign-in task ID. Try again.",
+          "error.unknownJob": "The proxy returned an unknown sign-in task status. Try again.",
+          "error.startTimeout": "The local proxy timed out while preparing sign-in. Check that it is running and try again.",
+          "error.startLogin": "Could not start sign-in. Try again.",
+          "error.loginIncomplete": "Sign-in did not finish. Check the sign-in window and try again.",
+          "error.cancelNotConfirmed": "The proxy has not confirmed cancellation. Try again shortly.",
+          "error.connectionTest": "Could not read sign-in status. Try again.",
+          "error.cancelRetry": "Try again shortly.",
+          "error.accountNotFound": "Account not found",
+          "error.switchBeforeDelete": "Switch to another account before deleting this one",
+          "error.settingRequired": "At least one account-management setting is required",
+          "error.autoSwitchBoolean": "auto_switch_on_429 must be a boolean",
+          "error.autoCheckinBoolean": "auto_checkin_enabled must be a boolean",
+          "error.backendValue": "backend must be domestic or global",
+          "error.managerDirectory": "The account-manager state directory is invalid; no data was changed",
+          "error.managerFile": "The account-manager state file is invalid; no data was changed",
+          "error.managerCorrupt": "The account-manager state file is corrupted; no data was changed",
+          "error.managerVersion": "The account-manager state file version is unsupported; no data was changed",
+          "error.managerSave": "Could not save account-manager state",
+          "error.managerClosed": "The account manager is closed",
+          "error.tooManyJobs": "There are too many sign-in tasks. Try again later",
+          "error.loginTimeout": "Sign-in timed out. Try again",
+          "error.loginInvalid": "Sign-in information is invalid. Try again",
+          "error.loginFailed": "Sign-in failed. Try again later",
+          "error.jobNotFound": "Sign-in task not found",
+          "error.requestRejected": "Request rejected",
+          "error.invalidRequest": "Invalid request format",
+          "error.adminFailed": "Account-management request failed",
+          "error.localOnly": "The management page is available only from this computer",
+          "error.invalidHost": "Invalid management-page Host",
+          "error.invalidOrigin": "Invalid management-page Origin",
+          "error.crossSite": "Cross-site management request rejected",
+          "error.missingMarker": "Missing management request marker",
+          "error.requestTooLarge": "Request body is too large",
+          "error.invalidJson": "Invalid request JSON",
+          "error.jsonObject": "Request JSON must be an object",
+          "error.accountOrJobNotFound": "Requested account or task not found",
+          "error.invalidParams": "Invalid request parameters",
+          "error.invalidSettingsBody": "Account settings must include at least one boolean value",
+          "error.checkinUnavailable": "Check-in is not available yet",
+          "error.checkinStatusFailed": "Could not query check-in status",
+          "error.checkinRequestFailed": "Check-in request failed",
+          "error.checkinUnconfirmed": "Check-in result is unconfirmed",
+          "error.accountDoesNotExist": "Account does not exist"
+        }
+      };
+      const BACKEND_ERROR_KEYS = Object.assign(Object.create(null), {
+        "未找到该账号": "error.accountNotFound",
+        "请先切换到其他账号，再删除此账号": "error.switchBeforeDelete",
+        "至少需要设置一个账号管理开关": "error.settingRequired",
+        "auto_switch_on_429 必须为布尔值": "error.autoSwitchBoolean",
+        "auto_checkin_enabled 必须为布尔值": "error.autoCheckinBoolean",
+        "backend 必须为 domestic 或 global": "error.backendValue",
+        "账号管理状态目录无效，未修改任何数据": "error.managerDirectory",
+        "账号管理状态文件无效，未修改任何数据": "error.managerFile",
+        "账号管理状态文件损坏，未修改任何数据": "error.managerCorrupt",
+        "账号管理状态文件版本不受支持，未修改任何数据": "error.managerVersion",
+        "无法保存账号管理状态": "error.managerSave",
+        "账号管理器已关闭": "error.managerClosed",
+        "当前登录任务较多，请稍后重试": "error.tooManyJobs",
+        "登录超时，请重新尝试": "error.loginTimeout",
+        "登录信息无效，请重新尝试": "error.loginInvalid",
+        "登录失败，请稍后重新尝试": "error.loginFailed",
+        "未找到该登录任务": "error.jobNotFound",
+        "请求被拒绝": "error.requestRejected",
+        "请求格式无效": "error.invalidRequest",
+        "管理请求失败": "error.adminFailed",
+        "仅允许本机访问管理页面": "error.localOnly",
+        "管理页面 Host 无效": "error.invalidHost",
+        "管理页面 Origin 无效": "error.invalidOrigin",
+        "跨站管理请求已拒绝": "error.crossSite",
+        "缺少管理请求标记": "error.missingMarker",
+        "请求内容过大": "error.requestTooLarge",
+        "请求 JSON 无效": "error.invalidJson",
+        "请求 JSON 必须为对象": "error.jsonObject",
+        "未找到请求的账号或任务": "error.accountOrJobNotFound",
+        "请求参数无效": "error.invalidParams",
+        "仅接受非空布尔值账号管理设置": "error.invalidSettingsBody",
+        "签到活动未开放": "error.checkinUnavailable",
+        "签到状态查询失败": "error.checkinStatusFailed",
+        "签到请求失败": "error.checkinRequestFailed",
+        "签到结果未确认": "error.checkinUnconfirmed",
+        "账号不存在": "error.accountDoesNotExist",
+        "无法连接本机代理，请确认代理仍在运行后重试。": "error.connection",
+        "账号列表响应格式无效，请刷新后重试。": "error.invalidSnapshot",
+        "代理返回的设置格式无效，请重试。": "error.invalidSettings",
+        "代理返回的签到状态格式无效。": "error.invalidCheckinStatus",
+        "代理返回的签到结果格式无效。": "error.invalidCheckinResult",
+        "代理返回的登录地址无效，请取消后重试。": "error.invalidAuthUrl",
+        "登录任务响应格式无效，请重试。": "error.invalidJob",
+        "代理未返回有效的登录任务编号，请重试。": "error.invalidJobId",
+        "代理返回了未知登录任务状态，请重试。": "error.unknownJob",
+        "本机代理准备登录超时，请确认服务仍在运行后重试。": "error.startTimeout",
+        "无法启动登录，请重试。": "error.startLogin",
+        "登录未能完成，请检查登录窗口后重试。": "error.loginIncomplete",
+        "代理尚未确认取消，请稍后重试。": "error.cancelNotConfirmed",
+        "无法读取登录状态，请重试。": "error.connectionTest",
+        "请稍后重试。": "error.cancelRetry"
+      });
+
+      function detectInitialLanguage() {
+        try {
+          const saved = window.localStorage && window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
+          if (saved === "zh-CN" || saved === "en") return saved;
+        } catch (_) { /* Storage can be disabled by browser policy. */ }
+        try {
+          const navigatorInfo = window.navigator || (typeof navigator !== "undefined" ? navigator : null);
+          const languages = navigatorInfo && Array.isArray(navigatorInfo.languages) && navigatorInfo.languages.length
+            ? navigatorInfo.languages
+            : navigatorInfo && navigatorInfo.language ? [navigatorInfo.language] : [];
+          if (!languages.length) return "zh-CN";
+          return String(languages[0]).toLowerCase().startsWith("zh") ? "zh-CN" : "en";
+        } catch (_) {
+          return "zh-CN";
+        }
+      }
+
       const state = {
+        language: detectInitialLanguage(),
         backend: "domestic",
         accounts: [],
         activeAccountId: null,
@@ -310,16 +767,23 @@
         serverClockOffsetMs: 0,
         refreshTimer: null,
         countdownTimer: null,
-        cooldownElements: new Map(),
+        cooldownElements: [],
         checkinResults: new Map(),
         checkinAutoLookupKeys: new Set(),
         checkinOperations: new Map(),
         checkinConcurrency: 0,
         checkinWaiters: [],
-        syncFailureShown: false
+        syncFailureShown: false,
+        noticeDescriptor: null,
+        progressDescriptor: null,
+        associateButtonBusy: false,
+        settingsStatusDescriptor: null,
+        checkinSettingsStatusDescriptor: null,
+        syncStatusDescriptor: null
       };
 
       const els = {
+        language: document.getElementById("language-select"),
         notice: document.getElementById("notice"),
         accountList: document.getElementById("account-list"),
         refresh: document.getElementById("refresh-button"),
@@ -338,14 +802,129 @@
         syncStatus: document.getElementById("sync-status")
       };
 
-      function showNotice(message, kind = "info") {
-        els.notice.textContent = message;
-        els.notice.className = `notice visible ${kind}`;
+      function t(key, params = {}) {
+        const language = STRINGS[state.language] || STRINGS["zh-CN"];
+        const template = Object.prototype.hasOwnProperty.call(language, key)
+          ? language[key]
+          : Object.prototype.hasOwnProperty.call(STRINGS["zh-CN"], key) ? STRINGS["zh-CN"][key] : key;
+        return String(template).replace(/\{([a-zA-Z0-9_]+)\}/g, (_, name) =>
+          params[name] === undefined || params[name] === null ? "" : String(params[name])
+        );
+      }
+
+      function fixedTextKey(raw) {
+        const value = typeof raw === "string" ? raw.trim() : "";
+        const http = value.match(/^请求失败（HTTP (\d+)）。请稍后重试。$/);
+        if (http) return { key: "error.http", params: { status: http[1] } };
+        if (Object.prototype.hasOwnProperty.call(BACKEND_ERROR_KEYS, value)) return BACKEND_ERROR_KEYS[value];
+        return null;
+      }
+
+      function localizedRaw(raw, prefixKey = null) {
+        const value = typeof raw === "string" ? raw.trim().slice(0, 600) : "";
+        if (!value) return t("error.generic");
+        const fixed = fixedTextKey(value);
+        if (fixed) return typeof fixed === "string" ? t(fixed) : t(fixed.key, fixed.params);
+        return prefixKey ? t(prefixKey, { detail: value }) : value;
+      }
+
+      function resolveParams(params = {}) {
+        const resolved = {};
+        for (const [name, value] of Object.entries(params)) {
+          resolved[name] = value && typeof value === "object" && typeof value.i18nKey === "string"
+            ? t(value.i18nKey, value.params || {})
+            : value;
+        }
+        return resolved;
+      }
+
+      function renderNotice() {
+        const descriptor = state.noticeDescriptor;
+        if (!descriptor) {
+          els.notice.textContent = "";
+          els.notice.className = "notice";
+          return;
+        }
+        els.notice.textContent = descriptor.raw !== undefined
+          ? localizedRaw(descriptor.raw, descriptor.prefixKey)
+          : t(descriptor.key, resolveParams(descriptor.params));
+        els.notice.className = `notice visible ${descriptor.kind}`;
+      }
+
+      function showNotice(key, kind = "info", params = {}) {
+        state.noticeDescriptor = { key, kind, params };
+        renderNotice();
+      }
+
+      function showNoticeDetail(raw, prefixKey, kind = "error") {
+        const fixed = fixedTextKey(raw);
+        if (fixed) {
+          if (typeof fixed === "string") showNotice(fixed, kind);
+          else showNotice(fixed.key, kind, fixed.params);
+          return;
+        }
+        state.noticeDescriptor = { raw: String(raw || ""), prefixKey, kind };
+        renderNotice();
+      }
+
+      function showErrorNotice(error, prefixKey, fallbackKey = "error.generic") {
+        const raw = error && typeof error.message === "string" ? error.message : "";
+        if (raw) showNoticeDetail(raw, prefixKey, "error");
+        else showNotice(fallbackKey, "error");
       }
 
       function clearNotice() {
-        els.notice.textContent = "";
-        els.notice.className = "notice";
+        state.noticeDescriptor = null;
+        renderNotice();
+      }
+
+      function renderSettingStatus(which) {
+        const descriptor = state[`${which}StatusDescriptor`];
+        const element = which === "settings" ? els.settingsStatus
+          : which === "checkinSettings" ? els.checkinSettingsStatus : els.syncStatus;
+        if (!element) return;
+        const baseClass = which === "sync" ? "sync-status" : "settings-status";
+        element.textContent = descriptor ? t(descriptor.key, descriptor.params) : "";
+        element.className = `${baseClass}${descriptor && descriptor.isError ? " error" : ""}`;
+        if (which === "sync") element.hidden = !descriptor;
+      }
+
+      function setLocalizedStatus(which, key, params = {}, isError = false) {
+        state[`${which}StatusDescriptor`] = key ? { key, params, isError } : null;
+        renderSettingStatus(which);
+      }
+
+      function applyLanguage() {
+        const root = document.documentElement;
+        if (root) root.lang = state.language;
+        document.title = t("page.title");
+        if (els.language) els.language.value = state.language;
+        for (const element of document.querySelectorAll("[data-i18n]")) {
+          const key = element.dataset && element.dataset.i18n;
+          if (key) element.textContent = t(key);
+        }
+        for (const element of document.querySelectorAll("[data-i18n-aria-label]")) {
+          const key = element.dataset && element.dataset.i18nAriaLabel;
+          if (key) element.setAttribute("aria-label", t(key));
+        }
+        renderSettingStatus("settings");
+        renderSettingStatus("checkinSettings");
+        renderSettingStatus("sync");
+        renderNotice();
+        if (state.progressDescriptor) renderProgress();
+        renderAssociateButton();
+        renderAccounts();
+        if (state.loginRun && state.loginRun.popup && !state.loginRun.authUrl) showInitialPopup(state.loginRun.popup);
+      }
+
+      function setLanguage(language, persist = true) {
+        if (language !== "zh-CN" && language !== "en") return;
+        state.language = language;
+        if (persist) {
+          try { window.localStorage && window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language); }
+          catch (_) { /* Storage can be disabled by browser policy. */ }
+        }
+        applyLanguage();
       }
 
       function safeDetail(payload, fallback) {
@@ -391,21 +970,29 @@
         return payload;
       }
 
-      function setButtonBusy(button, busy, label) {
-        button.disabled = busy;
-        const span = button.querySelector("span");
-        if (!span) return;
-        if (busy) {
-          span.dataset.originalText = span.textContent;
-          span.textContent = label;
-          const spinner = document.createElement("span");
-          spinner.className = "spinner";
-          spinner.setAttribute("aria-hidden", "true");
-          span.prepend(spinner);
-        } else {
-          const original = span.dataset.originalText;
-          if (original) span.textContent = original;
+      function renderAssociateButton() {
+        if (!els.associate) return;
+        const span = els.associate.querySelector("span");
+        if (span) {
+          span.replaceChildren();
+          if (state.associateButtonBusy) {
+            const spinner = document.createElement("span");
+            spinner.className = "spinner";
+            spinner.setAttribute("aria-hidden", "true");
+            span.append(spinner);
+          }
+          span.append(t(state.associateButtonBusy ? "login.preparingButton" : "login.associate"));
         }
+        els.associate.disabled = state.associateButtonBusy || Boolean(state.progressDescriptor && state.progressDescriptor.busy);
+      }
+
+      function setButtonBusy(button, busy) {
+        if (button !== els.associate) {
+          button.disabled = busy;
+          return;
+        }
+        state.associateButtonBusy = busy;
+        renderAssociateButton();
       }
 
       function makeText(tag, className, value) {
@@ -422,6 +1009,42 @@
         button.textContent = label;
         button.addEventListener("click", action);
         return button;
+      }
+
+      function renderProgress() {
+        const descriptor = state.progressDescriptor;
+        if (!descriptor) return;
+        els.progress.classList.add("visible");
+        els.progressTitle.textContent = t(descriptor.titleKey, resolveParams(descriptor.titleParams));
+        els.progressCopy.textContent = descriptor.copyRaw !== undefined
+          ? localizedRaw(descriptor.copyRaw, descriptor.copyPrefixKey)
+          : t(descriptor.copyKey, resolveParams(descriptor.copyParams));
+        els.spinner.hidden = !descriptor.busy;
+        els.cancel.hidden = !descriptor.cancel;
+        const run = state.loginRun;
+        els.cancel.disabled = !descriptor.cancel || Boolean(run && run.cancelInFlight);
+        els.retry.hidden = !descriptor.retry;
+        els.authLink.hidden = !descriptor.authUrl;
+        if (descriptor.authUrl) {
+          els.authLink.href = descriptor.authUrl;
+        } else {
+          els.authLink.removeAttribute("href");
+        }
+        renderAssociateButton();
+      }
+
+      function setProgress({ titleKey, copyKey, titleParams = {}, copyParams = {}, copyRaw, copyPrefixKey, busy, retry = false, cancel = false, authUrl = null }) {
+        state.progressDescriptor = { titleKey, copyKey, titleParams, copyParams, copyRaw, copyPrefixKey, busy, retry, cancel, authUrl };
+        renderProgress();
+      }
+
+      function setProgressCopy(copyKey, copyParams = {}, copyRaw, copyPrefixKey = null) {
+        if (!state.progressDescriptor) return;
+        state.progressDescriptor.copyKey = copyKey;
+        state.progressDescriptor.copyParams = copyParams;
+        state.progressDescriptor.copyRaw = copyRaw;
+        state.progressDescriptor.copyPrefixKey = copyPrefixKey;
+        renderProgress();
       }
 
       function normalizeSettings(payload) {
@@ -463,8 +1086,7 @@
           state.autoSwitchOn429 = settings.auto_switch_on_429;
           state.settingsLoaded = true;
           els.autoSwitch.checked = state.autoSwitchOn429;
-          els.settingsStatus.className = "settings-status";
-          els.settingsStatus.textContent = `已从本机代理读取设置；上游未提供有效等待时间时，默认冷却 ${state.defaultCooldownSeconds} 秒。`;
+          setLocalizedStatus("settings", "status.switchReady", { seconds: state.defaultCooldownSeconds });
           applied.autoSwitch = true;
         }
         if (
@@ -478,8 +1100,7 @@
           state.autoCheckinEnabled = settings.auto_checkin_enabled;
           state.checkinSettingsLoaded = true;
           els.autoCheckin.checked = state.autoCheckinEnabled;
-          els.checkinSettingsStatus.className = "settings-status";
-          els.checkinSettingsStatus.textContent = "自动签到设置已从本机代理读取。";
+          setLocalizedStatus("checkinSettings", "status.checkinReady");
           applied.autoCheckin = true;
         }
         updateCooldownLabels();
@@ -606,7 +1227,7 @@
           updateCheckin(account.id, result, today);
           return result;
         }).catch((error) => {
-          const failed = updateCheckin(account.id, { date: today, status: "error", checked: null, error: error.message || "查询签到状态失败。" }, today);
+          const failed = updateCheckin(account.id, { date: today, status: "error", checked: null, error: error.message || "签到状态查询失败" }, today);
           return failed;
         }).finally(() => {
           if (state.checkinOperations.get(key) === entry) state.checkinOperations.delete(key);
@@ -633,7 +1254,7 @@
           updateCheckin(account.id, result, today);
           return result;
         }).catch((error) => {
-          return updateCheckin(account.id, { date: today, status: "error", checked: null, error: error.message || "签到失败。" }, today);
+          return updateCheckin(account.id, { date: today, status: "error", checked: null, error: error.message || "签到请求失败" }, today);
         }).finally(() => {
           if (state.checkinOperations.get(key) === entry) state.checkinOperations.delete(key);
           renderAccounts();
@@ -657,73 +1278,73 @@
       async function manuallyQueryCheckin(account) {
         const result = await queryCheckin(account);
         if (!result) return;
-        if (result.status === "error") showNotice(result.error || "查询签到状态失败，请重试。", "error");
-        else showNotice(`「${account.nickname || account.uid || "CodeBuddy 账号"}」今日签到状态：${result.status === "checked" ? "已签到" : result.status === "unchecked" ? "未签到" : "未知"}。`, "info");
+        if (result.status === "error") showNoticeDetail(result.error || "签到状态查询失败", "source.checkinError", "error");
+        else showNotice("notice.checkinStatus", "info", {
+          name: account.nickname || account.uid || { i18nKey: "account.defaultName" },
+          status: { i18nKey: `checkin.${result.status === "checked" ? "checked" : result.status === "unchecked" ? "unchecked" : "unknown"}` }
+        });
       }
 
       async function manuallySubmitCheckin(account) {
         const result = await submitCheckin(account);
         if (!result) return;
-        if (result.status === "error") showNotice(result.error || "签到失败，请重试。", "error");
-        else showNotice(result.status === "checked" ? "签到成功。" : `签到状态：${result.status === "unchecked" ? "未签到" : "未知"}。`, result.status === "checked" ? "success" : "info");
+        if (result.status === "error") showNoticeDetail(result.error || "签到请求失败", "source.checkinError", "error");
+        else if (result.status === "checked") showNotice("notice.checkinSuccess", "success");
+        else showNotice("notice.checkinResult", "info", { status: { i18nKey: result.status === "unchecked" ? "checkin.unchecked" : "checkin.unknown" } });
       }
 
       function updateCooldownLabels() {
-        const accountsById = new Map(state.accounts.map((account) => [String(account.id), account]));
-        for (const [accountId, badge] of state.cooldownElements) {
-          const account = accountsById.get(accountId);
-          const until = Number(account && account.cooldown_until);
-          const remaining = Number.isFinite(until) ? Math.ceil(until - serverNowSeconds()) : 0;
-          if (!account || account.rate_limited !== true || remaining <= 0) {
-            badge.hidden = true;
-            badge.textContent = "";
+        for (const item of state.cooldownElements) {
+          const until = Number(item.cooldownUntil);
+          const remaining = item.rateLimited && Number.isFinite(until) ? Math.ceil(until - serverNowSeconds()) : 0;
+          if (remaining <= 0) {
+            item.badge.hidden = true;
+            item.badge.textContent = "";
             continue;
           }
-          const source = account.cooldown_source === "retry_after" ? "上游指定" : "默认估算";
-          badge.textContent = `限流冷却 ${formatCooldown(remaining)} · ${source}`;
-          badge.hidden = false;
+          const source = t(item.cooldownSource === "retry_after" ? "cooldown.upstream" : "cooldown.default");
+          item.badge.textContent = t("cooldown.badge", { model: item.model, time: formatCooldown(remaining), source });
+          item.badge.hidden = false;
         }
       }
 
-      function setSyncStatus(message, isError = false) {
-        els.syncStatus.textContent = message;
-        els.syncStatus.hidden = !message;
-        els.syncStatus.className = `sync-status${isError ? " error" : ""}`;
+      function setSyncStatus(key, isError = false) {
+        setLocalizedStatus("sync", key || null, {}, isError);
       }
 
       function noteSnapshotFailure(error, background) {
         if (background) {
           if (!state.syncFailureShown) {
             state.syncFailureShown = true;
-            setSyncStatus("暂时无法同步账号状态，页面会在稍后重试。", true);
+            setSyncStatus("status.syncFailed", true);
           }
           return;
         }
-        setSyncStatus("账号列表暂时无法同步，请检查本机代理后重试。", true);
-        if (error && error.message) showNotice(error.message, "error");
+        setSyncStatus("status.syncUnavailable", true);
+        if (error && error.message) showErrorNotice(error, "notice.detail");
       }
 
       function renderAccounts() {
         els.accountList.replaceChildren();
-        state.cooldownElements.clear();
+        state.cooldownElements = [];
         if (state.listLoading && state.accounts.length === 0) {
-          const loading = makeText("div", "empty", "正在读取账号列表…");
+          const loading = makeText("div", "empty", t("empty.loading"));
           els.accountList.append(loading);
           return;
         }
         if (state.listError && state.accounts.length === 0) {
           const failed = document.createElement("div");
           failed.className = "empty";
-          failed.append(makeText("strong", "", "账号列表暂时无法读取"));
-          failed.append(makeText("span", "", "请检查本机代理连接，然后点击“刷新列表”重试。"));
+          failed.append(makeText("strong", "", t("empty.failedTitle")));
+          failed.append(makeText("span", "", t("empty.failedText")));
           els.accountList.append(failed);
           return;
         }
         if (state.accounts.length === 0) {
           const empty = document.createElement("div");
           empty.className = "empty";
-          empty.append(makeText("strong", "", "还没有关联账号"));
-          empty.append(makeText("span", "", "选择上方的国内或 Global 区域，完成登录后账号会显示在这里。"));
+          empty.append(makeText("strong", "", t("empty.noAccountsTitle")));
+          empty.append(makeText("span", "", t("empty.noAccountsText")));
           els.accountList.append(empty);
           return;
         }
@@ -736,37 +1357,42 @@
           const info = document.createElement("div");
           const nameLine = document.createElement("div");
           nameLine.className = "account-name-line";
-          nameLine.append(makeText("span", "account-name", account.nickname || account.uid || "CodeBuddy 账号"));
-          const backend = account.backend === "global" ? "Global" : "国内";
+          nameLine.append(makeText("span", "account-name", account.nickname || account.uid || t("account.defaultName")));
+          const backend = t(account.backend === "global" ? "region.global" : "region.domestic");
           nameLine.append(makeText("span", `pill ${account.backend === "global" ? "global" : "domestic"}`, backend));
-          if (isActive) nameLine.append(makeText("span", "pill active-pill", "当前账号"));
+          if (isActive) nameLine.append(makeText("span", "pill active-pill", t("account.active")));
           info.append(nameLine);
           const meta = document.createElement("div");
           meta.className = "account-meta";
           if (account.endpoint) meta.append(makeText("span", "", account.endpoint));
-          if (account.uid) meta.append(makeText("span", "", `UID：${account.uid}`));
-          const cooldown = makeText("span", "pill cooldown-pill", "");
-          cooldown.hidden = true;
-          state.cooldownElements.set(String(account.id), cooldown);
-          meta.append(cooldown);
+          if (account.uid) meta.append(makeText("span", "", t("account.uid", { uid: account.uid })));
+          const modelCooldowns = document.createElement("div");
+          modelCooldowns.className = "model-cooldowns";
+          const cooldownRows = Array.isArray(account.model_cooldowns) ? account.model_cooldowns : [];
+          for (const cooldown of cooldownRows) {
+            if (!cooldown || typeof cooldown.model !== "string" || !cooldown.model.trim()) continue;
+            const badge = makeText("span", "pill cooldown-pill model-cooldown", "");
+            badge.hidden = true;
+            state.cooldownElements.push({
+              badge,
+              model: cooldown.model,
+              rateLimited: cooldown.rate_limited === true,
+              cooldownUntil: cooldown.cooldown_until,
+              cooldownSource: cooldown.cooldown_source
+            });
+            modelCooldowns.append(badge);
+          }
+          if (modelCooldowns.children.length) meta.append(modelCooldowns);
           info.append(meta);
 
           const checkin = checkinForAccount(account);
           const checkinInfo = document.createElement("div");
           checkinInfo.className = "checkin-info";
-          const checkinLabels = {
-            unknown: "未知",
-            unchecked: "未签到",
-            checked: "已签到",
-            checking: "查询中",
-            signing: "签到中",
-            error: "失败"
-          };
-          const checkinState = makeText("span", `checkin-state${checkin.status === "error" ? " error" : ""}`, `今日签到：${checkinLabels[checkin.status] || "未知"}`);
+          const checkinState = makeText("span", `checkin-state${checkin.status === "error" ? " error" : ""}`, t("checkin.today", { status: t(`checkin.${checkin.status}`) }));
           checkinInfo.append(checkinState);
           const nextPlan = formatBeijingPlan(checkin.next_checkin_at);
-          if (nextPlan) checkinInfo.append(makeText("span", "", `下次计划：${nextPlan}`));
-          if (checkin.status === "error" && checkin.error) checkinInfo.append(makeText("span", "checkin-state error", checkin.error));
+          if (nextPlan) checkinInfo.append(makeText("span", "", t("checkin.nextPlan", { time: nextPlan })));
+          if (checkin.status === "error" && checkin.error) checkinInfo.append(makeText("span", "checkin-state error", localizedRaw(checkin.error, "source.checkinError")));
           info.append(checkinInfo);
 
           const actions = document.createElement("div");
@@ -774,16 +1400,16 @@
           const checkinActions = document.createElement("div");
           checkinActions.className = "checkin-actions";
           const isCheckinBusy = state.checkinOperations.has(checkinKey(account.id)) || checkin.status === "checking" || checkin.status === "signing";
-          checkinActions.append(makeButton("查询签到", "button small", () => manuallyQueryCheckin(account)));
-          checkinActions.append(makeButton("签到", "button small primary", () => manuallySubmitCheckin(account)));
+          checkinActions.append(makeButton(t("button.checkinQuery"), "button small", () => manuallyQueryCheckin(account)));
+          checkinActions.append(makeButton(t("button.checkin"), "button small primary", () => manuallySubmitCheckin(account)));
           checkinActions.children[0].disabled = isCheckinBusy;
           checkinActions.children[1].disabled = isCheckinBusy || checkin.status === "checked" || checkin.checked === true;
           actions.append(checkinActions);
           if (!isActive) {
             const manageActions = document.createElement("div");
             manageActions.className = "manage-actions";
-            manageActions.append(makeButton("设为当前", "button small", () => activateAccount(account)));
-            manageActions.append(makeButton("删除", "button small danger", () => deleteAccount(account)));
+            manageActions.append(makeButton(t("button.activate"), "button small", () => activateAccount(account)));
+            manageActions.append(makeButton(t("button.delete"), "button small danger", () => deleteAccount(account)));
             actions.append(manageActions);
           }
           card.append(info, actions);
@@ -825,12 +1451,12 @@
           if (!quiet) clearNotice();
           if (state.syncFailureShown) {
             state.syncFailureShown = false;
-            setSyncStatus("账号状态已恢复同步。", false);
+            setSyncStatus("status.syncRecovered", false);
             window.setTimeout(() => {
-              if (!state.syncFailureShown) setSyncStatus("", false);
+              if (!state.syncFailureShown) setSyncStatus(null, false);
             }, 3500);
           } else {
-            setSyncStatus("", false);
+            setSyncStatus(null, false);
           }
           return true;
         } catch (error) {
@@ -838,7 +1464,7 @@
             if (accountRevisionAtStart !== state.accountRevision) scheduleAccountRefresh(0);
             return false;
           }
-          if (!background) state.listError = error.message || "读取账号列表失败，请重试。";
+          if (!background) state.listError = error.message || "账号列表响应格式无效，请刷新后重试。";
           noteSnapshotFailure(error, background || quiet);
           return false;
         } finally {
@@ -859,12 +1485,10 @@
           return applied.autoSwitch || applied.autoCheckin;
         } catch (_) {
           if (revisionsAtStart.autoSwitch === state.settingsRevision && !state.settingsLoaded) {
-            els.settingsStatus.className = "settings-status error";
-            els.settingsStatus.textContent = "暂时无法读取设置，自动切换保持关闭；页面会继续重试。";
+            setLocalizedStatus("settings", "status.switchReadFailed", {}, true);
           }
           if (revisionsAtStart.autoCheckin === state.checkinSettingsRevision && !state.checkinSettingsLoaded) {
-            els.checkinSettingsStatus.className = "settings-status error";
-            els.checkinSettingsStatus.textContent = "暂时无法读取设置，自动签到保持关闭；页面会继续重试。";
+            setLocalizedStatus("checkinSettings", "status.checkinReadFailed", {}, true);
           }
           return false;
         }
@@ -881,8 +1505,7 @@
         state.autoSwitchOn429 = desired;
         state.settingsSaving = true;
         els.autoSwitch.disabled = true;
-        els.settingsStatus.className = "settings-status";
-        els.settingsStatus.textContent = "正在保存设置…";
+        setLocalizedStatus("settings", "status.saving");
         try {
           const result = await request("/settings", {
             method: "PATCH",
@@ -891,20 +1514,18 @@
           });
           const applied = applySettings(result, ++state.settingsReadSequence, revisionsAtStart, "autoSwitch");
           if (!applied.autoSwitch) throw new Error("代理返回的设置格式无效，请重试。");
-          showNotice(desired ? "已开启遇到 429 时自动切换账号。" : "已关闭遇到 429 时自动切换账号。", "success");
+          showNotice(desired ? "notice.autoSwitchOn" : "notice.autoSwitchOff", "success");
         } catch (error) {
           if (revisionsAtStart.autoSwitch === state.settingsRevision) {
             state.settingsSaving = false;
             els.autoSwitch.disabled = false;
-            els.settingsStatus.className = "settings-status error";
-            els.settingsStatus.textContent = "保存结果未确认，正在重新读取设置…";
+            setLocalizedStatus("settings", "status.saveUnconfirmed", {}, true);
           }
-          showNotice(`设置保存结果未确认，页面会重新同步。${error.message ? ` ${error.message}` : ""}`, "error");
+          showNoticeDetail(error.message, "notice.settingsSaveUnconfirmed", "error");
           if (revisionsAtStart.autoSwitch === state.settingsRevision) {
             const synced = await refreshSettings();
             if (!synced && revisionsAtStart.autoSwitch === state.settingsRevision) {
-              els.settingsStatus.className = "settings-status error";
-              els.settingsStatus.textContent = "暂时无法确认代理中的设置；页面会继续定期同步。";
+              setLocalizedStatus("settings", "status.switchUnconfirmed", {}, true);
             }
           }
         } finally {
@@ -926,8 +1547,7 @@
         state.autoCheckinEnabled = desired;
         state.checkinSettingsSaving = true;
         els.autoCheckin.disabled = true;
-        els.checkinSettingsStatus.className = "settings-status";
-        els.checkinSettingsStatus.textContent = "正在保存设置…";
+        setLocalizedStatus("checkinSettings", "status.saving");
         try {
           const result = await request("/settings", {
             method: "PATCH",
@@ -936,20 +1556,18 @@
           });
           const applied = applySettings(result, ++state.settingsReadSequence, revisionsAtStart, "autoCheckin");
           if (!applied.autoCheckin) throw new Error("代理返回的设置格式无效，请重试。");
-          showNotice(desired ? "已开启，代理正在检查全部关联账号。" : "已关闭全局自动签到。", "success");
+          showNotice(desired ? "notice.autoCheckinOn" : "notice.autoCheckinOff", "success");
         } catch (error) {
           if (revisionsAtStart.autoCheckin === state.checkinSettingsRevision) {
             state.checkinSettingsSaving = false;
             els.autoCheckin.disabled = false;
-            els.checkinSettingsStatus.className = "settings-status error";
-            els.checkinSettingsStatus.textContent = "保存结果未确认，正在重新读取设置…";
+            setLocalizedStatus("checkinSettings", "status.saveUnconfirmed", {}, true);
           }
-          showNotice(`自动签到设置结果未确认，页面会重新同步。${error.message ? ` ${error.message}` : ""}`, "error");
+          showNoticeDetail(error.message, "notice.checkinSettingSaveUnconfirmed", "error");
           if (revisionsAtStart.autoCheckin === state.checkinSettingsRevision) {
             const synced = await refreshSettings();
             if (!synced && revisionsAtStart.autoCheckin === state.checkinSettingsRevision) {
-              els.checkinSettingsStatus.className = "settings-status error";
-              els.checkinSettingsStatus.textContent = "暂时无法确认代理中的自动签到设置；页面会继续定期同步。";
+              setLocalizedStatus("checkinSettings", "status.checkinUnconfirmed", {}, true);
             }
           }
         } finally {
@@ -989,25 +1607,25 @@
           await request(`/accounts/${encodeURIComponent(account.id)}/activate`, { method: "POST", write: true });
           state.accountRevision += 1;
           const refreshed = await refreshAccounts(true);
-          if (refreshed) showNotice(`已切换到「${account.nickname || account.uid || "CodeBuddy 账号"}」。之后发起的新请求会使用此账号。`, "success");
-          else showNotice("账号已切换，但列表暂时无法刷新。请点击“刷新列表”确认当前状态。", "error");
+          if (refreshed) showNotice("notice.switchSuccess", "success", { name: account.nickname || account.uid || { i18nKey: "account.defaultName" } });
+          else showNotice("notice.switchRefreshFailed", "error");
         } catch (error) {
-          showNotice(error.message || "切换账号失败，请重试。", "error");
+          showErrorNotice(error, "notice.switchFailed");
         }
       }
 
       async function deleteAccount(account) {
-        const label = account.nickname || account.uid || "这个账号";
-        if (!window.confirm(`确定删除「${label}」吗？此操作会移除本机保存的该账号登录态。`)) return;
+        const label = account.nickname || account.uid || { i18nKey: "account.defaultName" };
+        if (!window.confirm(t("notice.deleteConfirm", resolveParams({ name: label })))) return;
         clearNotice();
         try {
           await request(`/accounts/${encodeURIComponent(account.id)}`, { method: "DELETE", write: true });
           state.accountRevision += 1;
           const refreshed = await refreshAccounts(true);
-          if (refreshed) showNotice(`已删除「${label}」。`, "success");
-          else showNotice("账号已删除，但列表暂时无法刷新。请点击“刷新列表”确认当前状态。", "error");
+          if (refreshed) showNotice("notice.deleteSuccess", "success", { name: label });
+          else showNotice("notice.deleteRefreshFailed", "error");
         } catch (error) {
-          showNotice(error.message || "删除账号失败，请重试。", "error");
+          showErrorNotice(error, "notice.deleteFailed");
         }
       }
 
@@ -1015,24 +1633,6 @@
         state.backend = backend;
         for (const button of document.querySelectorAll("[data-backend]")) {
           button.setAttribute("aria-pressed", String(button.dataset.backend === backend));
-        }
-      }
-
-      function setProgress({ title, copy, busy, retry = false, cancel = false, authUrl = null }) {
-        els.progress.classList.add("visible");
-        els.progressTitle.textContent = title;
-        els.progressCopy.textContent = copy;
-        els.spinner.hidden = !busy;
-        els.cancel.hidden = !cancel;
-        els.cancel.disabled = !cancel;
-        els.retry.hidden = !retry;
-        els.associate.disabled = busy;
-        els.authLink.hidden = !authUrl;
-        if (authUrl) {
-          els.authLink.href = authUrl;
-          els.authLink.hidden = false;
-        } else {
-          els.authLink.removeAttribute("href");
         }
       }
 
@@ -1058,8 +1658,8 @@
         els.authLink.href = authUrl;
         els.authLink.hidden = false;
         setProgress({
-          title: "请在新窗口完成登录",
-          copy: run.popup && !run.popup.closed ? "完成登录后，此页面会自动更新账号列表。" : "新窗口未能打开，或已关闭登录窗口。请使用下方链接手动打开登录页。",
+          titleKey: "progress.inPopupTitle",
+          copyKey: run.popup && !run.popup.closed ? "progress.popupReady" : "progress.popupManual",
           busy: true,
           cancel: true,
           authUrl
@@ -1086,25 +1686,25 @@
           const refreshed = await refreshAccounts(true);
           const addedAccount = job.account_id && state.accounts.find((account) => account.id === job.account_id);
           if (!refreshed) {
-            showNotice("关联已完成，但账号列表暂时无法读取。请点击“刷新列表”确认结果。", "error");
+            showNotice("notice.loginListFailed", "error");
           } else if (beforeActive == null && state.activeAccountId === job.account_id) {
-            showNotice("关联成功。当前没有其他账号，因此已自动设为当前账号。", "success");
+            showNotice("notice.loginFirstActive", "success");
           } else if (addedAccount) {
-            showNotice(`「${addedAccount.nickname || addedAccount.uid || "CodeBuddy 账号"}」关联成功，当前账号保持不变。`, "success");
+            showNotice("notice.loginAdded", "success", { name: addedAccount.nickname || addedAccount.uid || { i18nKey: "account.defaultName" } });
           } else {
-            showNotice("关联成功，账号列表已刷新。", "success");
+            showNotice("notice.loginSuccess", "success");
           }
-          setProgress({ title: "关联完成", copy: "登录态已安全保存到本机账号库。", busy: false, retry: false, cancel: false });
+          setProgress({ titleKey: "progress.complete", copyKey: "progress.saved", busy: false, retry: false, cancel: false });
           return;
         }
         if (job.status === "cancelled") {
-          setProgress({ title: "登录已取消", copy: "没有新增或替换账号登录态。你可以重新发起关联。", busy: false, retry: true, cancel: false });
-          showNotice("登录已取消。", "info");
+          setProgress({ titleKey: "progress.cancelled", copyKey: "progress.noChange", busy: false, retry: true, cancel: false });
+          showNotice("notice.loginCancelled", "info");
           return;
         }
         const detail = typeof job.error === "string" && job.error.trim() ? job.error.trim().slice(0, 600) : "登录未能完成，请检查登录窗口后重试。";
-        setProgress({ title: "关联失败", copy: detail, busy: false, retry: true, cancel: false, authUrl: run.authUrl });
-        showNotice(detail, "error");
+        setProgress({ titleKey: "progress.failed", copyRaw: detail, copyPrefixKey: "progress.errorDetails", busy: false, retry: true, cancel: false, authUrl: run.authUrl });
+        showNoticeDetail(detail, "notice.detail", "error");
       }
 
       async function pollLogin(run) {
@@ -1112,16 +1712,16 @@
         while (state.loginRun === run) {
           if (Date.now() >= deadline && !run.timedOut) {
             run.timedOut = true;
-            setProgress({ title: "登录超时，正在确认任务状态", copy: "已请求取消登录任务；页面会继续确认最终状态。", busy: true, cancel: true, authUrl: run.authUrl });
+            setProgress({ titleKey: "progress.timeoutConfirm", copyKey: "progress.cancelRequested", busy: true, cancel: true, authUrl: run.authUrl });
             try {
               const cancelled = await requestCancel(run);
               if (cancelled && ["succeeded", "failed", "cancelled"].includes(cancelled.status)) {
                 await finishLogin(run, cancelled);
                 return;
               }
-              showNotice("代理尚未确认任务状态，页面会继续查询。", "error");
+              showNotice("notice.loginTaskPending", "error");
             } catch (error) {
-              showNotice(`取消请求未确认：${error.message || "请稍后重试。"}`, "error");
+              showErrorNotice(error, "notice.loginCancelUnconfirmed");
             }
           }
           let job;
@@ -1129,15 +1729,15 @@
             job = await readJob(run);
             if (run.readErrorShown) {
               run.readErrorShown = false;
-              showNotice("本机代理连接已恢复，正在同步登录状态。", "info");
+              showNotice("notice.loginConnectionRestored", "info");
             }
           }
           catch (error) {
             if (state.loginRun !== run) return;
-            setProgress({ title: "暂时无法读取登录状态", copy: "登录任务仍在跟踪，页面会继续查询。你也可以点击取消重试。", busy: true, cancel: true, authUrl: run.authUrl });
+            setProgress({ titleKey: "progress.readTemporarilyFailed", copyKey: "progress.jobStillTracked", busy: true, cancel: true, authUrl: run.authUrl });
             if (!run.readErrorShown) {
               run.readErrorShown = true;
-              showNotice(error.message || "无法读取登录状态，请重试。", "error");
+              showErrorNotice(error, "notice.loginReadFailed");
             }
             await new Promise((resolve) => window.setTimeout(resolve, POLL_INTERVAL_MS));
             continue;
@@ -1147,13 +1747,13 @@
             return;
           }
           if (job.status !== "pending") {
-            setProgress({ title: "登录状态无法识别", copy: "页面会继续查询任务状态。你可以点击取消，或稍后重试。", busy: true, cancel: true, authUrl: run.authUrl });
-            showNotice("代理返回了未知登录状态，正在继续查询。", "error");
+            setProgress({ titleKey: "progress.unknownStatus", copyKey: "progress.continueQuery", busy: true, cancel: true, authUrl: run.authUrl });
+            showNotice("notice.loginUnknownStatus", "error");
             await new Promise((resolve) => window.setTimeout(resolve, POLL_INTERVAL_MS));
             continue;
           }
           if (run.timedOut) {
-            setProgress({ title: "登录超过 5 分钟", copy: "仍在确认任务最终状态；可再次点击取消重试。", busy: true, cancel: true, authUrl: run.authUrl });
+            setProgress({ titleKey: "progress.overFiveMinutes", copyKey: "progress.confirmingFinal", busy: true, cancel: true, authUrl: run.authUrl });
           }
           await new Promise((resolve) => window.setTimeout(resolve, POLL_INTERVAL_MS));
         }
@@ -1173,8 +1773,8 @@
         if (!popup) return;
         try {
           popup.opener = null;
-          popup.document.title = "正在准备 CodeBuddy 登录";
-          popup.document.body.textContent = "正在连接本机代理并准备登录页面…";
+          popup.document.title = t("popup.title");
+          popup.document.body.textContent = t("popup.body");
           popup.document.body.style.cssText = "font: 15px system-ui,sans-serif; color: #334155; padding: 32px; background: #f8fafc;";
         } catch (_) { /* Some browsers expose a blank document only briefly. */ }
       }
@@ -1186,10 +1786,10 @@
         state.lastLoginBackend = backend;
         const popup = window.open("about:blank", "codebuddy-account-login", "popup=yes,width=560,height=760,resizable=yes,scrollbars=yes");
         showInitialPopup(popup);
-        setButtonBusy(els.associate, true, "正在准备登录…");
+        setButtonBusy(els.associate, true);
         setProgress({
-          title: "正在准备登录",
-          copy: popup ? "登录窗口已打开，正在获取认证地址。" : "浏览器拦截了新窗口，正在获取认证地址；之后可手动打开登录页。",
+          titleKey: "progress.preparing",
+          copyKey: popup ? "progress.popupOpened" : "progress.popupBlocked",
           busy: true,
           cancel: false
         });
@@ -1215,9 +1815,8 @@
           });
           if (!job || typeof job.id !== "string") throw new Error("代理未返回有效的登录任务编号，请重试。");
           run.jobId = job.id;
-          els.cancel.hidden = false;
-          els.cancel.disabled = false;
           if (job.auth_url) movePopupToAuth(run, job.auth_url);
+          else setProgress({ ...state.progressDescriptor, cancel: true });
           if (["succeeded", "failed", "cancelled"].includes(job.status)) await finishLogin(run, job);
           else if (job.status !== "pending") throw new Error("代理返回了未知登录任务状态，请重试。");
           else pollLogin(run);
@@ -1227,9 +1826,9 @@
           if (popup && !popup.closed) {
             try { popup.close(); } catch (_) { /* Ignore a browser refusing to close it. */ }
           }
-          const message = error && error.name === "AbortError" ? "本机代理准备登录超时，请确认服务仍在运行后重试。" : (error.message || "无法启动登录，请重试。");
-          setProgress({ title: "无法启动登录", copy: message, busy: false, retry: true, cancel: false });
-          showNotice(message, "error");
+          const message = error && error.name === "AbortError" ? "本机代理准备登录超时，请确认服务仍在运行后重试。" : (error && error.message ? error.message : "无法启动登录，请重试。");
+          setProgress({ titleKey: "progress.cannotStart", copyRaw: message, copyPrefixKey: "progress.loginDetails", busy: false, retry: true, cancel: false });
+          showNoticeDetail(message, "notice.loginStartFailed", "error");
         } finally {
           window.clearTimeout(startupTimer);
         }
@@ -1239,7 +1838,7 @@
         const run = state.loginRun;
         if (!run || !run.jobId || run.cancelInFlight) return;
         els.cancel.disabled = true;
-        els.progressCopy.textContent = "正在取消登录任务…";
+        setProgressCopy("progress.cancelling");
         try {
           const job = await requestCancel(run);
           if (job && ["succeeded", "failed", "cancelled"].includes(job.status)) {
@@ -1248,10 +1847,10 @@
           }
           throw new Error("代理尚未确认取消，请稍后重试。");
         } catch (error) {
-          showNotice(error.message || "取消请求失败，请再试一次。", "error");
+          showErrorNotice(error, "notice.cancelFailed");
           if (state.loginRun === run) {
             els.cancel.disabled = false;
-            els.progressCopy.textContent = "任务仍在跟踪，页面会继续查询状态；你可以再次点击取消。";
+            setProgressCopy("progress.cancelRetry");
           }
           return;
         }
@@ -1260,6 +1859,7 @@
       for (const button of document.querySelectorAll("[data-backend]")) {
         button.addEventListener("click", () => setSelectedBackend(button.dataset.backend));
       }
+      if (els.language) els.language.addEventListener("change", () => setLanguage(els.language.value));
       els.refresh.addEventListener("click", () => refreshAccounts());
       els.associate.addEventListener("click", startLogin);
       els.cancel.addEventListener("click", cancelLogin);
@@ -1271,6 +1871,7 @@
       els.autoCheckin.addEventListener("change", saveAutoCheckinSetting);
       document.addEventListener("visibilitychange", handleVisibilityChange);
       window.setInterval(updateCooldownLabels, 1000);
+      applyLanguage();
       (async () => {
         await refreshAccounts();
         await refreshSettings();

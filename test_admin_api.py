@@ -30,11 +30,31 @@ class FakeManager:
                     "uid": "user-1",
                     "nickname": "Local user",
                     "active": True,
+                    "model_cooldowns": [
+                        {
+                            "model": "model-a",
+                            "rate_limited": True,
+                            "cooldown_until": 1234.5,
+                            "cooldown_remaining_seconds": 7,
+                            "last_rate_limited_at": 1227.5,
+                            "cooldown_source": "retry_after",
+                            "session": {"accessToken": "private-token-value"},
+                        },
+                        {
+                            "model": "bad\nmodel",
+                            "rate_limited": True,
+                            "cooldown_source": "default",
+                        },
+                        {
+                            "model": "x" * 257,
+                            "rate_limited": True,
+                            "cooldown_source": "default",
+                        },
+                    ],
+                    # Previous account-wide cooldown fields must not leak into
+                    # the public response even if a stale caller provides them.
                     "rate_limited": True,
-                    "cooldown_until": 1234.5,
-                    "cooldown_remaining_seconds": 7,
-                    "last_rate_limited_at": 1227.5,
-                    "cooldown_source": "retry_after",
+                    "cooldown_until": 9999.0,
                     "checkin": {
                         "date": "2026-10-24",
                         "status": "checked",
@@ -160,11 +180,16 @@ def test_account_and_job_responses_are_sanitized_and_uncached():
                     "uid": "user-1",
                     "nickname": "Local user",
                     "active": True,
-                        "rate_limited": True,
-                        "cooldown_until": 1234.5,
-                        "cooldown_remaining_seconds": 7,
-                        "last_rate_limited_at": 1227.5,
-                        "cooldown_source": "retry_after",
+                    "model_cooldowns": [
+                        {
+                            "model": "model-a",
+                            "rate_limited": True,
+                            "cooldown_until": 1234.5,
+                            "cooldown_remaining_seconds": 7,
+                            "last_rate_limited_at": 1227.5,
+                            "cooldown_source": "retry_after",
+                        }
+                    ],
                     "checkin": {
                         "date": "2026-10-24",
                         "status": "checked",

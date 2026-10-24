@@ -391,16 +391,22 @@ The first linked account becomes active automatically; linking another account
 does not change the account currently in use. Use **Set active** to switch, or
 delete a saved account from the same page. The selection is saved for the next
 proxy start. The page and its management API are restricted to local access.
+Use the language selector at the top of the page to switch between Chinese and
+English. The choice is remembered in this browser; without a saved preference,
+the page follows the browser language. Switching languages keeps ongoing login
+and account operations running.
 
 Automatic account switching after an upstream `429` is off by default. When
-enabled, the proxy can try accounts with the same region and endpoint, at most
-once per account for each request; if every eligible account returns `429`, the
-original `429` is returned. The rate-limited account observes the upstream
-`Retry-After` value, or a default 60-second cooldown when that value is missing
-or invalid. The setting and cooldowns persist across restarts. The page shows
-the remaining cooldown and whether it came from `Retry-After` or the default;
-it refreshes account state periodically and immediately when a hidden page
-becomes visible again.
+enabled, the proxy tries accounts with the same region and endpoint, at most once
+per account for each request. It skips an account only while the model used by
+that request is cooling down there; other models on the same account remain
+eligible. If every eligible account returns `429`, the original `429` is returned.
+Cooldowns are tracked per account and model, using upstream `Retry-After` or a
+default 60 seconds when that value is missing or invalid. The setting and model
+cooldowns persist across restarts. Old v1 account-wide cooldowns had no model
+identity and are not carried forward during upgrade. The page shows a separate
+remaining countdown and source for each model, and refreshes account state
+periodically and immediately when a hidden page becomes visible again.
 
 The account list also shows each linked account's check-in status for today
 (Beijing time). The **Check in** action is available for every account, including

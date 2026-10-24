@@ -35,7 +35,7 @@ def checkin_environment(tmp_path, monkeypatch):
         uid = request.headers["X-User-Id"]
         seen.append((uid, request.url.host, request.url.path, request.method, request.content))
         assert request.content == b"{}"
-        if request.url.path.endswith("/checkin-status"):
+        if request.url.path == "/v2/billing/meter/checkin-activity-status":
             return httpx.Response(200, json={
                 "code": 0, "msg": "OK",
                 "data": {"active": True, "today_checked_in": uid in signed},
@@ -84,6 +84,75 @@ def test_checkin_of_inactive_account_preserves_active_and_uses_its_own_credentia
     output = capsys.readouterr().out
     assert "[Checkin]" in output
     assert "PRIVATE-" not in output
+
+
+@pytest.mark.parametrize("uid", ["first", "second"], ids=["domestic", "global"])
+@pytest.mark.parametrize("entrypoint", ["admin", "v1-get", "v1-post"])
+def test_current_activity_status_reports_already_signed_without_daily_post(
+    checkin_environment, uid, entrypoint
+):
+    """Legacy status may say inactive while the current activity is signed."""
+    manager, store, ids, seen, _, install, _ = checkin_environment
+    if entrypoint != "admin":
+        manager.activate(ids[uid])
+    active = store.active_account_id
+    current_payload = {
+        "code": 0,
+        "msg": "OK",
+        "data": {
+            "active": True,
+            "today_checked_in": True,
+            "streak_days": 1,
+            "start_time": "2026-09-30 00:00:00",
+            "end_time": "2026-12-31 23:59:59",
+            "season": 10,
+        },
+    }
+
+    async def activity_status(request):
+        seen.append((request.headers["X-User-Id"], request.url.host,
+                     request.url.path, request.method, request.content))
+        assert request.method == "POST"
+        assert request.content == b"{}"
+        if request.url.path == "/v2/billing/meter/checkin-status":
+            return httpx.Response(200, json={
+                "code": 0, "msg": "OK",
+                "data": {"active": False, "today_checked_in": False,
+                         "start_time": "", "end_time": "", "season": 0},
+            })
+        assert request.url.path == "/v2/billing/meter/checkin-activity-status"
+        return httpx.Response(200, json=current_payload)
+
+    install(activity_status)
+    with app_client() as app:
+        if entrypoint == "admin":
+            result = app.get(f"/admin/api/accounts/{ids[uid]}/checkin-status")
+            assert result.status_code == 200
+            assert result.json()["status"] == "checked"
+            assert result.json()["checked"] is True
+            assert result.json()["error"] is None
+            row = next(a for a in app.get("/admin/api/accounts").json()["accounts"]
+                       if a["id"] == ids[uid])
+            assert row["checkin"]["status"] == "checked"
+            # A manual sign request must also recognize today's existing sign.
+            result = app.post(f"/admin/api/accounts/{ids[uid]}/checkin",
+                              headers=ADMIN_HEADERS)
+            assert result.status_code == 200
+            assert result.json()["status"] == "checked"
+        else:
+            method = "GET" if entrypoint == "v1-get" else "POST"
+            result = app.request(method, "/v1/checkin-status")
+            assert result.status_code == 200
+            assert result.json() == current_payload
+        assert store.active_account_id == active
+
+    assert seen
+    assert {user for user, *_ in seen} == {uid}
+    expected_host = "copilot.tencent.com" if uid == "first" else "www.codebuddy.ai"
+    assert {host for _, host, *_ in seen} == {expected_host}
+    assert {path for _, _, path, *_ in seen} == {
+        "/v2/billing/meter/checkin-activity-status"
+    }
 
 
 def test_signed_account_is_not_signed_again(checkin_environment):
@@ -138,7 +207,7 @@ def test_auto_switch_429_does_not_change_active_for_per_account_checkin(checkin_
         assert response.json()["status"] == "error"
         assert store.active_account_id == active
         first = next(row for row in manager.snapshot()["accounts"] if row["id"] == active)
-        assert first["rate_limited"] is True
+        assert first["model_cooldowns"] == []
     assert len(seen) == 1
 
 
@@ -148,7 +217,7 @@ def test_disabling_while_status_is_pending_prevents_auto_sign(checkin_environmen
     release_status = threading.Event()
 
     async def pending(request):
-        if request.url.path.endswith("/checkin-status"):
+        if request.url.path == "/v2/billing/meter/checkin-activity-status":
             status_entered.set()
             while not release_status.is_set():
                 await asyncio.sleep(0.01)

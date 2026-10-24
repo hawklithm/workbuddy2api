@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -34,6 +35,36 @@ class _InlineScriptParser(HTMLParser):
             self.scripts[-1] += data
 
 
+class _TranslationManifestParser(HTMLParser):
+    """Collect real translated static nodes for the browser-free DOM harness."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.nodes: list[dict[str, object]] = []
+        self._stack: list[tuple[str, dict[str, object] | None]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = {key: value or "" for key, value in attrs}
+        translated = any(key.startswith("data-i18n") for key in attributes)
+        node: dict[str, object] | None = None
+        if translated:
+            node = {"tag": tag, "attributes": attributes, "text": ""}
+            self.nodes.append(node)
+        if tag not in {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}:
+            self._stack.append((tag, node))
+
+    def handle_endtag(self, tag: str) -> None:
+        for index in range(len(self._stack) - 1, -1, -1):
+            if self._stack[index][0] == tag:
+                del self._stack[index:]
+                break
+
+    def handle_data(self, data: str) -> None:
+        for _, node in self._stack:
+            if node is not None:
+                node["text"] = str(node["text"]) + data
+
+
 def _inline_script() -> str:
     parser = _InlineScriptParser()
     parser.feed(ADMIN_HTML.read_text(encoding="utf-8"))
@@ -45,6 +76,7 @@ _DOM_HARNESS = r"""
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
+const translationManifest = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
 
 class Element {
   constructor(tag = 'div', id = '') {
@@ -56,6 +88,8 @@ class Element {
     this.listeners = {};
     this.className = '';
     this.textContent = '';
+    this.value = '';
+    this.lang = '';
     this.hidden = false;
     this.disabled = false;
     this.href = '';
@@ -76,11 +110,15 @@ class Element {
   querySelector(selector) {
     return selector === 'span' ? this.children.find((child) => child.tagName === 'SPAN') || null : null;
   }
+  querySelectorAll(selector) { return walk(this).slice(1).filter((node) => matchesSelector(node, selector)); }
   setAttribute(name, value) {
     this.attributes[name] = String(value);
     if (name.startsWith('data-')) this.dataset[name.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = String(value);
+    if (name === 'lang') this.lang = String(value);
+    if (name === 'id') this.id = String(value);
   }
   getAttribute(name) { return this.attributes[name] ?? null; }
+  hasAttribute(name) { return Object.hasOwn(this.attributes, name); }
   removeAttribute(name) { delete this.attributes[name]; }
 }
 
@@ -103,34 +141,87 @@ function makePageElements() {
     'notice', 'account-list', 'refresh-button', 'associate-button', 'login-progress',
     'progress-title', 'progress-copy', 'progress-spinner', 'cancel-button',
     'retry-button', 'manual-auth-link', 'auto-switch-toggle', 'settings-status',
-    'auto-checkin-toggle', 'checkin-settings-status', 'sync-status'
+    'auto-checkin-toggle', 'checkin-settings-status', 'sync-status', 'language-select'
   ];
-  const elements = Object.fromEntries(ids.map((id) => [id, new Element(id === 'associate-button' ? 'button' : 'div', id)]));
+  const elements = Object.fromEntries(ids.map((id) => [id, new Element(
+    id === 'associate-button' ? 'button' : id === 'language-select' ? 'select' : 'div', id
+  )]));
   const label = new Element('span');
   label.textContent = '关联所选区域';
   elements['associate-button'].append(label);
   return elements;
 }
 
-function makeDocument(elements) {
+function makeStaticNodes(elements = {}) {
+  return translationManifest.map((row) => {
+    const element = row.attributes && row.attributes.id && elements[row.attributes.id]
+      ? elements[row.attributes.id]
+      : new Element(row.tag);
+    for (const [name, value] of Object.entries(row.attributes || {})) element.setAttribute(name, value);
+    if (!row.attributes || !row.attributes.id || !elements[row.attributes.id]) element.textContent = row.text || '';
+    return element;
+  });
+}
+
+function matchesSelector(node, selector) {
+  if (!node || typeof node.hasAttribute !== 'function') return false;
+  return selector.split(',').some((part) => {
+    const attributeChecks = [...part.matchAll(/\[([^\]=]+)(?:=["']([^"']*)["'])?\]/g)];
+    if (!attributeChecks.length) return false;
+    return attributeChecks.every((match) => {
+      const name = match[1].trim();
+      const expected = match[2];
+      return node.hasAttribute(name) && (expected === undefined || node.getAttribute(name) === expected);
+    });
+  });
+}
+
+function makeDocument(elements, staticNodes = []) {
   const regions = ['domestic', 'global'].map((backend) => {
     const button = new Element('button');
     button.dataset.backend = backend;
+    button.setAttribute('data-backend', backend);
     return button;
   });
   const listeners = {};
+  const documentElement = new Element('html');
+  documentElement.lang = 'zh-CN';
+  const allElements = () => [...new Set([
+    ...Object.values(elements).flatMap(walk),
+    ...regions,
+    ...staticNodes,
+    documentElement,
+  ])];
   return {
     regions,
+    staticNodes,
+    documentElement,
+    title: 'CodeBuddy 账号管理',
     visibilityState: 'visible',
     getElementById: (id) => elements[id] || null,
-    querySelectorAll: (selector) => selector === '[data-backend]' ? regions : [],
+    querySelectorAll: (selector) => allElements().filter((node) => matchesSelector(node, selector)),
     createElement: (tag) => new Element(tag),
     addEventListener(name, fn) { (listeners[name] ||= []).push(fn); },
     async dispatch(name) { for (const fn of listeners[name] || []) await fn(); },
   };
 }
 
-function makeWindow(timers, now = () => Date.now()) {
+function makeStorage(initial = {}, { getThrows = false, setThrows = false } = {}) {
+  const values = new Map(Object.entries(initial));
+  return {
+    values,
+    getItem(key) {
+      if (getThrows) throw new Error('storage read unavailable');
+      return values.has(key) ? values.get(key) : null;
+    },
+    setItem(key, value) {
+      if (setThrows) throw new Error('storage write unavailable');
+      values.set(key, String(value));
+    },
+  };
+}
+
+function makeWindow(timers, now = () => Date.now(), options = {}) {
   const popup = {
     closed: false,
     opener: null,
@@ -138,8 +229,14 @@ function makeWindow(timers, now = () => Date.now()) {
     document: { title: '', body: { textContent: '', style: { cssText: '' } } },
     close() { this.closed = true; },
   };
+  const localStorage = Object.hasOwn(options, 'localStorage') ? options.localStorage : makeStorage();
+  const navigator = Object.hasOwn(options, 'navigator')
+    ? options.navigator
+    : { language: 'zh-CN', languages: ['zh-CN'] };
   return {
     popup,
+    localStorage,
+    navigator,
     window: {
       location: { href: 'http://127.0.0.1:8765/admin' },
       confirm: () => true,
@@ -148,6 +245,8 @@ function makeWindow(timers, now = () => Date.now()) {
       clearTimeout: timers.clearTimeout,
       setInterval: timers.setInterval,
       clearInterval: timers.clearInterval,
+      localStorage,
+      navigator,
     },
   };
 }
@@ -158,8 +257,7 @@ function walk(node) {
 
 const accountFixture = (overrides = {}) => ({
   id: 'existing', backend: 'domestic', endpoint: 'https://example.test', uid: 'u1', nickname: '旧账号',
-  rate_limited: false, cooldown_until: null, cooldown_remaining_seconds: 0,
-  last_rate_limited_at: null, cooldown_source: null,
+  model_cooldowns: [],
   checkin: { date: null, status: 'unchecked', checked: false, last_checked_at: null, last_checkin_at: null, next_checkin_at: null, error: null },
   ...overrides,
 });
@@ -177,7 +275,11 @@ const snapshotFixture = (accounts = [accountFixture()], autoSwitch = false, serv
 function startPage(document, window, fetch, clock = Date) {
   const script = fs.readFileSync(process.argv[2], 'utf8');
   const DateType = typeof clock === 'function' ? clock : class TestDate extends Date { static now() { return clock.now(); } };
-  vm.runInNewContext(script, { document, window, fetch, Headers, URL, AbortController, Promise, Date: DateType, Error });
+  vm.runInNewContext(script, {
+    document, window, fetch, Headers, URL, AbortController, Promise, Date: DateType, Error,
+    localStorage: window.localStorage,
+    navigator: window.navigator,
+  });
 }
 
 async function flush() { await new Promise((resolve) => setImmediate(resolve)); }
@@ -323,21 +425,24 @@ async function verifyCooldownPollingAndLocalExpiry() {
   const { window } = makeWindow(timers);
   let nowMs = 1900000000000;
   let accountReads = 0;
+  const unsafeModel = 'model-<img src=x onerror=alert(1)>';
+  const initialModelCooldowns = [
+    { model: 'model-a', rate_limited: true, cooldown_until: 1700000003, cooldown_remaining_seconds: 3, last_rate_limited_at: 1699999997, cooldown_source: 'default' },
+    { model: unsafeModel, rate_limited: true, cooldown_until: 1700000008, cooldown_remaining_seconds: 8, last_rate_limited_at: 1699999990, cooldown_source: 'retry_after' },
+  ];
+  const refreshedModelCooldowns = [
+    { model: 'model-a', rate_limited: true, cooldown_until: 1700000010, cooldown_remaining_seconds: 7, last_rate_limited_at: 1699999997, cooldown_source: 'default' },
+    { model: unsafeModel, rate_limited: false, cooldown_until: null, cooldown_remaining_seconds: 0, last_rate_limited_at: 1699999990, cooldown_source: 'retry_after' },
+  ];
   async function fetch(url, options = {}) {
     const method = options.method || 'GET';
     if (url.endsWith('/accounts')) {
       accountReads += 1;
       if (accountReads === 1) return jsonResponse(snapshotFixture([accountFixture()], false, 1700000000));
-      const retryAccount = accountFixture({
-        id: 'retry', nickname: '第二账号', uid: 'u2', rate_limited: true,
-        cooldown_until: 1700000008, cooldown_remaining_seconds: 8,
-        last_rate_limited_at: 1699999990, cooldown_source: 'retry_after'
-      });
-      const defaultAccount = accountFixture({
-        rate_limited: true, cooldown_until: 1700000003, cooldown_remaining_seconds: 3,
-        last_rate_limited_at: 1699999997, cooldown_source: 'default'
-      });
-      return jsonResponse(snapshotFixture([defaultAccount, retryAccount], true, 1700000000));
+      if (accountReads === 2) {
+        return jsonResponse(snapshotFixture([accountFixture({ model_cooldowns: initialModelCooldowns })], true, 1700000000));
+      }
+      return jsonResponse(snapshotFixture([accountFixture({ model_cooldowns: refreshedModelCooldowns })], true, 1700000003));
     }
     if (url.endsWith('/settings') && method === 'GET') return jsonResponse(settingsFixture(false));
     throw new Error(`Unexpected API request: ${method} ${url}`);
@@ -357,20 +462,37 @@ async function verifyCooldownPollingAndLocalExpiry() {
   await flush();
   assert.equal(accountReads, 2, 'returning to the page must refresh immediately');
   assert.equal(elements['auto-switch-toggle'].checked, true, 'poll must pick up settings changed in another page');
-  const badges = walk(elements['account-list']).filter((node) => node.className === 'pill cooldown-pill');
+  let badges = walk(elements['account-list']).filter((node) => node.className.split(/\s+/).includes('model-cooldown'));
   assert.equal(badges.length, 2);
-  assert.equal(badges[0].hidden, false);
-  assert.match(badges[0].textContent, /00:03.*默认估算/);
-  assert.match(badges[1].textContent, /00:08.*上游指定/);
+  const modelABadge = badges.find((badge) => badge.textContent.includes('model-a'));
+  const unsafeModelBadge = badges.find((badge) => badge.textContent.includes(unsafeModel));
+  assert.ok(modelABadge && unsafeModelBadge);
+  assert.equal(modelABadge.hidden, false);
+  assert.match(modelABadge.textContent, /冷却 00:03.*默认估算/);
+  assert.match(unsafeModelBadge.textContent, /冷却 00:08.*上游指定/);
+  assert.equal(walk(elements['account-list']).some((node) => node.tagName === 'IMG'), false, 'model names are rendered as text, never markup');
 
   const requestsBeforeTick = accountReads;
   nowMs += 1000;
   for (const timer of timers.intervals.values()) timer.fn();
-  assert.match(badges[0].textContent, /00:02/);
+  assert.match(modelABadge.textContent, /冷却 00:02/);
+  assert.match(unsafeModelBadge.textContent, /冷却 00:07/);
   nowMs += 3000;
   for (const timer of timers.intervals.values()) timer.fn();
-  assert.equal(badges[0].hidden, true, 'expired cooldown badge must disappear without another fetch');
+  assert.equal(modelABadge.hidden, true, 'one model badge expires independently');
+  assert.equal(unsafeModelBadge.hidden, false, 'a later model cooldown remains visible');
   assert.equal(accountReads, requestsBeforeTick, 'countdown ticks must not send network requests');
+
+  await document.dispatch('visibilitychange');
+  await flush();
+  badges = walk(elements['account-list']).filter((node) => node.className.split(/\s+/).includes('model-cooldown'));
+  assert.equal(accountReads, 3, 'a regular snapshot refresh updates cooldowns without extra requests');
+  assert.equal(badges.length, 2);
+  assert.match(badges[0].textContent, /model-a.*冷却 00:07/);
+  assert.equal(badges[1].hidden, true, 'a refreshed non-limited model is hidden');
+  const requestsAfterRefresh = accountReads;
+  for (const timer of timers.intervals.values()) timer.fn();
+  assert.equal(accountReads, requestsAfterRefresh, 'refreshed one-second countdown also remains local');
 }
 
 async function verifyOlderSnapshotCannotResetNewSetting() {
@@ -459,6 +581,305 @@ function checkinButtons(card) {
 }
 
 async function flushMany(count = 8) { for (let i = 0; i < count; i += 1) await flush(); }
+
+function makeLanguagePage(config = {}) {
+  const elements = makePageElements();
+  const document = makeDocument(elements, makeStaticNodes(elements));
+  const timers = makeTimers();
+  const windowOptions = {};
+  if (Object.hasOwn(config, 'localStorage')) windowOptions.localStorage = config.localStorage;
+  if (Object.hasOwn(config, 'navigator')) windowOptions.navigator = config.navigator;
+  const { window } = makeWindow(timers, () => Date.now(), windowOptions);
+  const fetches = [];
+  const accounts = config.accounts || [accountFixture()];
+  const serverTime = Math.floor(Date.now() / 1000);
+  async function fetch(url, options = {}) {
+    fetches.push({ url, method: options.method || 'GET' });
+    if (url.endsWith('/accounts')) return jsonResponse(snapshotFixture(accounts, false, serverTime));
+    if (url.endsWith('/settings') && (options.method || 'GET') === 'GET') return jsonResponse(settingsFixture(false));
+    if (url.endsWith('/checkin-status')) return jsonResponse(config.checkinStatus || { status: 'unchecked', checked: false });
+    throw new Error(`Unexpected API request: ${options.method || 'GET'} ${url}`);
+  }
+  startPage(document, window, fetch);
+  return { elements, document, window, fetches, localStorage: window.localStorage };
+}
+
+function staticTranslation(document, key) {
+  return document.staticNodes.find((node) => node.getAttribute('data-i18n') === key);
+}
+
+function assertEnglishShell(page) {
+  const { elements, document } = page;
+  assert.equal(elements['language-select'].value, 'en');
+  assert.equal(document.documentElement.lang, 'en');
+  assert.match(document.title, /CodeBuddy.*account/i);
+  assert.match(elements['language-select'].getAttribute('aria-label'), /language/i);
+  assert.equal(staticTranslation(document, 'hero.title').textContent, 'Account manager');
+  assert.equal(staticTranslation(document, 'button.refresh').textContent, 'Refresh list');
+  assert.equal(staticTranslation(document, 'button.refresh').getAttribute('aria-label'), 'Refresh account list');
+}
+
+function assertChineseShell(page) {
+  const { elements, document } = page;
+  assert.equal(elements['language-select'].value, 'zh-CN');
+  assert.equal(document.documentElement.lang, 'zh-CN');
+  assert.equal(document.title, 'CodeBuddy 账号管理');
+  assert.equal(elements['language-select'].getAttribute('aria-label'), '页面语言');
+  assert.equal(staticTranslation(document, 'hero.title').textContent, '账号管理');
+  assert.equal(staticTranslation(document, 'button.refresh').textContent, '刷新列表');
+  assert.equal(staticTranslation(document, 'button.refresh').getAttribute('aria-label'), '刷新账号列表');
+}
+
+async function verifyLanguagePreferenceAndDynamicTranslations() {
+  const key = 'codebuddy.admin.language';
+  const storage = makeStorage({ [key]: 'en' });
+  const serverTime = Math.floor(Date.now() / 1000);
+  const accounts = [
+    accountFixture({
+      id: 'existing', nickname: '账号甲', uid: 'uid-alpha',
+      model_cooldowns: [
+        { model: 'model-alpha', rate_limited: true, cooldown_until: serverTime + 120, cooldown_remaining_seconds: 120, last_rate_limited_at: serverTime - 1, cooldown_source: 'retry_after' },
+        { model: 'embedding-v2', rate_limited: true, cooldown_until: serverTime + 240, cooldown_remaining_seconds: 240, last_rate_limited_at: serverTime - 1, cooldown_source: 'default' },
+      ],
+      checkin: { date: null, status: 'unchecked', checked: false, error: null },
+    }),
+    accountFixture({
+      id: 'closed', nickname: '签到活动账号', uid: 'uid-closed',
+      checkin: { date: null, status: 'error', checked: null, error: '签到活动未开放' },
+    }),
+    accountFixture({
+      id: 'unknown-error', nickname: '未知错误账号', uid: 'uid-unknown',
+      checkin: { date: null, status: 'error', checked: null, error: '__proto__' },
+    }),
+  ];
+  const page = makeLanguagePage({
+    localStorage: storage,
+    navigator: { language: 'zh-CN', languages: ['zh-CN'] },
+    accounts,
+  });
+  await flushMany(12);
+  assertEnglishShell(page);
+  assert.equal(storage.getItem(key), 'en', 'saved language takes priority over browser preference');
+
+  const accountText = (id) => walk(findAccountCard(page.elements, id)).map((node) => node.textContent).join(' ');
+  const englishChecked = accountText('existing');
+  assert.match(englishChecked, /Today's check-in: Not checked in/);
+  assert.match(englishChecked, /Model model-alpha .*cooling down .*upstream specified/);
+  assert.match(englishChecked, /Model embedding-v2 .*estimated default/);
+  assert.match(englishChecked, /账号甲/, 'account names remain user data and are not translated');
+  assert.match(englishChecked, /uid-alpha/);
+  const englishClosed = accountText('closed');
+  assert.match(englishClosed, /Check-in is not available yet/);
+  assert.match(accountText('unknown-error'), /__proto__/);
+  assert.doesNotMatch(accountText('unknown-error'), /\[object Object\]|undefined/);
+
+  const requestCount = page.fetches.length;
+  const originalUrl = page.window.location.href;
+  page.elements['language-select'].value = 'zh-CN';
+  await page.elements['language-select'].dispatch('change');
+  await flushMany();
+  assertChineseShell(page);
+  assert.equal(storage.getItem(key), 'zh-CN', 'language selection is persisted');
+  assert.equal(page.fetches.length, requestCount, 'switching language must not issue API requests');
+  assert.equal(page.window.location.href, originalUrl, 'switching language must not reload or navigate');
+  const chineseChecked = accountText('existing');
+  assert.match(chineseChecked, /今日签到：未签到/);
+  assert.match(chineseChecked, /模型 model-alpha · 冷却/);
+  assert.match(chineseChecked, /模型 embedding-v2 · 冷却/);
+  assert.match(accountText('closed'), /签到活动未开放/);
+
+  const reloaded = makeLanguagePage({
+    localStorage: storage,
+    navigator: { language: 'en-US', languages: ['en-US'] },
+    accounts,
+  });
+  await flushMany(12);
+  assertChineseShell(reloaded);
+}
+
+async function verifyCheckinQueryNoticeRelocalizes() {
+  const account = accountFixture({
+    id: 'notice-account',
+    nickname: '签到显示账号',
+    uid: 'uid-notice',
+    checkin: { date: null, status: 'unchecked', checked: false },
+  });
+  const page = makeLanguagePage({
+    navigator: { language: 'zh-CN', languages: ['zh-CN'] },
+    accounts: [account],
+    checkinStatus: { status: 'unchecked', checked: false },
+  });
+  await flushMany(12);
+  const card = findAccountCard(page.elements, 'notice-account');
+  assert.ok(card, 'account card should render before querying its check-in state');
+  const queryButton = checkinButtons(card).query;
+  assert.ok(queryButton, 'account card should expose a manual check-in query');
+  await queryButton.dispatch('click');
+  assert.match(page.elements.notice.textContent, /签到显示账号.*今日签到状态：未签到/);
+
+  page.elements['language-select'].value = 'en';
+  await page.elements['language-select'].dispatch('change');
+  assert.match(page.elements.notice.textContent, /签到显示账号.*today's check-in status is Not checked in/i);
+
+  page.elements['language-select'].value = 'zh-CN';
+  await page.elements['language-select'].dispatch('change');
+  assert.match(page.elements.notice.textContent, /签到显示账号.*今日签到状态：未签到/);
+}
+
+async function verifyHttpErrorNoticeRelocalizes() {
+  const elements = makePageElements();
+  const document = makeDocument(elements);
+  const timers = makeTimers();
+  const { window } = makeWindow(timers);
+  window.localStorage.setItem('codebuddy.admin.language', 'en');
+  const requests = [];
+  async function fetch(url) {
+    requests.push(url);
+    if (url.endsWith('/accounts')) return jsonResponse(null, false, 503);
+    if (url.endsWith('/settings')) return jsonResponse(settingsFixture());
+    throw new Error(`Unexpected API request: ${url}`);
+  }
+  startPage(document, window, fetch);
+  await flush();
+  assert.match(elements.notice.textContent, /Request failed.*503/);
+  elements['language-select'].value = 'zh-CN';
+  await elements['language-select'].dispatch('change');
+  assert.match(elements.notice.textContent, /请求失败.*503/);
+  elements['language-select'].value = 'en';
+  await elements['language-select'].dispatch('change');
+  assert.match(elements.notice.textContent, /Request failed.*503/);
+  assert.equal(requests.length, 2, 'language changes must not retry failed requests');
+}
+
+async function verifyLanguageFallbackAndUnavailableStorage() {
+  const key = 'codebuddy.admin.language';
+  const cases = [
+    { saved: '__proto__', navigator: { language: 'zh-TW', languages: ['zh-TW'] }, expected: 'zh-CN' },
+    { saved: 'fr', navigator: { language: 'en-US', languages: ['en-US'] }, expected: 'en' },
+    { saved: 'invalid-language', navigator: { languages: ['zh-Hans-CN'] }, expected: 'zh-CN' },
+    { saved: null, navigator: { language: 'de-DE' }, expected: 'en' },
+    { saved: null, navigator: undefined, expected: 'zh-CN' },
+  ];
+  for (const scenario of cases) {
+    const storage = scenario.saved === null ? makeStorage() : makeStorage({ [key]: scenario.saved });
+    const page = makeLanguagePage({ localStorage: storage, navigator: scenario.navigator });
+    await flushMany(10);
+    assert.equal(page.elements['language-select'].value, scenario.expected, `preference ${scenario.saved} should fall back correctly`);
+    assert.equal(page.document.documentElement.lang, scenario.expected);
+  }
+
+  const failedReadStorage = makeStorage({}, { getThrows: true });
+  const readFailurePage = makeLanguagePage({
+    localStorage: failedReadStorage,
+    navigator: { language: 'en-US', languages: ['en-US'] },
+  });
+  await flushMany(10);
+  assertEnglishShell(readFailurePage);
+  readFailurePage.elements['language-select'].value = 'zh-CN';
+  await readFailurePage.elements['language-select'].dispatch('change');
+  assertChineseShell(readFailurePage);
+  assert.equal(failedReadStorage.values.get(key), 'zh-CN', 'a read failure must not disable later writes or switching');
+
+  const failedWriteStorage = makeStorage({}, { setThrows: true });
+  const writeFailurePage = makeLanguagePage({
+    localStorage: failedWriteStorage,
+    navigator: { language: 'zh-CN', languages: ['zh-CN'] },
+  });
+  await flushMany(10);
+  assertChineseShell(writeFailurePage);
+  writeFailurePage.elements['language-select'].value = 'en';
+  await writeFailurePage.elements['language-select'].dispatch('change');
+  assertEnglishShell(writeFailurePage);
+
+  const absentStoragePage = makeLanguagePage({
+    localStorage: null,
+    navigator: { language: 'zh-CN', languages: ['zh-CN'] },
+  });
+  await flushMany(10);
+  absentStoragePage.elements['language-select'].value = 'en';
+  await absentStoragePage.elements['language-select'].dispatch('change');
+  assertEnglishShell(absentStoragePage);
+}
+
+async function verifyLanguageSwitchDuringPendingOperations() {
+  const elements = makePageElements();
+  const document = makeDocument(elements, makeStaticNodes(elements));
+  const timers = makeTimers();
+  const storage = makeStorage();
+  const { window, popup } = makeWindow(timers, () => Date.now(), {
+    localStorage: storage,
+    navigator: { language: 'zh-CN', languages: ['zh-CN'] },
+  });
+  const fetches = [];
+  let releaseLoginRead;
+  let releaseSettingsSave;
+  async function fetch(url, options = {}) {
+    const method = options.method || 'GET';
+    fetches.push({ url, method });
+    if (url.endsWith('/accounts')) return jsonResponse(snapshotFixture([accountFixture()], false));
+    if (url.endsWith('/settings') && method === 'GET') return jsonResponse(settingsFixture(false));
+    if (url.endsWith('/settings') && method === 'PATCH') {
+      return new Promise((resolve) => { releaseSettingsSave = () => resolve(jsonResponse(settingsFixture(true))); });
+    }
+    if (url.endsWith('/logins') && method === 'POST') return jsonResponse({ id: 'pending-language', status: 'pending' });
+    if (url.endsWith('/logins/pending-language') && method === 'GET') {
+      return new Promise((resolve) => {
+        releaseLoginRead = () => resolve(jsonResponse({ id: 'pending-language', status: 'failed', error: '模拟登录失败' }));
+      });
+    }
+    throw new Error(`Unexpected API request: ${method} ${url}`);
+  }
+  startPage(document, window, fetch);
+  await flushMany(12);
+  assertChineseShell({ elements, document });
+
+  const loginStart = elements['associate-button'].dispatch('click');
+  await flushMany(12);
+  await loginStart;
+  assert.equal(typeof releaseLoginRead, 'function', 'pending login polling must stay active');
+  assert.equal(elements['associate-button'].disabled, true);
+  assert.equal(popup.closed, false);
+
+  elements['auto-switch-toggle'].checked = true;
+  const settingsSave = elements['auto-switch-toggle'].dispatch('change');
+  await flushMany(8);
+  assert.equal(typeof releaseSettingsSave, 'function', 'settings write must be pending');
+  assert.equal(elements['auto-switch-toggle'].disabled, true);
+  assert.match(elements['settings-status'].textContent, /正在保存设置/);
+
+  const requestCount = fetches.length;
+  elements['language-select'].value = 'en';
+  await elements['language-select'].dispatch('change');
+  await flushMany();
+  assertEnglishShell({ elements, document });
+  assert.equal(fetches.length, requestCount, 'a pending operation is not restarted by translation');
+  assert.equal(window.location.href, 'http://127.0.0.1:8765/admin');
+  assert.equal(elements['associate-button'].disabled, true, 'login remains busy after switching language');
+  assert.equal(elements['auto-switch-toggle'].disabled, true, 'setting remains busy after switching language');
+  assert.match(elements['progress-title'].textContent, /sign-in/i);
+  assert.match(elements['progress-copy'].textContent, /proxy|address/i);
+  assert.match(elements['settings-status'].textContent, /Saving setting/i);
+
+  releaseLoginRead();
+  await flushMany(12);
+  assert.equal(elements['associate-button'].disabled, false);
+  assert.equal(popup.closed, true, 'the terminal login result closes its popup normally');
+  assert.match(elements['progress-title'].textContent, /Linking failed/);
+  assert.match(elements['progress-copy'].textContent, /模拟登录失败/);
+
+  releaseSettingsSave();
+  await settingsSave;
+  assert.equal(elements['auto-switch-toggle'].checked, true);
+  assert.equal(elements['auto-switch-toggle'].disabled, false);
+  assert.match(elements['settings-status'].textContent, /Setting loaded/i);
+  assert.match(elements.notice.textContent, /Automatic account switching on 429 is enabled/);
+
+  elements['language-select'].value = 'zh-CN';
+  await elements['language-select'].dispatch('change');
+  assertChineseShell({ elements, document });
+  assert.match(elements['progress-title'].textContent, /关联失败/);
+  assert.match(elements['notice'].textContent, /已开启遇到 429 时自动切换账号/);
+}
 
 async function verifyIndependentSettingsWrites() {
   const elements = makePageElements();
@@ -585,7 +1006,7 @@ async function verifyCheckinDiscoveryAndActions() {
   assert.equal(checkinButtons(activeCard).sign.disabled, false, 'a confirmed unchecked account can be signed');
   assert.equal(checkinButtons(secondCard).sign.disabled, true, 'a checked account cannot be signed again');
   assert.match(walk(secondCard).map((node) => node.textContent).join(' '), /下次计划/);
-  assert.ok(walk(thirdCard).some((node) => node.textContent === '<img src=x onerror=alert(1)>'), 'upstream error text must be rendered as text');
+  assert.ok(walk(thirdCard).some((node) => typeof node.textContent === 'string' && node.textContent.includes('<img src=x onerror=alert(1)>')), 'upstream error text must be rendered as text');
   assert.equal(checkinButtons(thirdCard).sign.disabled, false, 'an error state remains actionable so the server can check first');
 
   await checkinButtons(activeCard).sign.dispatch('click');
@@ -736,6 +1157,11 @@ async function verifyAutoCheckinIsBackendOwned() {
   for (const status of ['succeeded', 'cancelled', 'failed']) await verifyTerminalState(status);
   await verifyCancelFailureRecovery();
   await verifyAutoSwitchSettings();
+  await verifyLanguagePreferenceAndDynamicTranslations();
+  await verifyHttpErrorNoticeRelocalizes();
+  await verifyCheckinQueryNoticeRelocalizes();
+  await verifyLanguageFallbackAndUnavailableStorage();
+  await verifyLanguageSwitchDuringPendingOperations();
   await verifyCooldownPollingAndLocalExpiry();
   await verifyOlderSnapshotCannotResetNewSetting();
   await verifyForegroundRefreshOwnsBusyState();
@@ -756,8 +1182,17 @@ def test_admin_inline_script_syntax_and_terminal_controls(tmp_path: Path) -> Non
     assert re.search(r"(?m)^\s*\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}", html)
     script_path = tmp_path / "admin-page.js"
     script_path.write_text(_inline_script(), encoding="utf-8")
+    translation_parser = _TranslationManifestParser()
+    translation_parser.feed(html)
+    translations_path = tmp_path / "admin-translations.json"
+    translations_path.write_text(json.dumps(translation_parser.nodes), encoding="utf-8")
 
     subprocess.run([node, "--check", str(script_path)], check=True, capture_output=True, text=True)
     harness_path = tmp_path / "admin-page-mock.cjs"
     harness_path.write_text(_DOM_HARNESS, encoding="utf-8")
-    subprocess.run([node, str(harness_path), str(script_path)], check=True, capture_output=True, text=True)
+    subprocess.run(
+        [node, str(harness_path), str(script_path), str(translations_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
