@@ -9,10 +9,13 @@ uses only the Python standard library and stores the session locally with
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import pathlib
 import sys
+import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -99,6 +102,10 @@ class CodeBuddyClient:
         self.platform = platform
         self.prefix = self.profile.auth_prefix
         self.session_file = resolved_backend.session_file
+        self._session_lock = threading.RLock()
+        self._auth_lock = threading.RLock()
+        self._session_generation = 0
+        self._persistence_enabled = True
         self.session: dict[str, Any] = self._load_session()
 
     def _load_session(self) -> dict[str, Any]:
@@ -169,23 +176,77 @@ class CodeBuddyClient:
                 "原文件未修改，请使用匹配的 --session-file。"
             )
 
-    def _save_session(self, session: dict[str, Any]) -> None:
+    def _snapshot_session(self) -> tuple[dict[str, Any], int]:
+        with self._session_lock:
+            return copy.deepcopy(self.session), self._session_generation
+
+    def _save_session(
+        self,
+        session: dict[str, Any],
+        *,
+        expected_generation: int | None = None,
+    ) -> bool:
         persisted_session = dict(session)
         persisted_session["backend"] = self.profile.key
         persisted_session["endpoint"] = self.endpoint
-        self.session_file.parent.mkdir(parents=True, exist_ok=True)
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-        fd = os.open(self.session_file, flags, 0o600)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                json.dump(persisted_session, stream, ensure_ascii=False, indent=2)
-                stream.write("\n")
-        finally:
+        with self._session_lock:
+            if not self._persistence_enabled:
+                return False
+            if (
+                expected_generation is not None
+                and self._session_generation != expected_generation
+            ):
+                return False
+            self.session_file.parent.mkdir(parents=True, exist_ok=True)
+            temp_name: str | None = None
             try:
-                os.chmod(self.session_file, 0o600)
-            except OSError:
-                pass
-        self.session = persisted_session
+                fd, temp_name = tempfile.mkstemp(
+                    prefix=f".{self.session_file.name}.",
+                    suffix=".tmp",
+                    dir=self.session_file.parent,
+                )
+                with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                    json.dump(persisted_session, stream, ensure_ascii=False, indent=2)
+                    stream.write("\n")
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temp_name, self.session_file)
+                temp_name = None
+                try:
+                    os.chmod(self.session_file, 0o600)
+                except OSError:
+                    pass
+            except OSError as exc:
+                raise CodeBuddyError(
+                    f"无法原子写入 session 文件: {self.session_file}"
+                ) from exc
+            finally:
+                if temp_name is not None:
+                    try:
+                        os.unlink(temp_name)
+                    except OSError:
+                        pass
+            self.session = persisted_session
+            self._session_generation += 1
+            return True
+
+    def _invalidate_persistence(self) -> None:
+        """Prevent an old client reference from recreating a removed session."""
+        with self._session_lock:
+            self._session_generation += 1
+            self._persistence_enabled = False
+
+    def _enable_persistence(self) -> None:
+        """Restore writes if a store deletion transaction was rolled back."""
+        with self._session_lock:
+            self._session_generation += 1
+            self._persistence_enabled = True
+
+    def _restore_session_snapshot(self, session: dict[str, Any]) -> None:
+        """Restore in-memory state after an account-store transaction fails."""
+        with self._session_lock:
+            self.session = copy.deepcopy(session)
+            self._session_generation += 1
 
     def build_url(self, path: str) -> str:
         """Build a URL from the resolved endpoint and a relative path."""
@@ -259,19 +320,27 @@ class CodeBuddyClient:
 
     def auth_headers(self, *, access: bool = True, refresh: bool = False) -> dict[str, str]:
         """构造认证 headers，模拟插件行为"""
-        account = self.session.get("account") or {}
-        auth = self.session.get("auth") or {}
+        self._get_machine_id()
+        session, _ = self._snapshot_session()
+        return self._auth_headers_for_session(session, access=access, refresh=refresh)
+
+    def _auth_headers_for_session(
+        self,
+        session: dict[str, Any],
+        *,
+        access: bool = True,
+        refresh: bool = False,
+    ) -> dict[str, str]:
+        account = session.get("account") or {}
+        auth = session.get("auth") or {}
         headers: dict[str, str] = {
-            # 🔥 关键标识：所有请求都需要这个 header
             "X-Product-Code": "codebuddy",
-            # 🔥 IDE 识别信息（服务端用于识别客户端类型）
             "X-IDE-Type": "vscode",
             "X-IDE-Name": "Visual Studio Code",
-            "X-IDE-Version": "1.70.2",  # VSCode 最低版本要求
-            "X-Product-Version": "4.10.33259736",  # 插件版本
-            "X-Machine-Id": self._get_machine_id(),
+            "X-IDE-Version": "1.70.2",
+            "X-Product-Version": "4.10.33259736",
+            "X-Machine-Id": str(session.get("machineId") or ""),
         }
-        
         if account.get("uid"):
             headers["X-User-Id"] = str(account["uid"])
         if access and auth.get("accessToken"):
@@ -282,12 +351,9 @@ class CodeBuddyClient:
             headers["X-Enterprise-Id"] = str(account["enterpriseId"])
             headers["X-Tenant-Id"] = str(account["enterpriseId"])
         if account.get("departmentInfo"):
-            # 🔥 新增：部门信息（如果有）
             headers["X-Department-Info"] = str(account["departmentInfo"])
         domain = self._domain_for_token(auth)
         if domain:
-            # The extension calls this the domain header.  The server accepts
-            # X-Domain for the plugin protocol.
             headers["X-Domain"] = domain
         return headers
 
@@ -343,28 +409,22 @@ class CodeBuddyClient:
         """获取或生成机器ID（模拟VSCode的machineId）"""
         import platform
         import uuid
-        
-        # 尝试从session读取已保存的machineId
-        saved_machine_id = self.session.get("machineId")
-        if saved_machine_id:
-            return str(saved_machine_id)
-        
-        # 生成一个稳定的machineId（基于主机名和用户）
-        try:
-            hostname = platform.node()
-            username = os.environ.get("USER") or os.environ.get("USERNAME") or "unknown"
-            seed = f"{hostname}-{username}"
-            machine_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, seed))
-        except Exception:
-            # 如果失败，生成随机ID
-            machine_id = str(uuid.uuid4())
-        
-        # 保存到session
-        self.session["machineId"] = machine_id
-        self._save_session(self.session)
-        return machine_id
+        with self._session_lock:
+            saved_machine_id = self.session.get("machineId")
+            if saved_machine_id:
+                return str(saved_machine_id)
+            try:
+                hostname = platform.node()
+                username = os.environ.get("USER") or os.environ.get("USERNAME") or "unknown"
+                seed = f"{hostname}-{username}"
+                machine_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, seed))
+            except Exception:
+                machine_id = str(uuid.uuid4())
+            self._save_session({**self.session, "machineId": machine_id})
+            return machine_id
 
-    def login(self, *, open_browser: bool = True, timeout: int = 300) -> None:
+    def begin_login(self) -> dict[str, str]:
+        """Request an authorization URL and state without opening a browser."""
         no_auth = {
             "X-No-Authorization": "true",
             "X-No-User-Id": "true",
@@ -385,35 +445,92 @@ class CodeBuddyClient:
         state = state_payload.get("state")
         if not state:
             raise CodeBuddyError("登录状态响应缺少 state")
-        print(f"请在浏览器中完成登录：\n{auth_url}")
-        if open_browser:
-            webbrowser.open(auth_url)
-        deadline = time.monotonic() + timeout
+        return {"auth_url": auth_url, "state": str(state)}
+
+    @staticmethod
+    def _check_login_cancelled(cancel_event: Any | None) -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise CodeBuddyError("登录已取消")
+
+    @classmethod
+    def _wait_for_login_poll(cls, deadline: float, cancel_event: Any | None) -> None:
+        cls._check_login_cancelled(cancel_event)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        pause = min(1.0, remaining)
+        if cancel_event is not None and hasattr(cancel_event, "wait"):
+            if cancel_event.wait(pause):
+                raise CodeBuddyError("登录已取消")
+        else:
+            time.sleep(pause)
+        cls._check_login_cancelled(cancel_event)
+
+    @staticmethod
+    def _account_has_uid(account: Any) -> bool:
+        return (
+            isinstance(account, dict)
+            and account.get("uid") is not None
+            and bool(str(account.get("uid")).strip())
+        )
+
+    def complete_login(
+        self,
+        challenge: dict[str, Any],
+        timeout: float = 300,
+        cancel_event: Any | None = None,
+    ) -> None:
+        """Poll the challenge until a token and uid-bearing account are ready.
+
+        One deadline covers both polling stages. No session state is saved
+        unless a token and an account with a uid have both been returned.
+        """
+        if not isinstance(challenge, dict) or not challenge.get("state"):
+            raise CodeBuddyError("登录 challenge 缺少 state")
+        try:
+            timeout_value = float(timeout)
+        except (TypeError, ValueError) as exc:
+            raise CodeBuddyError("登录超时时间无效") from exc
+        if timeout_value <= 0:
+            raise CodeBuddyError("登录超时时间必须大于 0")
+        state = str(challenge["state"])
+        state_query = urllib.parse.quote(state, safe="")
+        deadline = time.monotonic() + timeout_value
+        _, initial_generation = self._snapshot_session()
+        no_auth = {
+            "X-No-Authorization": "true",
+            "X-No-User-Id": "true",
+            "X-No-Enterprise-Id": "true",
+            "X-No-Department-Info": "true",
+        }
         while time.monotonic() < deadline:
-            time.sleep(1)
+            self._check_login_cancelled(cancel_event)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             try:
                 token = self._unwrap(
                     self._request(
                         "GET",
-                        f"{self._auth_path('/auth/token')}?state={urllib.parse.quote(str(state), safe='')}",
+                        f"{self._auth_path('/auth/token')}?state={state_query}",
                         headers={**self._enterprise_headers(), **no_auth},
+                        timeout=min(30.0, remaining),
                     )
                 )
             except CodeBuddyError:
-                continue
+                token = None
             if isinstance(token, dict) and token.get("accessToken"):
-                # 🔥 关键修复：/login/account 也需要轮询（模拟 VSIX loopGetAccount）
-                # 服务端在用户浏览器登录后，账户信息可能需要异步准备
                 account = None
-                account_deadline = time.monotonic() + 60  # 账户轮询最多60秒
-                
-                while time.monotonic() < account_deadline:
-                    time.sleep(1)  # 每秒轮询一次
+                while time.monotonic() < deadline:
+                    self._check_login_cancelled(cancel_event)
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
                     try:
                         account = self._unwrap(
                             self._request(
                                 "GET",
-                                f"{self._auth_path('/login/account')}?state={urllib.parse.quote(str(state), safe='')}",
+                                f"{self._auth_path('/login/account')}?state={state_query}",
                                 headers={
                                     # 关键修复：必须包含完整的 enterprise headers（包括 X-Domain）
                                     **self._enterprise_headers(token),
@@ -422,21 +539,48 @@ class CodeBuddyClient:
                                     "X-No-Enterprise-Id": "true",
                                     "X-No-Department-Info": "true",
                                 },
+                                timeout=min(30.0, remaining),
                             )
                         )
-                        if isinstance(account, dict) and account.get("uid"):
-                            # 账户信息获取成功
+                        self._check_login_cancelled(cancel_event)
+                        if time.monotonic() >= deadline:
+                            account = None
                             break
+                        if self._account_has_uid(account):
+                            break
+                        account = None
                     except CodeBuddyError:
-                        # 401 或其他错误：账户信息可能尚未就绪，继续轮询
-                        continue
-                
-                if not account or not isinstance(account, dict):
-                    raise CodeBuddyError("账户信息获取超时")
-                
-                self._save_session({**self.session, "auth": token, "account": account})
-                print(f"登录成功，用户: {account.get('nickname') or account.get('uid', '<unknown>')}")
-                return
+                        account = None
+                    if account is not None:
+                        break
+                    self._wait_for_login_poll(deadline, cancel_event)
+
+                if self._account_has_uid(account):
+                    self._check_login_cancelled(cancel_event)
+                    if time.monotonic() >= deadline:
+                        raise CodeBuddyError("登录超时：未能获取包含 uid 的账户信息")
+                    session, _ = self._snapshot_session()
+                    self._save_session(
+                        {**session, "auth": token, "account": account},
+                        expected_generation=initial_generation,
+                    )
+                    return
+                raise CodeBuddyError("登录超时：未能获取包含 uid 的账户信息")
+
+            self._wait_for_login_poll(deadline, cancel_event)
+
+        self._check_login_cancelled(cancel_event)
+        raise CodeBuddyError("登录超时：未能获取访问令牌")
+
+    def login(self, *, open_browser: bool = True, timeout: int = 300) -> None:
+        challenge = self.begin_login()
+        auth_url = challenge["auth_url"]
+        print(f"请在浏览器中完成登录：\n{auth_url}")
+        if open_browser:
+            webbrowser.open(auth_url)
+        self.complete_login(challenge, timeout=timeout)
+        account = self.session.get("account") or {}
+        print(f"登录成功，用户: {account.get('nickname') or account.get('uid', '<unknown>')}")
 
     @staticmethod
     def _token_headers(token: dict[str, Any]) -> dict[str, str]:
@@ -448,7 +592,18 @@ class CodeBuddyClient:
         return headers
 
     def refresh(self) -> bool:
-        auth = self.session.get("auth") or {}
+        with self._auth_lock:
+            return self._refresh_locked()
+
+    def _refresh_locked(self) -> bool:
+        session, generation = self._snapshot_session()
+        auth = session.get("auth") or {}
+        refresh_token = auth.get("refreshToken")
+        if not refresh_token:
+            return False
+        self._get_machine_id()
+        session, generation = self._snapshot_session()
+        auth = session.get("auth") or {}
         refresh_token = auth.get("refreshToken")
         if not refresh_token:
             return False
@@ -457,7 +612,7 @@ class CodeBuddyClient:
                 "POST",
                 self._auth_path("/auth/token/refresh"),
                 headers={
-                    **self.auth_headers(access=False, refresh=True),
+                    **self._auth_headers_for_session(session, access=False, refresh=True),
                     "X-Auth-Refresh-Source": "plugin",
                 },
                 body={},
@@ -465,19 +620,41 @@ class CodeBuddyClient:
         )
         if not isinstance(payload, dict) or not payload.get("accessToken"):
             return False
-        self._save_session({**self.session, "auth": payload})
-        return True
+        saved = self._save_session(
+            {**session, "auth": payload}, expected_generation=generation
+        )
+        if saved:
+            return True
+        # A newer login or import completed while refresh was in flight.
+        current_auth = self._snapshot_session()[0].get("auth") or {}
+        current_expiry = int(current_auth.get("expiresAt") or 0)
+        return bool(
+            current_auth.get("accessToken")
+            and (not current_expiry or current_expiry > int(time.time() * 1000))
+        )
 
-    def ensure_authenticated(self, *, open_browser: bool = True) -> None:
-        auth = self.session.get("auth") or {}
-        now_ms = int(time.time() * 1000)
-        expires_at = int(auth.get("expiresAt") or 0)
-        if auth.get("accessToken") and (not expires_at or expires_at > now_ms + 60_000):
-            return
-        if self.refresh():
-            print("access token 已刷新")
-            return
-        self.login(open_browser=open_browser)
+    def ensure_authenticated(
+        self,
+        *,
+        open_browser: bool = True,
+        allow_login: bool = True,
+    ) -> None:
+        with self._auth_lock:
+            # A preceding request may have refreshed the token while this
+            # caller waited for the per-client authentication lock.
+            auth = self._snapshot_session()[0].get("auth") or {}
+            now_ms = int(time.time() * 1000)
+            expires_at = int(auth.get("expiresAt") or 0)
+            if auth.get("accessToken") and (
+                not expires_at or expires_at > now_ms + 60_000
+            ):
+                return
+            if self.refresh():
+                print("access token 已刷新")
+                return
+            if not allow_login:
+                raise CodeBuddyError("当前账号需要重新登录；此请求禁止自动打开登录流程")
+            self.login(open_browser=open_browser)
 
     def stream_chat(
         self,

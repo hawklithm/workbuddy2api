@@ -1,5 +1,6 @@
 import json
 import importlib.resources
+import os
 import stat
 from pathlib import Path
 
@@ -108,7 +109,14 @@ def test_session_profiles_are_isolated_and_saved_with_metadata(tmp_path):
     assert saved["backend"] == "global"
     assert saved["endpoint"] == "https://www.codebuddy.ai"
     assert saved["machineId"] == "machine-1"
-    assert stat.S_IMODE(saved_file.stat().st_mode) == 0o600
+    if os.name == "posix":
+        assert stat.S_IMODE(saved_file.stat().st_mode) == 0o600
+    else:
+        # Windows does not expose POSIX mode bits as an ACL check. Verify the
+        # replacement is readable and the atomic writer left no temporary file.
+        assert os.access(saved_file, os.R_OK)
+        assert json.loads(saved_file.read_text(encoding="utf-8")) == saved
+        assert not list(saved_file.parent.glob(f".{saved_file.name}.*.tmp"))
 
     mismatch_file = tmp_path / "mismatch.json"
     mismatch_file.write_text(

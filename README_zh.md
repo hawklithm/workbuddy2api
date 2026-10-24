@@ -15,7 +15,7 @@ Windows 代理无异常记录却自动退出时，使用[独立进程监控](doc
 - **DSML 解析** - 自动识别和转换 DeepSeek 标记语言（DSML）格式的工具调用
 - **流式响应** - 支持 SSE 流式输出，实时返回生成内容，内置 60 秒超时保护
 - **国内版与国际版后端** - 默认连接国内版 CodeBuddy，通过 `--global` 切换国际版，并隔离登录态和模型列表
-- **多账号管理** - 支持多个登录态隔离，方便工作/个人账号切换
+- **多账号管理** - 在本机管理页关联国内版和 Global 账号、切换当前账号或删除账号
 ---
 
 ## 安装
@@ -50,11 +50,13 @@ uv sync
 uv run python -m codebuddy_proxy --desensitize
 ```
 
-首次使用需要登录时：
+首次使用时，启动代理并打开本机账号管理页：
 
 ```bash
-uv run python -m codebuddy_proxy --login --desensitize
+uv run python -m codebuddy_proxy --desensitize
 ```
+
+然后访问 `http://127.0.0.1:8787/admin`，关联国内版或 Global 账号。
 
 ## 快速开始
 
@@ -64,8 +66,8 @@ uv run python -m codebuddy_proxy --login --desensitize
 # 使用最新版本（推荐）
 uv run --with workbuddy2api python -m codebuddy_proxy --desensitize
 
-# 首次使用：登录并启动
-uv run --with workbuddy2api python -m codebuddy_proxy --login --desensitize
+# 首次使用：启动后访问 http://127.0.0.1:8787/admin 关联账号
+uv run --with workbuddy2api python -m codebuddy_proxy --desensitize
 
 # 国际版：首次登录并启动
 uv run --with workbuddy2api python -m codebuddy_proxy --global --login --desensitize
@@ -81,12 +83,20 @@ uv run --with workbuddy2api python -m codebuddy_proxy --global --desensitize
 代理同时支持国内版和国际版 CodeBuddy。国内版仍是默认模式，因此已有启动命令
 无需修改。
 
-| 模式 | 启动参数 | 上游 endpoint | 默认 session 文件 |
-| --- | --- | --- | --- |
-| 国内版（默认） | 无 | `https://copilot.tencent.com` | `~/.codebuddy-session.json` |
-| 国际版 | `--global` | `https://www.codebuddy.ai` | `~/.codebuddy-global-session.json` |
+| 模式 | 启动参数 | 上游 endpoint |
+| --- | --- | --- |
+| 国内版（默认） | 无 | `https://copilot.tencent.com` |
+| 国际版 | `--global` | `https://www.codebuddy.ai` |
 
-国际版首次登录和日常启动：
+关联账号按区域分别保存在 `~/.workbuddy2api/accounts`。可以通过
+`--accounts-dir DIR` 指定其他本机目录。未指定账号选择参数时，代理恢复上次选择的当前账号。
+首次迁移时会导入匹配的旧 session 文件，
+并保留源文件；之后删除已导入账号不会再次自动导入。显式 `--global` 或 `--endpoint`
+会选择相符账号，显式 `--session-file` 可再次导入该文件。找不到匹配账号时，代理会在无当前账号的状态下启动。
+`--login` 使用临时 session 文件关联或更新账号，不会覆盖旧 session 文件。
+
+代理运行期间可直接通过管理页关联任一区域的账号。也可以继续使用命令行
+`--login` 执行终端登录：
 
 ```bash
 # 首次登录
@@ -101,14 +111,13 @@ uv run --with workbuddy2api python -m codebuddy_proxy \
 如果已将包安装为命令，可使用简写 `workbuddy2api --global --login`。从本地源码
 运行时，可使用 `uv run python -m codebuddy_proxy --global --login`。
 
-`--global` 只切换上游服务。Codex CLI、Claude Code/CC Switch、OpenCode 等客户端
-仍然连接相同的本地代理地址；`/v1/models` 返回的模型列表会随 profile 切换。
+`--global` 选择 Global 后端及匹配的账号。Codex CLI、Claude Code/CC Switch、OpenCode
+等客户端仍然连接相同的本地代理地址；`/v1/models` 返回的模型列表会随 profile 切换。
 
-国内版和国际版登录态默认相互隔离。显式 `--session-file` 的优先级更高，但文件中
-保存的 backend 和 endpoint 必须与当前启动参数匹配。代理会拒绝不匹配的凭据，
-并保留原 session 文件不变。
+国内版和国际版账号保持隔离。显式 `--session-file` 仅在其中保存的 backend 和
+endpoint 与当前启动参数匹配时导入。代理会拒绝不匹配的凭据，并保留原 session 文件。
 
-使用自定义国际版 endpoint 时，应同时指定独立的 session 文件：
+从命令行导入或创建自定义国际版 endpoint 的登录态时，应使用独立的 session 文件：
 
 ```bash
 uv run --with workbuddy2api python -m codebuddy_proxy \
@@ -321,6 +330,7 @@ providers:
 --global                 使用国际版 CodeBuddy（默认国内版）
 --endpoint ENDPOINT      CodeBuddy 后端地址（覆盖 profile 默认值）
 --session-file PATH      会话文件路径（默认按 profile 隔离）
+--accounts-dir DIR       账号库目录（默认 ~/.workbuddy2api/accounts）
 --log-file PATH          JSONL 日志文件（默认 ~/.workbuddy2api/codebuddy-proxy.jsonl）
 --desensitize            启用脱敏处理（推荐）
 --optimize-context       启用消息压缩优化（Codex CLI 推荐）
@@ -381,15 +391,24 @@ uv run --with workbuddy2api python -m codebuddy_proxy --desensitize --optimize-c
 
 ### 多账号切换
 
-```bash
-# 账号 1
-uv run --with workbuddy2api python -m codebuddy_proxy --session-file ~/.codebuddy-work.json --login \
-  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
+启动代理后访问 [http://127.0.0.1:8787/admin](http://127.0.0.1:8787/admin)，选择
+**国内**或 **Global**，再在新打开的浏览器窗口中完成关联。首次关联的账号会自动设为当前账号；
+之后关联其他账号不会隐式切换。可在列表中切换当前账号或删除账号，当前选择会在下次启动时恢复。
+管理页及管理 API 仅允许本机访问。
 
-# 账号 2
-uv run --with workbuddy2api python -m codebuddy_proxy --session-file ~/.codebuddy-personal.json --login \
-  --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
-```
+遇到上游 `429` 时自动切换账号的功能默认关闭。开启后，代理只会尝试区域和 endpoint
+都相同的账号，每个请求对每个账号最多尝试一次；所有候选账号都返回 `429` 时，仍返回原始
+`429`。账号会遵循上游的 `Retry-After`；该值缺失或无效时，默认冷却 60 秒。此开关和冷却状态
+会在重启后保留。管理页会显示剩余冷却时间及其来源（`Retry-After` 或默认值），并定期同步账号状态；
+页面从后台重新显示时会立即同步。
+
+账号列表还会显示每个关联账号当天（北京时间）的签到状态。每个账号都有“查询签到”和“签到”按钮，
+当前账号也可操作；签到前会先检查，已签到时不会重复签到。全局自动签到默认关闭，适用于所有关联账号，
+不会切换当前账号。管理页只保存开关并显示状态，自动检查和签到由代理在后台执行，即使关闭管理页也会继续。
+开启后代理会立即检查全部账号，启动时也会重新检查；此外北京时间每日 00:00 检查所有账号，随机等待 0 至 10 分钟后再检查，确认仍未签到才会执行；
+关闭开关会取消等待中的计划。未知状态不会自动签到。开关会持久化；重启后，签到状态以重新查询上游的结果为准。
+
+命令行 `--login` 和 `--session-file` 仍可用于终端登录和导入已有 session。
 
 ### 监听所有网卡（局域网共享）
 
@@ -405,10 +424,17 @@ uv run --with workbuddy2api python -m codebuddy_proxy --host 0.0.0.0 --desensiti
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | GET | `/health` | 查询本地服务和认证状态 |
+| GET | `/admin` | 打开本机账号管理页 |
 | GET | `/v1/models` | 查询 CodeBuddy 模型列表 |
 | POST | `/v1/chat/completions` | OpenAI Chat Completions，支持 tools 和流式响应 |
 | POST | `/v1/responses` | Responses API，兼容 Codex CLI |
 | POST | `/v1/messages` | Anthropic Messages API，兼容 Claude Code / CC Switch |
+
+账号管理接口位于 `/admin/api`，只允许本机回环地址访问。写请求必须携带
+`X-Account-Manager: 1`，跨源请求会被拒绝。`GET /admin/api/accounts` 返回当前账号和冷却状态；
+每个账号还包含缓存的当日签到状态。`GET /admin/api/accounts/{id}/checkin-status` 会向上游查询；
+`POST /admin/api/accounts/{id}/checkin` 会先检查再执行必要的签到。`GET` 与 `PATCH /admin/api/settings`
+用于分别读取和保存自动切换、全局自动签到设置。
 
 ### `/health` - 健康检查
 
