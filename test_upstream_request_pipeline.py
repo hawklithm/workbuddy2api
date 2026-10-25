@@ -104,7 +104,7 @@ def test_explicit_stream_options_are_preserved_by_setdefault():
 
 @pytest.mark.parametrize("endpoint,backend,roles", [
     ("https://copilot.tencent.com", "domestic", ["system", "user"]),
-    ("https://www.codebuddy.ai", "global", ["developer", "user"]),
+    ("https://www.codebuddy.ai", "global", ["system", "user"]),
     ("https://somewhere.example", "domestic", ["developer", "user"]),
     ("https://copilot.tencent.com", "global", ["developer", "user"]),
 ])
@@ -122,7 +122,7 @@ def test_gateway_message_strategy_scope_and_diagnostics(endpoint, backend, roles
     assert len(compat) == (1 if roles[0] == "system" else 0)
     if compat:
         assert compat[0] == {
-            "protocol": "openai", "backend": "domestic",
+            "protocol": "openai", "backend": backend,
             "mapping": "developer_to_system", "count": 1,
         }
 
@@ -164,9 +164,15 @@ def test_intl_conversation_headers_get_fully_transformed_body():
     assert len(conv_call) == 1
     assert conv_call[0] == req.body
     assert conv_call[0]["stream"] is True
-    assert conv_call[0]["messages"][0]["role"] == "developer"
+    assert conv_call[0]["messages"][0]["role"] == "system"
     assert req.headers["X-Conversation-ID"] == "0123456789abcdef"
-    assert effects == [("intl_conversation_headers", {"conversation_id": "0123456789ab..."})]
+    assert effects == [
+        ("upstream_role_compat", {
+            "protocol": "openai", "backend": "global",
+            "mapping": "developer_to_system", "count": 1,
+        }),
+        ("intl_conversation_headers", {"conversation_id": "0123456789ab..."}),
+    ]
 
 
 def test_intl_headers_failure_is_best_effort_and_diagnostic_is_truncated():

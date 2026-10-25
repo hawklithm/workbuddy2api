@@ -42,8 +42,8 @@ class HeaderPolicy(Protocol):
     ) -> None: ...
 
 
-class DomesticDeveloperRolePolicy:
-    """Scope the legacy-role workaround to the verified domestic gateway."""
+class CodeBuddyDeveloperRolePolicy:
+    """Scope the legacy-role workaround to the built-in CodeBuddy gateways."""
 
     def apply(
         self, body: dict[str, Any], *, client: Any, url: str,
@@ -99,7 +99,7 @@ class ChatRequestPreparer:
         desensitize_body: Callable[..., dict[str, Any]],
         normalize_tool_choice: Callable[[Any], Any],
         diagnostic: Diagnostic,
-        message_policies: tuple[MessagePolicy, ...] = (DomesticDeveloperRolePolicy(),),
+        message_policies: tuple[MessagePolicy, ...] = (CodeBuddyDeveloperRolePolicy(),),
         header_policies: tuple[HeaderPolicy, ...] = (InternationalConversationHeaderPolicy(),),
     ) -> None:
         self.client = client

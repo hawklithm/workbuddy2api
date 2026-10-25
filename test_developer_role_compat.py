@@ -1,4 +1,4 @@
-"""Compatibility regression for developer messages on the domestic CodeBuddy gateway.
+"""Compatibility regression for developer messages on CodeBuddy gateways.
 
 No live CodeBuddy credentials or network are used in this module.
 """
@@ -13,9 +13,9 @@ import codebuddy_proxy.__main__ as proxy
 from codebuddy_proxy.role_compat import adapt_developer_roles, uses_legacy_chat_roles
 
 
-def test_legacy_role_detection_is_strictly_scoped():
+def test_legacy_role_detection_is_scoped_to_matching_builtin_hosts():
     assert uses_legacy_chat_roles("domestic", "https://copilot.tencent.com/v2/chat/completions")
-    assert not uses_legacy_chat_roles("global", "https://www.codebuddy.ai/v2/chat/completions")
+    assert uses_legacy_chat_roles("global", "https://www.codebuddy.ai/v2/chat/completions")
     assert not uses_legacy_chat_roles("domestic", "https://example.test/v2/chat/completions?host=copilot.tencent.com")
     assert not uses_legacy_chat_roles("domestic", "https://copilot.tencent.com.example.test/v2/chat/completions")
     assert not uses_legacy_chat_roles("global", "https://copilot.tencent.com/v2/chat/completions")
@@ -141,11 +141,11 @@ def test_chat_endpoint_sends_compatible_role_before_desensitize(
 
 
 @pytest.mark.parametrize("endpoint,backend,expected_roles", [
-    ("https://www.codebuddy.ai", "global", ["developer", "user"]),
+    ("https://www.codebuddy.ai", "global", ["system", "user"]),
     ("https://custom.example.test", "domestic", ["developer", "user"]),
     ("https://copilot.tencent.com", "domestic", ["system", "user"]),
 ])
-def test_gateway_policy_applies_only_to_supported_backend(
+def test_gateway_policy_applies_to_supported_builtin_backends(
     monkeypatch, capture_gateway, endpoint, backend, expected_roles
 ):
     capture_gateway.profile.key = backend

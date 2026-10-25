@@ -138,17 +138,18 @@ endpoint 解析优先级为：显式 `--endpoint` > `--global` 对应的 profile
 `src/codebuddy_proxy/models_config.global.json`。根目录的
 `models_config.json` 仅作为开发兼容用的国内版配置副本保留，不是运行时数据源。
 
-### 国内版 developer 消息兼容
+### 内置 CodeBuddy 网关的 developer 消息兼容
 
-当前国内默认上游 `https://copilot.tencent.com` 的 Chat Completions 接口对包含
-`developer` 角色的请求可能返回 HTTP 400 / code 11128。本代理在**转发到该上游之前**
-将 `developer` 映射为 `system`，保留消息顺序、内容和工具调用记录，不修改客户端传来的
+内置国内站（`https://copilot.tencent.com`）和国际站
+（`https://www.codebuddy.ai`）的 Chat Completions 接口可能对包含 `developer`
+角色的请求返回 HTTP 400 / code 11128。本代理在**转发到匹配的内置网关之前**将
+`developer` 映射为 `system`，保留消息顺序、内容和工具调用记录，不修改客户端传来的
 原始消息；映射后再执行已启用的 `--desensitize` 处理。无需更改客户端配置。
 
-此适配仅针对国内默认上游，不影响国际站及自定义 endpoint。
-由于旧上游不区分 `developer` 和 `system` 的指令优先级，此映射是兼容性近似处理，
-不能保证与原生支持 `developer` 的模型完全一致。日志中的
-`upstream_role_compat` 事件仅记录转换数量，不记录提示词内容。
+此映射同时校验后端和精确主机名；使用其他主机名的 endpoint 保留原始角色。国际站的
+`X-Conversation-*` 请求头仍在请求体转换后生成。由于上游不区分 `developer` 和
+`system` 的指令优先级，此映射是兼容性近似处理，不能保证与原生支持 `developer` 的模型
+完全一致。日志中的 `upstream_role_compat` 事件记录后端和转换数量，不记录提示词内容。
 
 ### 2. 验证
 

@@ -144,20 +144,23 @@ Endpoint precedence is: explicit `--endpoint` > the `--global` profile default
 Therefore `--global` without `--endpoint` cannot be redirected to the domestic
 host by `CODEBUDDY_ENDPOINT`.
 
-### Domestic gateway: developer-role compatibility
+### Built-in CodeBuddy gateways: developer-role compatibility
 
-The domestic default upstream (`https://copilot.tencent.com`) may reject
-Chat Completions requests containing a `developer` message with HTTP 400 /
-code 11128. Before forwarding to **that upstream only**, the proxy maps
-`developer` to `system` without changing message order, content, tool-call
-history, or the original client request. If enabled, `--desensitize` runs
-after this role adaptation. No client-side configuration is needed.
+The built-in domestic (`https://copilot.tencent.com`) and international
+(`https://www.codebuddy.ai`) Chat Completions gateways may reject requests
+containing a `developer` message with HTTP 400 / code 11128. Before forwarding
+to either matching backend and host, the proxy maps `developer` to `system`
+without changing message order, content, tool-call history, or the original
+client request. If enabled, `--desensitize` runs after this role adaptation.
+No client-side configuration is needed.
 
-This compatibility mapping does not apply to the international backend or
-custom endpoints. Because the legacy upstream does not represent the separate
-`system` and `developer` instruction priorities, it is an approximation,
-not exact semantic equivalence. The `upstream_role_compat` log event reports
-only the number of mapped messages, not prompt contents.
+The mapping is scoped to these exact backend/host pairs; endpoints using
+other host names keep their original roles. International `X-Conversation-*` headers
+are still generated after request-body transformations. Because the upstreams
+do not represent the separate `system` and `developer` instruction priorities,
+the mapping is an approximation, not exact semantic equivalence. The
+`upstream_role_compat` log event reports the backend and number of mapped
+messages, not prompt contents.
 
 Runtime model catalogs are loaded from the packaged profile resources
 `src/codebuddy_proxy/models_config.domestic.json` and
