@@ -104,5 +104,5 @@ jobs:
         run: |
           VERSION="${RELEASE_TAG#workbuddy2api-v}"
           python -m pip install --pre --no-cache-dir "workbuddy2api==$VERSION"
-          python -c "import importlib, importlib.metadata as m, os; expected=os.environ['RELEASE_TAG'].removeprefix('workbuddy2api-v'); assert m.version('workbuddy2api') == expected; importlib.import_module('codebuddy_proxy.__main__'); importlib.import_module('daily_checkin.trae_scheduler'); importlib.import_module('buddy_agent_auth.providers.trae.login'); print({n: m.version(n) for n in ('workbuddy2api','daily-checkin','buddy-agent-auth')})"
+          python -c "import importlib, importlib.metadata as m, os; expected=os.environ['RELEASE_TAG'].removeprefix('workbuddy2api-v'); assert m.version('workbuddy2api') == expected; importlib.import_module('codebuddy_proxy.__main__'); importlib.import_module('daily_checkin.trae_scheduler'); importlib.import_module('buddy_agent_auth.providers.trae.login'); print({n: m.version(n) for n in ('workbuddy2api','buddy-agent-checkin','buddy-agent-auth')})"
           python -m pip check

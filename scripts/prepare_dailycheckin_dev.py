@@ -151,12 +151,12 @@ def update_workbuddy_sources(project: Path, daily_wheel: Path, daily_version: st
     newline = '\r\n' if b'\r\n' in raw else '\n'
     text = text.replace('\r\n', '\n')
     replacements = [
-        (r'(?m)^daily-checkin[ \t]*=[ \t]*\{[^\n]*\}[ \t]*$',
-         f'daily-checkin = {{ path = "{relative_source(project, daily_wheel)}" }}'),
+        (r'(?m)^buddy-agent-checkin[ \t]*=[ \t]*\{[^\n]*\}[ \t]*$',
+         f'buddy-agent-checkin = {{ path = "{relative_source(project, daily_wheel)}" }}'),
         (r'(?m)^buddy-agent-auth[ \t]*=[ \t]*\{[^\n]*\}[ \t]*$',
          f'buddy-agent-auth = {{ path = "{relative_source(project, auth_wheel)}" }}'),
-        (r'(?m)^[ \t]*"daily-checkin\[workbuddy\][^"]*"[ \t]*,[ \t]*$',
-         f'    "daily-checkin[workbuddy]>={daily_version},<{upper_bound(daily_version)}",'),
+        (r'(?m)^[ \t]*"buddy-agent-checkin\[workbuddy\][^"]*"[ \t]*,[ \t]*$',
+         f'    "buddy-agent-checkin[workbuddy]>={daily_version},<{upper_bound(daily_version)}",'),
         (r'(?m)^[ \t]*"buddy-agent-auth[^"]*"[ \t]*,[ \t]*$',
          f'    "buddy-agent-auth>={auth_version},<{upper_bound(auth_version)}",'),
     ]
@@ -246,20 +246,20 @@ def main(argv=None) -> int:
     verify_installed(uv, daily, daily_env, auth_wheel, 'buddy_agent_auth.providers.trae', 'native_identity.py',
                      auth_version, distribution='buddy-agent-auth')
     run(uv, ['build', '--out-dir', str(dist), '--no-build-logs'], daily, daily_env)
-    daily_wheel = wheel_for(dist, 'daily-checkin', daily_version)
+    daily_wheel = wheel_for(dist, 'buddy-agent-checkin', daily_version)
     verify_wheel_sources(daily_wheel, {'daily_checkin': daily / 'daily_checkin'})
     with ZipFile(daily_wheel) as archive:
         if any(name.startswith('trae2api/') for name in archive.namelist()):
             raise PreparationError('DailyCheckin wheel contains legacy trae2api code')
-    run(uv, ['lock', '--upgrade-package', 'daily-checkin', '--upgrade-package', 'buddy-agent-auth'], workbuddy, workbuddy_env)
-    run(uv, ['sync', '--locked', '--inexact', '--reinstall-package', 'daily-checkin', '--reinstall-package', 'buddy-agent-auth'], workbuddy, workbuddy_env)
+    run(uv, ['lock', '--upgrade-package', 'buddy-agent-checkin', '--upgrade-package', 'buddy-agent-auth'], workbuddy, workbuddy_env)
+    run(uv, ['sync', '--locked', '--inexact', '--reinstall-package', 'buddy-agent-checkin', '--reinstall-package', 'buddy-agent-auth'], workbuddy, workbuddy_env)
     verify_installed(uv, workbuddy, workbuddy_env, auth_wheel, 'buddy_agent_auth', 'client.py', auth_version)
     verify_installed(uv, workbuddy, workbuddy_env, auth_wheel, 'buddy_agent_auth.providers.codebuddy', 'client.py',
                      auth_version, distribution='buddy-agent-auth')
     verify_installed(uv, workbuddy, workbuddy_env, auth_wheel, 'buddy_agent_auth.providers.trae', 'native_identity.py',
                      auth_version, distribution='buddy-agent-auth')
-    verify_installed(uv, workbuddy, workbuddy_env, daily_wheel, 'daily_checkin', 'workbuddy.py', daily_version)
-    verify_installed(uv, workbuddy, workbuddy_env, daily_wheel, 'daily_checkin', 'trae.py', daily_version)
+    verify_installed(uv, workbuddy, workbuddy_env, daily_wheel, 'daily_checkin', 'workbuddy.py', daily_version, distribution='buddy-agent-checkin')
+    verify_installed(uv, workbuddy, workbuddy_env, daily_wheel, 'daily_checkin', 'trae.py', daily_version, distribution='buddy-agent-checkin')
     print(f'Local development dependencies are ready. DailyCheckin wheel: {daily_wheel}', flush=True)
     return 0
 

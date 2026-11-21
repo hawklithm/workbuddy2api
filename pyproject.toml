@@ -10,7 +10,7 @@ dependencies = [
     "httpx[socks]>=0.25.0",
     "requests>=2.31.0",
     "buddy-agent-auth>=0.1.0.dev1,<0.2",
-    "daily-checkin[workbuddy]>=0.1.1.dev2,<0.2",
+    "buddy-agent-checkin[workbuddy]>=0.1.1.dev2,<0.2",
 ]
 
 [project.optional-dependencies]

@@ -3,7 +3,7 @@
 The three independently versioned projects are released in this order:
 
 1. `buddy-agent-auth==0.1.0.dev1` from `hawklithm/workbuddy2api`;
-2. `daily-checkin==0.1.1.dev2` from `hawklithm/dailycheckin`;
+2. `buddy-agent-checkin==0.1.1.dev2` from `hawklithm/dailycheckin`;
 3. `workbuddy2api==2.0.8.dev1` from `hawklithm/workbuddy2api`.
 
 Each push of the corresponding tag below builds and validates a wheel and sdist,
@@ -13,7 +13,7 @@ publication and verification of each package before pushing the next tag.
 | PyPI project | GitHub owner | repository | workflow filename | environment | tag |
 | --- | --- | --- | --- | --- | --- |
 | buddy-agent-auth | hawklithm | workbuddy2api | publish-auth-dev.yml | pypi | buddy-agent-auth-v0.1.0.dev1 |
-| daily-checkin | hawklithm | dailycheckin | publish-dev.yml | pypi | daily-checkin-v0.1.1.dev2 |
+| buddy-agent-checkin | hawklithm | dailycheckin | publish-dev.yml | pypi | buddy-agent-checkin-v0.1.1.dev2 |
 | workbuddy2api | hawklithm | workbuddy2api | publish.yml | pypi | workbuddy2api-v2.0.8.dev1 |
 
 The PyPI owner must create pending trusted publishers for the two new projects,
@@ -31,7 +31,7 @@ an isolated environment, using a Python 3.10+ interpreter:
 uv venv .venv-pypi-verify
 uv pip install --python .venv-pypi-verify/Scripts/python.exe --pre --index-url https://pypi.org/simple "workbuddy2api==2.0.8.dev1"
 uv pip check --python .venv-pypi-verify/Scripts/python.exe
-.venv-pypi-verify/Scripts/python.exe -c "import importlib.metadata as m; import buddy_agent_auth.providers.trae.login, daily_checkin.trae_scheduler, codebuddy_proxy.__main__; print({n:m.version(n) for n in ('buddy-agent-auth','daily-checkin','workbuddy2api')})"
+.venv-pypi-verify/Scripts/python.exe -c "import importlib.metadata as m; import buddy_agent_auth.providers.trae.login, daily_checkin.trae_scheduler, codebuddy_proxy.__main__; print({n:m.version(n) for n in ('buddy-agent-auth','buddy-agent-checkin','workbuddy2api')})"
 ```
 
 For future dev releases, increment each changed package's version and its

@@ -20,19 +20,19 @@ def test_updates_only_expected_sources_and_is_idempotent(tmp_path):
     config = workbuddy / 'pyproject.toml'
     original = ('[project]\r\ndependencies = [\r\n'
                 '    "buddy-agent-auth>=0.1.0,<0.2",\r\n'
-                '    "daily-checkin[workbuddy]>=0.1.1.dev1,<0.2",\r\n'
+                '    "buddy-agent-checkin[workbuddy]>=0.1.1.dev1,<0.2",\r\n'
                 '    "other-package>=3",\r\n]\r\n\r\n[tool.uv.sources]\r\n'
                 'buddy-agent-auth = { path = "packages/buddy-agent-auth", editable = true }\r\n'
-                'daily-checkin = { path = "../old" }\r\n')
+                'buddy-agent-checkin = { path = "../old" }\r\n')
     config.write_bytes(original.encode())
-    daily_wheel = daily / 'daily_checkin-0.1.2.dev1-py3-none-any.whl'
+    daily_wheel = daily / 'buddy_agent_checkin-0.1.2.dev1-py3-none-any.whl'
     auth_wheel = daily / 'buddy_agent_auth-0.1.1-py3-none-any.whl'
     prepare.update_workbuddy_sources(workbuddy, daily_wheel, '0.1.2.dev1', auth_wheel, '0.1.1')
     data = config.read_bytes()
     assert b'other-package>=3' in data
-    assert b'daily-checkin[workbuddy]>=0.1.2.dev1,<0.2' in data
+    assert b'buddy-agent-checkin[workbuddy]>=0.1.2.dev1,<0.2' in data
     assert b'buddy-agent-auth>=0.1.1,<0.2' in data
-    assert b'../daily/dist/daily_checkin-0.1.2.dev1-py3-none-any.whl' in data
+    assert b'../daily/dist/buddy_agent_checkin-0.1.2.dev1-py3-none-any.whl' in data
     assert b'../daily/dist/buddy_agent_auth-0.1.1-py3-none-any.whl' in data
     assert b'\r\n' in data and b'\n' not in data.replace(b'\r\n', b'')
     prepare.update_workbuddy_sources(workbuddy, daily_wheel, '0.1.2.dev1', auth_wheel, '0.1.1')
