@@ -296,7 +296,7 @@ class ProxyState:
 # FastAPI 应用
 # ============================================================================
 
-app = FastAPI(title="CodeBuddy Proxy (FastAPI)", version="2.0.7")
+app = FastAPI(title="CodeBuddy Proxy (FastAPI)", version="2.0.8.dev1")
 
 # 全局状态（在 main() 中初始化）
 proxy_state: ProxyState | None = None

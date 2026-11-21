@@ -230,12 +230,14 @@ def main(argv=None) -> int:
         raise PreparationError('DailyCheckin and WorkBuddy2API must use separate uv environments')
     dist = daily / 'dist'
     dist.mkdir(parents=True, exist_ok=True)
+    for environment in (daily_env, workbuddy_env):
+        environment['UV_FIND_LINKS'] = str(dist)
+        environment['UV_PRERELEASE'] = 'allow'
     auth_version = project_version(uv, auth, daily_env)
     daily_version = project_version(uv, daily, daily_env)
     run(uv, ['build', str(auth), '--out-dir', str(dist), '--no-build-logs'], daily, daily_env)
     auth_wheel = wheel_for(dist, 'buddy-agent-auth', auth_version)
     verify_wheel_sources(auth_wheel, {'buddy_agent_auth': auth / 'src' / 'buddy_agent_auth'})
-    update_daily_auth_source(daily, auth_wheel, auth_version)
     run(uv, ['lock', '--upgrade-package', 'buddy-agent-auth'], daily, daily_env)
     run(uv, ['sync', '--locked', '--inexact', '--extra', 'workbuddy', '--reinstall-package', 'buddy-agent-auth'], daily, daily_env)
     verify_installed(uv, daily, daily_env, auth_wheel, 'buddy_agent_auth', 'client.py', auth_version)
@@ -249,7 +251,6 @@ def main(argv=None) -> int:
     with ZipFile(daily_wheel) as archive:
         if any(name.startswith('trae2api/') for name in archive.namelist()):
             raise PreparationError('DailyCheckin wheel contains legacy trae2api code')
-    update_workbuddy_sources(workbuddy, daily_wheel, daily_version, auth_wheel, auth_version)
     run(uv, ['lock', '--upgrade-package', 'daily-checkin', '--upgrade-package', 'buddy-agent-auth'], workbuddy, workbuddy_env)
     run(uv, ['sync', '--locked', '--inexact', '--reinstall-package', 'daily-checkin', '--reinstall-package', 'buddy-agent-auth'], workbuddy, workbuddy_env)
     verify_installed(uv, workbuddy, workbuddy_env, auth_wheel, 'buddy_agent_auth', 'client.py', auth_version)

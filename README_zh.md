@@ -1,6 +1,6 @@
 # CodeBuddy API 代理
 
-> 开发集成：`packages/buddy-agent-auth` 是独立认证包，签到核心由 DailyCheckin 提供。本地可在 WorkBuddy2API 目录执行 `python scripts/prepare_dailycheckin_dev.py`，一键构建认证与签到 wheel、同步两个项目环境并校验已安装包。默认查找相邻的 `../trae2api` 或 `../dailycheckin`；其他位置使用 `--dailycheckin <目录>`。脚本会更新本项目的本地 wheel 依赖和 uv 锁定记录，不会发布或推送。`buddy-agent-auth` 与 DailyCheckin 尚未发布，普通发行包安装需等包仓库可用。
+> 开发集成：`packages/buddy-agent-auth` 是独立认证包，签到核心由 DailyCheckin 提供。本地可在 WorkBuddy2API 目录执行 `python scripts/prepare_dailycheckin_dev.py`，一键构建认证与签到 wheel、同步两个项目环境并校验已安装包。默认查找相邻的 `../trae2api` 或 `../dailycheckin`；其他位置使用 `--dailycheckin <目录>`。脚本通过临时环境变量选择本地 wheel，不会改写项目依赖源；它会更新 uv 锁定记录，不会发布或推送。`buddy-agent-auth` 与 DailyCheckin 尚未发布，普通发行包安装需等包仓库可用。
 
 > 一个轻量级的 API 代理服务，将 CodeBuddy 底层接口转换为标准的 OpenAI、Anthropic 和 Responses 协议格式。
 

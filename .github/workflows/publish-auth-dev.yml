@@ -1,0 +1,72 @@
+name: Publish buddy-agent-auth development distribution
+
+on:
+  push:
+    tags:
+      - 'buddy-agent-auth-v*.dev*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --upgrade build twine
+      - name: Verify tag and project version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os, pathlib, tomllib
+          prefix = 'buddy-agent-auth-v'
+          tag = os.environ['RELEASE_TAG']
+          version = tomllib.loads(pathlib.Path('packages/buddy-agent-auth/pyproject.toml').read_text(encoding='utf-8'))['project']['version']
+          if tag != prefix + version or '.dev' not in version:
+              raise SystemExit(f'tag {tag} does not match dev version {version}')
+          PY
+      - run: python -m build 'packages/buddy-agent-auth' --outdir dist
+      - run: python -m twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: buddy-agent-auth-distribution
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/buddy-agent-auth
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: buddy-agent-auth-distribution
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  verify:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install published dev package and verify imports
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          PIP_INDEX_URL: https://pypi.org/simple
+        run: |
+          VERSION="${RELEASE_TAG#buddy-agent-auth-v}"
+          python -m pip install --pre --no-cache-dir "buddy-agent-auth[trae]==$VERSION"
+          python -c "import importlib, importlib.metadata as m, os; name='buddy-agent-auth'; expected=os.environ['RELEASE_TAG'].removeprefix('buddy-agent-auth-v'); assert m.version(name)==expected; importlib.import_module('buddy_agent_auth.providers.trae.login'); print(name, m.version(name))"
+          python -m pip check

@@ -1,6 +1,9 @@
 name: Publish Python distribution to PyPI
 
 on:
+  push:
+    tags:
+      - 'workbuddy2api-v*.dev*'
   release:
     types: [published]
   workflow_dispatch:
@@ -21,7 +24,7 @@ jobs:
       - name: Check out release source
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          ref: ${{ github.event.release.tag_name || inputs.tag || github.ref_name }}
           persist-credentials: false
 
       - name: Set up Python
@@ -34,14 +37,14 @@ jobs:
 
       - name: Verify release version
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag || github.ref_name }}
         run: |
           python - <<'PY'
           import os
           import pathlib
           import tomllib
 
-          tag = os.environ["RELEASE_TAG"].removeprefix("v")
+          tag = os.environ["RELEASE_TAG"].removeprefix("workbuddy2api-v").removeprefix("v")
           version = tomllib.loads(
               pathlib.Path("pyproject.toml").read_text(encoding="utf-8")
           )["project"]["version"]
@@ -85,3 +88,21 @@ jobs:
 
       - name: Publish distribution packages to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  verify_dev:
+    if: github.event_name == 'push'
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Verify published dev package and its dependencies
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          PIP_INDEX_URL: https://pypi.org/simple
+        run: |
+          VERSION="${RELEASE_TAG#workbuddy2api-v}"
+          python -m pip install --pre --no-cache-dir "workbuddy2api==$VERSION"
+          python -c "import importlib, importlib.metadata as m, os; expected=os.environ['RELEASE_TAG'].removeprefix('workbuddy2api-v'); assert m.version('workbuddy2api') == expected; importlib.import_module('codebuddy_proxy.__main__'); importlib.import_module('daily_checkin.trae_scheduler'); importlib.import_module('buddy_agent_auth.providers.trae.login'); print({n: m.version(n) for n in ('workbuddy2api','daily-checkin','buddy-agent-auth')})"
+          python -m pip check
