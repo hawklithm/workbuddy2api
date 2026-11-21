@@ -112,7 +112,7 @@ class AccountManager:
             max_workers=max_concurrent_logins,
             thread_name_prefix="codebuddy-login",
         )
-        from codebuddy_proxy.account_checkin import AccountCheckinService
+        from daily_checkin.workbuddy import AccountCheckinService
 
         self.checkins = AccountCheckinService(self)
 

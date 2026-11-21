@@ -3,6 +3,7 @@ import asyncio
 import json
 import threading
 import time
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -79,7 +80,7 @@ def test_checkin_of_inactive_account_preserves_active_and_uses_its_own_credentia
         assert store.active_account_id == active
     assert signed == {"second"}
     assert {uid for uid, *_ in seen} == {"second"}
-    assert {host for _, host, *_ in seen} == {"www.codebuddy.ai"}
+    assert {host for _, host, *_ in seen} == {urlsplit(GLOBAL_PROFILE.default_endpoint).hostname}
     assert sum(path.endswith("/daily-checkin") for _, _, path, *_ in seen) == 1
     output = capsys.readouterr().out
     assert "[Checkin]" in output
@@ -148,7 +149,7 @@ def test_current_activity_status_reports_already_signed_without_daily_post(
 
     assert seen
     assert {user for user, *_ in seen} == {uid}
-    expected_host = "copilot.tencent.com" if uid == "first" else "www.codebuddy.ai"
+    expected_host = urlsplit((DOMESTIC_PROFILE if uid == "first" else GLOBAL_PROFILE).default_endpoint).hostname
     assert {host for _, host, *_ in seen} == {expected_host}
     assert {path for _, _, path, *_ in seen} == {
         "/v2/billing/meter/checkin-activity-status"

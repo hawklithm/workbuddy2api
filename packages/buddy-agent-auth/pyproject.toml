@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "buddy-agent-auth"
+version = "0.1.0"
+description = "Brand-separated agent account authentication"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+trae = ["httpx>=0.25,<1", "cryptography>=41"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

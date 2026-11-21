@@ -9,6 +9,8 @@ dependencies = [
     "uvicorn>=0.24.0",
     "httpx[socks]>=0.25.0",
     "requests>=2.31.0",
+    "buddy-agent-auth>=0.1.0,<0.2",
+    "daily-checkin[workbuddy]>=0.1.1.dev1,<0.2",
 ]
 
 [project.optional-dependencies]
@@ -33,3 +35,7 @@ codebuddy_proxy = ["models_config.*.json", "admin.html"]
 dev = [
     "pytest>=7.4.0",
 ]
+
+[tool.uv.sources]
+buddy-agent-auth = { path = "../trae2api/dist/buddy_agent_auth-0.1.0-py3-none-any.whl" }
+daily-checkin = { path = "../trae2api/dist/daily_checkin-0.1.1.dev1-py3-none-any.whl" }

@@ -52,7 +52,7 @@ from codebuddy_proxy.backend_profile import (
     resolve_backend_from_args,
 )
 from codebuddy_proxy.codebuddy_client_demo import CodeBuddyClient, CodeBuddyError
-from codebuddy_proxy.billing_proxy import forward_billing
+from daily_checkin.workbuddy_api import create_legacy_router
 from codebuddy_proxy.upstream_request import ChatRequestPreparer
 from codebuddy_proxy.protocol_response import format_nonstream_response
 from codebuddy_proxy.process_diagnostics import ProcessDiagnostics
@@ -334,6 +334,41 @@ async def start_account_checkin() -> None:
 
 
 app.router.add_event_handler("startup", start_account_checkin)
+
+# Trae automation is opt-in because its local login is independent of WorkBuddy.
+_trae_checkin_service = None
+
+
+async def start_trae_checkin() -> None:
+    global _trae_checkin_service
+    native = os.environ.get("DAILYCHECKIN_TRAE_NATIVE") == "1"
+    creds = os.environ.get("DAILYCHECKIN_TRAE_CREDS") or None
+    if not native and not creds:
+        return
+    try:
+        from daily_checkin.trae_scheduler import create_service
+        service = await asyncio.to_thread(
+            create_service, native=native, creds=creds,
+            device_id_source=os.environ.get("DAILYCHECKIN_TRAE_DEVICE_ID_SOURCE", "get-device-id"))
+        if isinstance(proxy_state, ProxyState):
+            service.configure_logging(proxy_state.log_checkin)
+        await service.start()
+        _trae_checkin_service = service
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "Trae automatic check-in could not start; check the configured account and device source")
+
+
+async def close_trae_checkin() -> None:
+    global _trae_checkin_service
+    service, _trae_checkin_service = _trae_checkin_service, None
+    if service is not None:
+        await service.close()
+
+
+app.router.add_event_handler("startup", start_trae_checkin)
+app.router.add_event_handler("shutdown", close_trae_checkin)
+
 
 
 async def close_account_manager() -> None:
@@ -943,8 +978,10 @@ async def health():
     }
 
 
-# ============================================================================
-# 端点：/v1/checkin-status 与 /v1/checkin（每日签到透传）
+# Compatibility routes are implemented and maintained by DailyCheckin.
+app.include_router(create_legacy_router(get_request_state, diagnostic))
+
+
 # ============================================================================
 
 @app.api_route("/v1/checkin-status", methods=["GET", "POST"])

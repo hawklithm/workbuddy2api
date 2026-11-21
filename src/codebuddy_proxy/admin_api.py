@@ -8,7 +8,6 @@ import math
 import re
 import time
 import unicodedata
-from datetime import date as calendar_date
 from importlib import resources
 from typing import Any, Callable
 from urllib.parse import urlsplit
@@ -17,6 +16,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.routing import APIRoute
 from fastapi.exceptions import RequestValidationError
+
+from daily_checkin.workbuddy_api import safe_checkin as _safe_checkin
 
 from codebuddy_proxy.account_manager import (
     AccountManager,
@@ -39,19 +40,7 @@ _PUBLIC_ACCOUNT_FIELDS = (
     "checkin",
 )
 _PUBLIC_JOB_FIELDS = ("id", "backend", "status", "auth_url", "error", "account_id")
-_CHECKIN_STATUSES = frozenset(
-    {"unknown", "unchecked", "checked", "checking", "signing", "error"}
-)
-_SAFE_CHECKIN_ERRORS = frozenset(
-    {
-        "签到活动未开放",
-        "签到状态查询失败",
-        "签到请求失败",
-        "签到结果未确认",
-        "账号不存在",
-    }
-)
-_CHECKIN_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
 
 
 class _NoStoreRoute(APIRoute):
@@ -296,46 +285,6 @@ def _safe_settings(value: Any) -> dict[str, Any]:
     }
 
 
-def _safe_checkin(value: Any) -> dict[str, Any]:
-    """Return only the stable, non-sensitive check-in response fields."""
-
-    if not isinstance(value, dict):
-        value = {}
-    raw_date = value.get("date")
-    checkin_date = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 8 * 60 * 60))
-    if isinstance(raw_date, str) and _CHECKIN_DATE_RE.fullmatch(raw_date):
-        try:
-            calendar_date.fromisoformat(raw_date)
-            checkin_date = raw_date
-        except ValueError:
-            pass
-    status = value.get("status")
-    if not isinstance(status, str) or status not in _CHECKIN_STATUSES:
-        status = "error"
-    error = value.get("error")
-    if not isinstance(error, str) or error not in _SAFE_CHECKIN_ERRORS:
-        error = "签到状态查询失败" if status == "error" else None
-    return {
-        "date": checkin_date,
-        "status": status,
-        "checked": value.get("checked") if type(value.get("checked")) is bool else None,
-        "last_checked_at": (
-            float(value["last_checked_at"])
-            if _finite_number(value.get("last_checked_at"))
-            else None
-        ),
-        "last_checkin_at": (
-            float(value["last_checkin_at"])
-            if _finite_number(value.get("last_checkin_at"))
-            else None
-        ),
-        "error": error,
-        "next_checkin_at": (
-            float(value["next_checkin_at"])
-            if _finite_number(value.get("next_checkin_at"))
-            else None
-        ),
-    }
 
 
 class _DuplicateJSONKey(ValueError):
