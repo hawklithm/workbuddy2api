@@ -8,6 +8,8 @@
 
 Windows 代理无异常记录却自动退出时，使用[独立进程监控](docs/external-process-monitor.md)，在不重启代理的情况下采集 uv/Python 生命周期、退出码、内存、探活和可读取的系统事件。
 
+Trae CN 的实验性 OpenAI 入口包括 `GET /trae/v1/models` 和 `POST /trae/v1/chat/completions`，使用账号管理页已关联的 Trae 账号。只有一个账号时自动选中；有多个时，请通过 `X-Trae-Account-Id` 请求头指定账号 ID，可从本机 `GET /admin/api/trae/accounts` 的 `accounts[].id` 获取。模型列表按账号缓存 6 小时，可用 `GET /trae/v1/models?refresh=true` 强制刷新；响应中的 `source` 与 `stale` 标明来源和是否回退到客户端缓存、过期缓存或内置清单。内置清单可能过时，不保证该账号可用。聊天请求需提供模型名和 `messages`，支持流式与非流式响应；暂不支持 Trae 的 Responses 或 Anthropic 接口。基本文本调用已用真实账号验证，工具调用仅经离线验证。此入口使用 Trae 服务额度，并且与 WorkBuddy 账号切换独立。
+
 ## ✨ 核心特性
 
 - **协议转换** - 支持 OpenAI Chat Completions、Anthropic Messages API 和 Responses 三种标准格式
@@ -90,7 +92,13 @@ uv run --with workbuddy2api python -m codebuddy_proxy --global --desensitize
 | 模式 | 启动参数 | 上游 endpoint |
 | --- | --- | --- |
 | 国内版（默认） | 无 | `https://copilot.tencent.com` |
-| 国际版 | `--global` | `https://www.codebuddy.ai` |
+| 国际版 | `--global` | `https://www.workbuddy.ai` |
+
+当前源码已对齐 Buddy Switch 的 WorkBuddy 出站协议：WorkBuddy 身份头、会话关联头、DeepSeek thinking/档位适配、账号缓存键和国际版首条 system。已有账号继续使用其保存的 endpoint；旧国际站可显式指定 `--global --endpoint https://www.codebuddy.ai`，凭据不会自动跨站迁移。
+
+`--desensitize` 在原有 harness 压缩上加入模板指纹处理，默认仍关闭。`--prompt-mode passthrough` 保留客户端 system；`--prompt-mode custom --prompt-file prompt.txt` 替换为 UTF-8 文件中的 system，不传文件时使用内置工程提示词。passthrough 遇特定内容拦截时最多降级重试一次，降级按账号和 endpoint 隔离，到次日北京时间零点结束。`--model-efforts-file efforts.json` 可指定模型默认档位，例如 `{"deepseek-v4.1-flash":"high"}`；显式请求参数优先。
+
+三种协议共用 reasoning 快照差分，支持 Responses reasoning summary 和 Anthropic thinking 输出。会话 ID 只用于上游关联，不是用户身份认证；Responses 历史缓存仍未启用。实现与验收见 [出站对齐记录](docs/buddy-upstream-alignment-2026-11-21.md)。这些是当前源码能力，不代表已发布版本。
 
 关联账号按区域分别保存在 `~/.workbuddy2api/accounts`。可以通过
 `--accounts-dir DIR` 指定其他本机目录。未指定账号选择参数时，代理恢复上次选择的当前账号。
@@ -135,7 +143,10 @@ endpoint 解析优先级为：显式 `--endpoint` > `--global` 对应的 profile
 > 非 global 模式下的 `CODEBUDDY_ENDPOINT` > 国内默认 endpoint。也就是说，
 `--global` 未同时指定 `--endpoint` 时不会被 `CODEBUDDY_ENDPOINT` 覆盖回国内域名。
 
-运行时模型配置从包内 profile 资源加载：
+`/v1/models` 按当前 WorkBuddy 账号和区域从上游获取 `cli` 模型列表，缓存 24 小时；
+`/v1/models?refresh=true` 可强制刷新。响应的 `catalog` 字段标注来源和回退状态；
+上游不可用时使用同账号缓存，未有缓存时使用包内 profile 资源。`--static-models` 只使用本地资源，
+`--config-cache-ttl` 可调整缓存秒数。包内回退资源为：
 `src/codebuddy_proxy/models_config.domestic.json` 和
 `src/codebuddy_proxy/models_config.global.json`。根目录的
 `models_config.json` 仅作为开发兼容用的国内版配置副本保留，不是运行时数据源。
@@ -979,6 +990,10 @@ uv run --with workbuddy2api python -m codebuddy_proxy \
 - 请勿将本项目用于任何违反 CodeBuddy 服务条款的用途
 - 请勿将本项目用于商业用途
 
+
+### Trae CN 账号管理
+
+本机管理页面 `/admin` 提供独立的 Trae CN 账号区：通过浏览器关联多个账号、重新登录、删除、查询签到状态及手动签到。自动签到开关默认关闭，与 WorkBuddy 的签到设置互不影响。账号凭据和独立设备身份保存在账号目录的 `trae-cn` 子目录中；重新登录必须是原账号。Trae 账号用于签到，不参与 WorkBuddy 模型代理的账号切换。登录及首次签到可能注册设备；凭据过期后请重新登录。独立登录和签到的实际服务端行为仍需使用真实账号验证。
 
 ### Trae CN 自动签到（可选）
 

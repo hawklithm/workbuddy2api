@@ -1,12 +1,8 @@
-"""INTL 会话标识头族的回归测试（issue #11 / code 11128）。
+"""Conversation correlation after Buddy Switch alignment.
 
-背景：2026-10-16 起 www.codebuddy.ai（国际站）对 chat/completions 强制校验
-X-Conversation-* 头族，缺失即 400 / code 11128。国内站 copilot.tencent.com 无此闸门。
-
-本测试锁定三件事：
-  1. conversation_headers() 产出完整头族，且 X-Conversation-ID 在同一会话内稳定
-  2. Message-ID / Request-ID 每请求新生成（不复用）
-  3. 注入条件严格限定 INTL —— 国内站 URL 不得带这些头
+Built-in domestic and international gateways receive the same header family.
+The initial user turn distinguishes content-derived sessions; subsequent turns
+reuse that identity. Message IDs are fresh while the request aggregate is stable.
 """
 
 from codebuddy_proxy.codebuddy_client_demo import CodeBuddyClient
@@ -41,7 +37,7 @@ def test_conversation_headers_present_and_shaped():
         assert key in headers, f"缺少 {key}"
 
     cid = headers["X-Conversation-ID"]
-    assert isinstance(cid, str) and len(cid) == 32
+    assert isinstance(cid, str) and len(cid) in (32, 64)
     assert all(c in "0123456789abcdef" for c in cid), "X-Conversation-ID 应为 hex"
 
     for key in ("X-Conversation-Message-ID", "X-Conversation-Request-ID"):
@@ -63,8 +59,8 @@ def test_conversation_id_stable_within_session():
         "同一会话的 X-Conversation-ID 必须稳定"
 
 
-def test_message_and_request_ids_fresh_per_request():
-    """Message-ID / Request-ID 每请求必须新生成。"""
+def test_message_id_is_fresh_and_request_aggregate_is_stable():
+    """Fresh message identity with a stable session aggregate."""
     client = _client()
     body = _body("You are a helpful assistant.")
 
@@ -72,7 +68,7 @@ def test_message_and_request_ids_fresh_per_request():
     second = client.conversation_headers(body)
 
     assert first["X-Conversation-Message-ID"] != second["X-Conversation-Message-ID"]
-    assert first["X-Conversation-Request-ID"] != second["X-Conversation-Request-ID"]
+    assert first["X-Conversation-Request-ID"] == second["X-Conversation-Request-ID"]
 
 
 def test_conversation_id_differs_across_sessions():
@@ -89,8 +85,11 @@ def test_conversation_id_stable_when_only_user_turn_changes():
     """多轮对话：只有 user 轮变化时，X-Conversation-ID 仍应稳定（首条 system 未变）。"""
     client = _client()
 
-    turn1 = client.conversation_headers(_body("You are a helpful assistant.", "first"))
-    turn2 = client.conversation_headers(_body("You are a helpful assistant.", "second"))
+    first = _body("You are a helpful assistant.", "first")
+    second = _body("You are a helpful assistant.", "first")
+    second["messages"] += [{"role": "assistant", "content": "answer"}, {"role": "user", "content": "second"}]
+    turn1 = client.conversation_headers(first)
+    turn2 = client.conversation_headers(second)
 
     assert turn1["X-Conversation-ID"] == turn2["X-Conversation-ID"], \
         "首条 system 不变时，跨轮 ID 必须稳定"
@@ -107,7 +106,7 @@ def test_headers_tolerate_missing_or_malformed_body():
             assert key in headers, f"body={body!r} 时缺少 {key}"
 
 
-def test_intl_gate_is_scoped_to_codebuddy_ai():
+def test_conversation_headers_are_scoped_to_compatible_backend_host_pairs():
     """Verify emitted headers rather than inspecting a particular source file.
 
     The policy is allowed to move between modules during refactoring; the
@@ -135,6 +134,7 @@ def test_intl_gate_is_scoped_to_codebuddy_ai():
 
     for endpoint, should_inject in [
         ("https://www.codebuddy.ai", True),
+        ("https://www.workbuddy.ai", True),
         ("https://copilot.tencent.com", False),
         ("https://example.test", False),
     ]:
@@ -146,5 +146,5 @@ def test_intl_gate_is_scoped_to_codebuddy_ai():
             normalize_tool_choice=lambda choice: choice,
             diagnostic=lambda *args, **kwargs: None,
         ).prepare(_body("keep system context"), "openai")
-        assert client.conversation_calls == int(should_inject)
+        assert client.conversation_calls == 0
         assert all((key in prepared.headers) == should_inject for key in REQUIRED_HEADERS)

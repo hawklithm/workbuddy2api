@@ -16,8 +16,8 @@ from urllib.parse import urlsplit
 
 
 _LEGACY_CHAT_HOSTS = {
-    "domestic": "copilot.tencent.com",
-    "global": "www.codebuddy.ai",
+    "domestic": {"copilot.tencent.com"},
+    "global": {"www.codebuddy.ai", "www.workbuddy.ai"},
 }
 
 
@@ -31,7 +31,7 @@ def uses_legacy_chat_roles(backend_key: str, upstream_url: str) -> bool:
         host = (urlsplit(upstream_url).hostname or "").lower().rstrip(".")
     except ValueError:
         return False
-    return _LEGACY_CHAT_HOSTS.get(backend_key) == host
+    return host in _LEGACY_CHAT_HOSTS.get(backend_key, set())
 
 
 def adapt_developer_roles(messages: list[Any]) -> tuple[list[Any], int]:

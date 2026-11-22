@@ -57,6 +57,22 @@ def test_switch_updates_health_models_and_preserves_captured_request(managed):
     assert AccountStore(store.root).active_account_id == second
 
 
+def test_admin_model_list_can_inspect_inactive_account_without_switching(managed, monkeypatch):
+    store, manager, state, first, second = managed
+    async def get_models(client, refresh=False):
+        return {"models": [{"id": client.profile.key}], "catalog": {"source": "live", "refresh": refresh}}
+    monkeypatch.setattr(proxy.app.state, "admin_workbuddy_models", get_models)
+    original = store.active_account_id
+    inactive = second if original == first else first
+    with TestClient(proxy.app, base_url="http://localhost", client=("127.0.0.1", 50000)) as app:
+        response = app.get(f"/admin/api/accounts/{inactive}/models?refresh=true")
+        assert response.status_code == 200
+        assert response.json()["models"][0]["id"] == manager.store.get_client(inactive).profile.key
+        assert response.json()["catalog"]["refresh"] is True
+        assert store.active_account_id == original
+        assert app.get("/admin/api/accounts/not-an-account/models").status_code == 404
+
+
 @pytest.mark.parametrize("path,body", [
     ("/v1/chat/completions", {"messages": [{"role": "user", "content": "hello"}]}),
     ("/v1/responses", {"input": "hello"}),
@@ -83,7 +99,7 @@ def test_three_protocols_switch_endpoint_and_credentials(managed, monkeypatch, p
         manager.activate(second)
         assert app.post(path, json={"model": "test", "stream": False, **body}).status_code == 200
     assert seen == [("copilot.tencent.com", "Bearer token-domestic-same-uid"),
-                    ("www.codebuddy.ai", "Bearer token-global-same-uid")]
+                    ("www.workbuddy.ai", "Bearer token-global-same-uid")]
 
 
 def test_billing_refresh_during_switch_stays_with_original_account(managed, monkeypatch):
@@ -149,7 +165,7 @@ def test_account_switch_while_streaming_preserves_original_request(managed, monk
         assert state.client.profile.key == "global"
         assert app.post("/v1/chat/completions", json=body).status_code == 200
     assert seen == [("copilot.tencent.com", "Bearer token-domestic-same-uid"),
-                    ("www.codebuddy.ai", "Bearer token-global-same-uid")]
+                    ("www.workbuddy.ai", "Bearer token-global-same-uid")]
 
 
 @pytest.mark.parametrize("path,body", [

@@ -367,6 +367,19 @@ def create_admin_router(get_manager: Callable[[], AccountManager]) -> APIRouter:
         except Exception as exc:
             _raise_manager_error(exc)
 
+    @router.get("/admin/api/accounts/{account_id}/models")
+    async def account_models(account_id: str, request: Request, refresh: bool = False) -> dict[str, Any]:
+        manager = get_manager()
+        if not _manager_has_account(manager, account_id):
+            raise HTTPException(status_code=404, detail="未找到该账号")
+        try:
+            client = manager.store.get_client(account_id)
+            return await request.app.state.admin_workbuddy_models(client, refresh)
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=502, detail="获取模型列表失败") from None
+
     @router.get("/admin/api/settings")
     async def get_settings() -> dict[str, Any]:
         try:
@@ -464,8 +477,14 @@ def create_admin_router(get_manager: Callable[[], AccountManager]) -> APIRouter:
             raise HTTPException(status_code=400, detail="请求 JSON 无效") from None
         if not isinstance(payload, dict) or not isinstance(payload.get("backend"), str):
             raise HTTPException(status_code=400, detail="backend 必须为 domestic 或 global")
+        account_id = payload.get("account_id")
+        if account_id is not None and (not isinstance(account_id, str) or not account_id):
+            raise HTTPException(status_code=400, detail="account_id 无效")
         try:
-            job = _safe_job(get_manager().start_login(payload["backend"]))
+            if account_id is None:
+                job = _safe_job(get_manager().start_login(payload["backend"]))
+            else:
+                job = _safe_job(get_manager().start_login(payload["backend"], account_id=account_id))
             return JSONResponse(job, status_code=202)
         except Exception as exc:
             _raise_manager_error(exc)
@@ -482,6 +501,88 @@ def create_admin_router(get_manager: Callable[[], AccountManager]) -> APIRouter:
         _require_write_header(request)
         try:
             return _safe_job(get_manager().cancel_login(job_id))
+        except Exception as exc:
+            _raise_manager_error(exc)
+
+    def trae_manager():
+        manager = get_manager()
+        with manager._lock:
+            result = getattr(manager, "trae_accounts", None)
+            if result is None:
+                from codebuddy_proxy.trae_accounts import TraeAccounts
+                result = TraeAccounts(manager.store.root)
+                manager.trae_accounts = result
+            return result
+
+    @router.get("/admin/api/trae/accounts")
+    async def trae_list():
+        try:
+            return trae_manager().snapshot()
+        except Exception as exc:
+            _raise_manager_error(exc)
+
+    @router.post("/admin/api/trae/logins", status_code=202)
+    async def trae_login(request: Request):
+        _require_write_header(request)
+        payload = await _read_json_object(request, _MAX_LOGIN_BODY)
+        if set(payload) - {"account_id"} or ("account_id" in payload and (not isinstance(payload["account_id"], str) or not payload["account_id"])):
+            raise HTTPException(status_code=400, detail="请求参数无效")
+        try:
+            return trae_manager().start_login(payload.get("account_id"))
+        except Exception as exc:
+            _raise_manager_error(exc)
+
+    @router.get("/admin/api/trae/logins/{job_id}")
+    async def trae_login_status(job_id: str):
+        try:
+            manager = trae_manager()
+            job = manager.job(job_id)
+            if job["status"] == "succeeded":
+                await manager.ensure_scheduled(job["account_id"])
+            return job
+        except Exception as exc:
+            _raise_manager_error(exc)
+
+    @router.delete("/admin/api/trae/logins/{job_id}")
+    async def trae_cancel_login(job_id: str, request: Request):
+        _require_write_header(request)
+        try:
+            return trae_manager().job(job_id, cancel=True)
+        except Exception as exc:
+            _raise_manager_error(exc)
+
+    @router.delete("/admin/api/trae/accounts/{account_id}")
+    async def trae_delete(account_id: str, request: Request):
+        _require_write_header(request)
+        try:
+            await trae_manager().delete(account_id)
+            return {"ok": True}
+        except Exception as exc:
+            _raise_manager_error(exc)
+
+    @router.get("/admin/api/trae/accounts/{account_id}/checkin-status")
+    async def trae_status(account_id: str):
+        try:
+            return await trae_manager().checkin(account_id)
+        except Exception as exc:
+            _raise_manager_error(exc)
+
+    @router.post("/admin/api/trae/accounts/{account_id}/checkin")
+    async def trae_claim(account_id: str, request: Request):
+        _require_write_header(request)
+        try:
+            return await trae_manager().checkin(account_id, claim=True)
+        except Exception as exc:
+            _raise_manager_error(exc)
+
+    @router.patch("/admin/api/trae/settings")
+    async def trae_settings(request: Request):
+        _require_write_header(request)
+        payload = await _read_json_object(request, _MAX_SETTINGS_BODY)
+        if set(payload) != {"auto_checkin_enabled"} or type(payload["auto_checkin_enabled"]) is not bool:
+            raise HTTPException(status_code=400, detail="请求参数无效")
+        try:
+            return await trae_manager().set_auto(payload["auto_checkin_enabled"])
         except Exception as exc:
             _raise_manager_error(exc)
 

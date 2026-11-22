@@ -6,6 +6,8 @@
 
 For unexplained Windows process exits, use the [independent process monitor](docs/external-process-monitor.md) to collect uv/Python exit codes, lifecycle, memory, health, and available Windows events without restarting the proxy.
 
+The experimental Trae CN OpenAI endpoints are `GET /trae/v1/models` and `POST /trae/v1/chat/completions`. They use linked Trae accounts; if multiple accounts exist, select one with the `X-Trae-Account-Id` header. Account IDs are available as `accounts[].id` from the local `GET /admin/api/trae/accounts` endpoint. Model lists are cached per account for six hours; `GET /trae/v1/models?refresh=true` forces a refresh. The response's `source` and `stale` fields identify upstream data and fallbacks; the static fallback can be outdated and does not prove account access. Supply a Trae model name and `messages` for chat. Streaming and non-streaming responses are supported; Trae Responses and Anthropic APIs are not yet supported. Basic text generation was tested against a real account; tool calls have only been tested offline. Trae usage is separate from WorkBuddy account selection.
+
 ## ✨ Core Features
 
 - **Protocol conversion** - Supports three standard formats: OpenAI Chat Completions, Anthropic Messages API, and Responses
@@ -89,7 +91,13 @@ so existing startup commands continue to work unchanged.
 | Mode | Startup option | Upstream endpoint |
 | --- | --- | --- |
 | Domestic (default) | none | `https://copilot.tencent.com` |
-| International | `--global` | `https://www.codebuddy.ai` |
+| International | `--global` | `https://www.workbuddy.ai` |
+
+The current source aligns WorkBuddy outbound identity, conversation headers, DeepSeek thinking/effort, account-scoped cache keys, and the international leading system message with Buddy Switch. Stored accounts retain their saved endpoints. Use `--global --endpoint https://www.codebuddy.ai` for the legacy international service; credentials are not moved between services.
+
+`--desensitize` adds template fingerprint handling to existing harness compaction and remains opt-in. `--prompt-mode passthrough` keeps client system instructions; `--prompt-mode custom --prompt-file prompt.txt` replaces them with a UTF-8 file (or the bundled engineering prompt when no file is supplied). Passthrough may retry a qualifying content rejection once, with degradation scoped to account/endpoint until the next midnight in UTC+8. `--model-efforts-file efforts.json` supplies model defaults, for example `{"deepseek-v4.1-flash":"high"}`; explicit request settings take priority.
+
+All protocols share reasoning snapshot normalization, with Responses reasoning summaries and Anthropic thinking output. Conversation IDs are correlation metadata, not authenticated identities; Responses history caching remains disabled. See the [implementation and verification notes](docs/buddy-upstream-alignment-2026-11-21.md). These changes describe the local source, not a published release.
 
 Linked accounts are stored separately by region in `~/.workbuddy2api/accounts`.
 Use `--accounts-dir DIR` to choose another local directory. With no explicit
@@ -162,7 +170,12 @@ the mapping is an approximation, not exact semantic equivalence. The
 `upstream_role_compat` log event reports the backend and number of mapped
 messages, not prompt contents.
 
-Runtime model catalogs are loaded from the packaged profile resources
+`/v1/models` fetches the current WorkBuddy account's `cli` model catalog from the
+region-specific upstream, caching it for 24 hours. Use `/v1/models?refresh=true`
+to refresh; the response's `catalog` field reports its source and fallback state.
+If the upstream is unavailable, the proxy uses that account's cached catalog or
+the packaged profile resource. `--static-models` disables upstream discovery;
+`--config-cache-ttl` sets the cache lifetime in seconds. The fallback resources are
 `src/codebuddy_proxy/models_config.domestic.json` and
 `src/codebuddy_proxy/models_config.global.json`. The root
 `models_config.json` is retained only as a development-compatibility copy of
@@ -953,3 +966,7 @@ uv run --with workbuddy2api python -m codebuddy_proxy \
 - Any consequences arising from the use of this project are the sole responsibility of the user
 - Do not use this project for any purpose that violates CodeBuddy's Terms of Service
 - Do not use this project for commercial purposes
+
+### Trae CN account management
+
+The local `/admin` page has a separate Trae CN section for linking multiple accounts, re-login, removal, status checks and manual check-in. Its automatic check-in switch defaults to off and is independent of WorkBuddy. Credentials and independent device identities are stored in the account directory under `trae-cn`; re-login must use the same account. Trae accounts do not change WorkBuddy proxy routing. Login and the first check-in may register a device; re-login when credentials expire. Real upstream login and check-in still require validation with a real account.

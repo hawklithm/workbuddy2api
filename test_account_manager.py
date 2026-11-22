@@ -953,3 +953,33 @@ def test_model_less_rate_limit_does_not_record_or_switch(tmp_path):
         assert row["model_cooldowns"] == []
     finally:
         manager.close()
+
+
+@pytest.mark.parametrize("backend", ["domestic", "global"])
+def test_relogin_only_updates_selected_identity(tmp_path, backend):
+    store = FakeStore(tmp_path)
+    original = FakeLoginClient(backend, tmp_path / "original", uid="selected")
+    original.session = {"auth": {"accessToken": "old"}, "account": {"uid": "selected"}}
+    account_id = store.import_client(original, activate=True)
+    wrong = FakeLoginClient(backend, tmp_path / "wrong", uid="other")
+    manager = AccountManager(store, client_factory=lambda region, path: wrong)
+    try:
+        job = manager.start_login(backend, account_id=account_id)
+        result = _wait_for(manager, job["id"], "failed")
+        assert "不一致" in result["error"]
+        assert len(store.list_accounts()) == 1
+        assert store.get_client(account_id) is original
+    finally:
+        manager.close()
+
+    replacement = FakeLoginClient(backend, tmp_path / "replacement", uid="selected")
+    manager = AccountManager(store, client_factory=lambda region, path: replacement)
+    try:
+        job = manager.start_login(backend, account_id=account_id)
+        result = _wait_for(manager, job["id"], "succeeded")
+        assert result["account_id"] == account_id
+        assert store.get_client(account_id) is replacement
+        assert store.active_account_id == account_id
+        assert len(store.list_accounts()) == 1
+    finally:
+        manager.close()

@@ -2,7 +2,7 @@ import threading
 
 import pytest
 
-import codebuddy_proxy.codebuddy_client_demo as client_module
+import buddy_agent_auth.providers.codebuddy.client as client_module
 from codebuddy_proxy.codebuddy_client_demo import CodeBuddyClient, CodeBuddyError
 
 

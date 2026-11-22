@@ -10,6 +10,7 @@ import urllib.request
 from typing import Any, Iterator
 
 from buddy_agent_auth.client import CodeBuddyClient as _AuthClient, CodeBuddyError
+from buddy_agent_auth.providers.codebuddy.client import _load_json_bytes
 from buddy_agent_auth.backend_profile import resolve_backend_from_args
 
 

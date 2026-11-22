@@ -114,6 +114,7 @@ class TraeLoginFlow:
         self.error_code: str | None = None
         self._server: ThreadingHTTPServer | None = None
         self._done = threading.Event()
+        self.on_event = None
 
     def prepare_device(self) -> None:
         """Register once, resume activation if needed, and reuse the same key."""
@@ -125,6 +126,14 @@ class TraeLoginFlow:
         self.private_key_pem, self.public_key_pem = identity.private_key_pem, identity.public_key_pem
         self.device_model, self.device_brand, self.device_cpu = hardware.model, hardware.brand, hardware.cpu
         self.os_name, self.os_version = hardware.os_name, hardware.os_version
+
+    def _emit_event(self, event, value=None):
+        if self.on_event is not None:
+            self.on_event(event, value)
+
+    def cancel(self) -> None:
+        """Interrupt the callback wait; callers must still discard cancelled results."""
+        self._done.set()
 
     # ---------- local callback server ----------
 
@@ -295,6 +304,7 @@ class TraeLoginFlow:
         log("=" * 70)
         log("trae2api login: open this URL in your browser and complete sign-in:")
         log(url)
+        self._emit_event('auth_url', url)
         log("=" * 70)
         if open_browser:
             try:
@@ -306,8 +316,10 @@ class TraeLoginFlow:
         if self.error_code and "AuthCode" not in self.result:
             raise RuntimeError("browser authorization failed")
         auth_code = self.result["AuthCode"]
+        self._emit_event('exchanging')
         log("[login] received auth code, exchanging tokens ...")
         result = self.exchange_auth_code(auth_code)
+        self._emit_event('profile')
         log("[login] exchange ok, fetching user info ...")
         profile = self.fetch_user_info(result["Token"])
         if not profile.get("UserID"):

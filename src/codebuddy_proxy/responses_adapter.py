@@ -16,6 +16,8 @@ import uuid
 from codebuddy_proxy.tool_pairing import sanitize_tool_pairing as _sanitize_tool_pairing
 
 from typing import Any, Iterator
+from codebuddy_proxy.responses_tools import ResponsesTools, ToolTranslationError
+from codebuddy_proxy.reasoning import reasoning_tokens
 
 
 def _rand_id(prefix: str = "resp_") -> str:
@@ -36,12 +38,52 @@ def _extract_text(value: Any) -> str:
         parts = []
         for item in value:
             if isinstance(item, dict):
-                if item.get("type") in ("text", "input_text"):
+                if item.get("type") in ("text", "input_text", "output_text"):
                     parts.append(item.get("text", ""))
             else:
                 parts.append(str(item))
         return "".join(parts)
     return "" if value is None else str(value)
+
+
+class ResponsesContextError(ValueError):
+    """A stateful history reference cannot be resolved by this stateless proxy."""
+
+
+def _message_content(value: Any) -> Any:
+    """Preserve text and image parts without fetching external image URLs.
+
+    Text-only histories remain strings. Multimodal histories retain part order;
+    the selected upstream model still determines image support.
+    """
+    if not isinstance(value, list):
+        return _extract_text(value)
+    parts = []
+    has_image = False
+    for part in value:
+        if isinstance(part, dict) and part.get("type") == "input_image":
+            image = part.get("image_url")
+            url = image.get("url") if isinstance(image, dict) else image
+            if isinstance(url, str) and url:
+                image_url = {"url": url}
+                detail = part.get("detail")
+                if detail is None and isinstance(image, dict):
+                    detail = image.get("detail")
+                if detail is not None:
+                    image_url["detail"] = detail
+                parts.append({"type": "image_url", "image_url": image_url})
+                has_image = True
+        elif isinstance(part, dict) and part.get("type") == "image_url":
+            # Already-Chat parts are retained as copied dictionaries.
+            image = part.get("image_url")
+            if isinstance(image, dict) and isinstance(image.get("url"), str):
+                parts.append({"type": "image_url", "image_url": dict(image)})
+                has_image = True
+        else:
+            text = _extract_text([part])
+            if text:
+                parts.append({"type": "text", "text": text})
+    return parts if has_image else "".join(part["text"] for part in parts)
 
 
 def _convert_tools_for_chat(tools: list[dict]) -> list[dict]:
@@ -101,7 +143,7 @@ def _convert_input_items(items: list) -> list[dict]:
     """
     messages: list[dict] = []
     # 临时缓存：合并相邻的assistant message和function_call
-    pending_assistant_content: str | None = None
+    pending_assistant_content: Any = None
     pending_tool_calls: list[dict] = []
 
     def _flush_assistant():
@@ -128,7 +170,7 @@ def _convert_input_items(items: list) -> list[dict]:
         if item_type is None and role in ("user", "system", "developer"):
             _flush_assistant()
             mapped_role = "system" if role == "developer" else role
-            content = _extract_text(item.get("content", ""))
+            content = _message_content(item.get("content", ""))
             messages.append({"role": mapped_role, "content": content})
             continue
 
@@ -136,12 +178,12 @@ def _convert_input_items(items: list) -> list[dict]:
         if item_type == "message":
             if role == "assistant":
                 _flush_assistant()
-                content = _extract_text(item.get("content", ""))
+                content = _message_content(item.get("content", ""))
                 pending_assistant_content = content
             elif role in ("user", "system", "developer"):
                 _flush_assistant()
                 mapped_role = "system" if role == "developer" else role
-                content = _extract_text(item.get("content", ""))
+                content = _message_content(item.get("content", ""))
                 messages.append({"role": mapped_role, "content": content})
             continue
 
@@ -182,7 +224,7 @@ def _convert_input_items(items: list) -> list[dict]:
         # 其他未知类型，如果有role就当普通消息处理
         if role:
             _flush_assistant()
-            content = _extract_text(item.get("content", ""))
+            content = _message_content(item.get("content", ""))
             messages.append({"role": role, "content": content})
 
     # 刷新最后一条assistant消息，并修复跨消息的工具调用配对
@@ -201,6 +243,15 @@ def responses_request_to_chat(body: dict) -> dict:
     """
     messages: list[dict] = []
 
+    # No response cache is implemented here. Never silently discard history.
+    if body.get("previous_response_id"):
+        raise ResponsesContextError(
+            "previous_response_id is not supported by this stateless proxy; "
+            "resend the complete input history without previous_response_id."
+        )
+
+    body = ResponsesTools(body).prepare(body)
+
     # instructions → system message
     instructions = body.get("instructions")
     if instructions:
@@ -214,7 +265,7 @@ def responses_request_to_chat(body: dict) -> dict:
         messages.extend(_convert_input_items(inp))
 
     # 构造Chat body
-    chat: dict[str, Any] = {"messages": messages, "stream": True}
+    chat: dict[str, Any] = {"messages": messages, "stream": bool(body.get("stream", False))}
 
     # model
     if "model" in body:
@@ -225,16 +276,24 @@ def responses_request_to_chat(body: dict) -> dict:
     if tools:
         chat["tools"] = _convert_tools_for_chat(tools)
     if "tool_choice" in body:
-        chat["tool_choice"] = body["tool_choice"]
+        choice = body["tool_choice"]
+        if (isinstance(choice, dict) and choice.get("type") == "function"
+                and isinstance(choice.get("name"), str) and choice["name"]):
+            choice = {"type": "function", "function": {"name": choice["name"]}}
+        chat["tool_choice"] = choice
 
     # 透传常见参数
     for key in ("temperature", "top_p", "stop", "seed",
                 "presence_penalty", "frequency_penalty",
-                "response_format", "reasoning_effort"):
+                "response_format", "reasoning_effort", "reasoningEffort", "thinking", "parallel_tool_calls",
+                "metadata", "session_id", "conversation_id", "prompt_cache_key"):
         if key in body:
             chat[key] = body[key]
 
     # max_output_tokens → max_tokens
+    reasoning = body.get("reasoning")
+    if isinstance(reasoning, dict) and isinstance(reasoning.get("effort"), str) and "reasoning_effort" not in chat and "reasoningEffort" not in chat:
+        chat["reasoning_effort"] = reasoning["effort"]
     if "max_output_tokens" in body:
         chat["max_tokens"] = body["max_output_tokens"]
     elif "max_tokens" in body:
@@ -264,7 +323,9 @@ class ResponsesStreamConverter:
       11. response.completed
     """
 
-    def __init__(self, model: str):
+    def __init__(self, model: str, original: dict | None = None):
+        self.tool_codec = ResponsesTools(original or {})
+        self.output_indices: dict[str, int] = {}
         self.response_id = _rand_id("resp_")
         self.model = model
         self.created_at = _now_s()
@@ -274,11 +335,36 @@ class ResponsesStreamConverter:
         self.message_item_added = False
         self.content_part_added = False
         self.text = ""
+        self.reasoning = ""
+        self.reasoning_open = False
         self.function_calls: dict[int, dict] = {}  # index -> {id, name, arguments}
         self.finish_reason: str | None = None
         self.usage: dict | None = None
 
     def feed_chunk(self, chunk: dict) -> list[tuple[str, dict]]:
+        return self.tool_codec.events(self._index_events(self._feed_chunk(chunk)))
+
+    def _index_events(self, events: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
+        """Stable output positions across interleaved text and parallel tools."""
+        for name, data in events:
+            item = data.get("item") or {}
+            item_id = item.get("id") or data.get("item_id")
+            if name.startswith("response.content_part."):
+                item_id = self.response_id + "_msg"
+                data["item_id"] = item_id
+                data["content_index"] = 0
+            if item_id:
+                if item_id not in self.output_indices:
+                    self.output_indices[item_id] = len(self.output_indices)
+                data["output_index"] = self.output_indices[item_id]
+            response = data.get("response")
+            if isinstance(response, dict) and "output" in response:
+                response["output"].sort(
+                    key=lambda output: self.output_indices.get(output.get("id"), len(self.output_indices))
+                )
+        return events
+
+    def _feed_chunk(self, chunk: dict) -> list[tuple[str, dict]]:
         """处理一个Chat SSE chunk，返回Responses事件列表"""
         events: list[tuple[str, dict]] = []
 
@@ -311,6 +397,22 @@ class ResponsesStreamConverter:
         for choice in chunk.get("choices", []):
             self.finish_reason = choice.get("finish_reason") or self.finish_reason
             delta = choice.get("delta", {})
+
+            if delta.get("reasoning_content"):
+                fragment = delta["reasoning_content"]
+                self.reasoning += fragment
+                item_id = self.response_id + "_reasoning"
+                if not self.reasoning_open:
+                    self.reasoning_open = True
+                    events.extend([
+                        ("response.output_item.added", {"type": "response.output_item.added", "item": {
+                            "id": item_id, "type": "reasoning", "summary": []}}),
+                        ("response.reasoning_summary_part.added", {"type": "response.reasoning_summary_part.added",
+                            "item_id": item_id, "summary_index": 0, "part": {"type": "summary_text", "text": ""}}),
+                    ])
+                events.append(("response.reasoning_summary_text.delta", {
+                    "type": "response.reasoning_summary_text.delta", "item_id": item_id,
+                    "summary_index": 0, "delta": fragment}))
 
             # 文本内容
             if delta.get("content"):
@@ -409,8 +511,24 @@ class ResponsesStreamConverter:
         return events
 
     def finish(self) -> list[tuple[str, dict]]:
+        try:
+            return self.tool_codec.events(self._index_events(self._finish()))
+        except ToolTranslationError:
+            return self.fail("invalid_tool_arguments", "Invalid custom tool input envelope")
+
+    def _finish(self) -> list[tuple[str, dict]]:
         """流结束，发出done和completed事件"""
         events: list[tuple[str, dict]] = []
+        reasoning_item = None
+        if self.reasoning_open:
+            item_id = self.response_id + "_reasoning"
+            part = {"type": "summary_text", "text": self.reasoning}
+            reasoning_item = {"id": item_id, "type": "reasoning", "summary": [part]}
+            events.extend([
+                ("response.reasoning_summary_text.done", {"type": "response.reasoning_summary_text.done", "item_id": item_id, "summary_index": 0, "text": self.reasoning}),
+                ("response.reasoning_summary_part.done", {"type": "response.reasoning_summary_part.done", "item_id": item_id, "summary_index": 0, "part": part}),
+                ("response.output_item.done", {"type": "response.output_item.done", "item": reasoning_item}),
+            ])
 
         # 关闭文本块
         if self.content_part_added:
@@ -461,7 +579,7 @@ class ResponsesStreamConverter:
             }))
 
         # 构造完整response对象
-        output_items = []
+        output_items = [reasoning_item] if reasoning_item else []
         if self.message_item_added:
             output_items.append({
                 "id": self.response_id + "_msg",
@@ -490,6 +608,7 @@ class ResponsesStreamConverter:
             usage_out["input_tokens"] = self.usage.get("prompt_tokens", 0)
             usage_out["output_tokens"] = self.usage.get("completion_tokens", 0)
             usage_out["total_tokens"] = self.usage.get("total_tokens", 0)
+            usage_out["output_tokens_details"]["reasoning_tokens"] = reasoning_tokens(self.usage)
 
         # 发出completed
         events.append(("response.completed", {

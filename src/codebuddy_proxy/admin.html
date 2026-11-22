@@ -87,6 +87,9 @@
     }
     .panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 19px; }
     h2 { margin: 0; font-size: 18px; line-height: 1.35; letter-spacing: -.015em; }
+    h3 { margin: 0; font-size: 15px; line-height: 1.35; }
+    .account-section { margin-top: 24px; padding-top: 22px; border-top: 1px solid var(--line); }
+    .provider-list { margin-top: 18px; }
     .section-note { margin: 5px 0 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
     .button {
       display: inline-flex;
@@ -142,6 +145,11 @@
     .progress-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 13px; }
     .auth-link { color: var(--accent); font-size: 13px; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
     .account-list { display: grid; gap: 11px; }
+    .model-panel { margin-top: 12px; }
+    .model-panel-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+    .model-panel-status { margin: 8px 0; color: var(--muted); font-size: 12px; }
+    .provider-model-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
+    .provider-model-list li { max-width: 100%; overflow-wrap: anywhere; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
     .account-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
     .account-card.active { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); background: linear-gradient(120deg, var(--accent-soft), var(--surface) 70%); }
     .account-name-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
@@ -210,16 +218,23 @@
         </label>
       </div>
       <h1 data-i18n="hero.title">账号管理</h1>
-      <p class="lead" data-i18n="hero.lead">在这里关联、切换和管理 CodeBuddy 登录账号。账号凭据由本机代理保存，页面不会显示会话内容。</p>
+      <p class="lead" data-i18n="hero.lead">在这里管理 WorkBuddy 和 Trae CN 账号。账号凭据由本机代理保存，页面不会显示会话内容。</p>
     </header>
 
     <div id="notice" class="notice" role="status" aria-live="polite"></div>
 
     <div class="layout">
-      <section class="panel" aria-labelledby="login-heading">
+      <section class="panel" aria-labelledby="workbuddy-heading">
         <div class="panel-heading">
           <div>
-            <h2 id="login-heading" data-i18n="login.heading">关联账号</h2>
+            <h2 id="workbuddy-heading" data-i18n="workbuddy.heading">WorkBuddy 账号</h2>
+            <p class="section-note" data-i18n="workbuddy.description">管理用于代理请求的 WorkBuddy 账号。</p>
+          </div>
+        </div>
+        <div aria-labelledby="login-heading">
+        <div class="panel-heading">
+          <div>
+            <h3 id="login-heading" data-i18n="login.heading">关联账号</h3>
             <p class="section-note" data-i18n="login.description">选择账号所属区域，登录完成后会保存到本机账号库。</p>
           </div>
         </div>
@@ -245,12 +260,12 @@
             <button id="cancel-button" class="button small" type="button" disabled data-i18n="button.cancel">取消</button>
           </div>
         </div>
-      </section>
+        </div>
 
-      <section class="panel" aria-labelledby="accounts-heading">
+        <div class="account-section" aria-labelledby="accounts-heading">
         <div class="panel-heading">
           <div>
-            <h2 id="accounts-heading" data-i18n="accounts.heading">已关联账号</h2>
+            <h3 id="accounts-heading" data-i18n="accounts.heading">已关联账号</h3>
             <p class="section-note" data-i18n="accounts.description">当前账号会用于新发起的代理请求。</p>
           </div>
           <div class="toolbar">
@@ -271,18 +286,33 @@
         <p id="settings-status" class="settings-status" aria-live="polite" data-i18n="settings.autoSwitch.loading">正在读取自动切换设置…</p>
         <div class="settings-row">
           <div class="settings-copy">
-            <strong data-i18n="settings.autoCheckin.title">全局自动签到</strong>
+            <strong data-i18n="settings.autoCheckin.title">WorkBuddy 自动签到</strong>
             <p data-i18n="settings.autoCheckin.description">开启后由代理立即检查全部关联账号，并按北京时间计划自动签到。未知状态不会自动签到；关闭后会取消待执行计划。默认关闭。</p>
           </div>
-          <label class="switch-control" aria-label="全局自动签到" data-i18n-aria-label="settings.autoCheckin.title">
-            <input id="auto-checkin-toggle" type="checkbox" aria-label="全局自动签到" data-i18n-aria-label="settings.autoCheckin.title">
+          <label class="switch-control" aria-label="WorkBuddy 自动签到" data-i18n-aria-label="settings.autoCheckin.title">
+            <input id="auto-checkin-toggle" type="checkbox" aria-label="WorkBuddy 自动签到" data-i18n-aria-label="settings.autoCheckin.title">
             <span class="switch-track" aria-hidden="true"></span>
           </label>
         </div>
         <p id="checkin-settings-status" class="settings-status" aria-live="polite" data-i18n="settings.autoCheckin.loading">正在读取自动签到设置…</p>
         <p id="sync-status" class="sync-status" role="status" aria-live="polite" hidden></p>
         <p class="footer-note" data-i18n="footer.note">账号管理仅供本机使用。切换账号会影响之后发起的新请求，已经开始的请求会继续使用原账号。</p>
+        </div>
       </section>
+    <section class="panel" aria-labelledby="trae-heading">
+      <div class="panel-heading"><div><h2 id="trae-heading" data-i18n="trae.heading">Trae CN 账号</h2>
+      <p class="section-note" data-i18n="trae.description">独立管理 Trae CN 签到账号；不会切换 WorkBuddy 代理账号。</p></div>
+      <button id="trae-refresh" class="button small" type="button" data-i18n="button.refresh">刷新列表</button></div>
+      <div class="associate-row"><button id="trae-add" class="button primary" type="button" data-i18n="trae.add">关联 Trae CN 账号</button>
+      <span id="trae-login-status" role="status" aria-live="polite"></span>
+      <a id="trae-login-link" class="auth-link" target="_blank" rel="noopener noreferrer" hidden data-i18n="trae.openLogin">打开登录页</a>
+      <button id="trae-cancel" class="button small" type="button" hidden data-i18n="trae.cancelLogin">取消登录</button></div>
+      <div id="trae-list" class="account-list provider-list" aria-live="polite"></div>
+      <div class="settings-row"><div class="settings-copy"><strong data-i18n="trae.autoTitle">Trae CN 自动签到</strong>
+      <p data-i18n="trae.autoDescription">对已关联的 Trae 账号自动查询并按计划签到，默认关闭。</p></div>
+      <label class="switch-control" aria-label="Trae CN 自动签到" data-i18n-aria-label="trae.autoTitle"><input id="trae-auto" type="checkbox" aria-label="Trae CN 自动签到" data-i18n-aria-label="trae.autoTitle"><span class="switch-track" aria-hidden="true"></span></label></div>
+      <p id="trae-message" class="settings-status" role="status" aria-live="polite"></p>
+    </section>
     </div>
   </main>
 
@@ -298,12 +328,47 @@
       const LANGUAGE_STORAGE_KEY = "codebuddy.admin.language";
       const STRINGS = {
         "zh-CN": {
+          "workbuddy.heading": "WorkBuddy 账号",
+          "workbuddy.description": "管理用于代理请求的 WorkBuddy 账号。",
+          "trae.heading": "Trae CN 账号",
+          "trae.description": "独立管理 Trae CN 签到账号；不会切换 WorkBuddy 代理账号。",
+          "trae.add": "关联 Trae CN 账号",
+          "trae.openLogin": "打开登录页",
+          "trae.cancelLogin": "取消登录",
+          "trae.autoTitle": "Trae CN 自动签到",
+          "trae.autoDescription": "对已关联的 Trae 账号自动查询并按计划签到，默认关闭。",
+          "trae.empty": "尚未关联 Trae CN 账号",
+          "trae.defaultName": "Trae CN 账号",
+          "trae.today": "今日签到：{status}",
+          "models.show": "查看模型",
+          "models.hide": "收起模型",
+          "models.refresh": "刷新模型",
+          "models.loading": "正在获取模型列表…",
+          "models.empty": "没有可展示的模型。",
+          "models.failed": "获取模型列表失败，请重试。",
+          "models.count": "{count} 个模型 · {source}",
+          "models.stale": "可能已过期",
+          "models.source.live": "上游实时",
+          "models.source.cached": "上游缓存",
+          "models.source.client_cache": "客户端缓存",
+          "models.source.builtin": "内置兜底",
+          "models.source.unknown": "来源未知",
+          "trae.deviceChecked": "设备已签到",
+          "trae.operationDone": "操作完成",
+          "trae.deleteConfirm": "确定删除该 Trae CN 账号？",
+          "trae.preparing": "正在准备登录…",
+          "trae.authorize": "请在登录页完成授权。",
+          "trae.invalidUrl": "登录地址无效",
+          "trae.loginSuccess": "关联成功",
+          "trae.loginCancelled": "已取消",
+          "trae.loginFailed": "登录失败",
+          "trae.settingSaved": "Trae 签到设置已保存",
           "page.title": "CodeBuddy 账号管理",
           "language.label": "语言",
           "language.select": "页面语言",
           "hero.brand": "CodeBuddy · 本机代理",
           "hero.title": "账号管理",
-          "hero.lead": "在这里关联、切换和管理 CodeBuddy 登录账号。账号凭据由本机代理保存，页面不会显示会话内容。",
+          "hero.lead": "在这里管理 WorkBuddy 和 Trae CN 账号。账号凭据由本机代理保存，页面不会显示会话内容。",
           "login.heading": "关联账号",
           "login.description": "选择账号所属区域，登录完成后会保存到本机账号库。",
           "login.hint": "登录页面会在新窗口打开；请在该窗口完成 CodeBuddy 登录。",
@@ -322,7 +387,7 @@
           "settings.autoSwitch.title": "遇到 429 自动切换账号",
           "settings.autoSwitch.description": "仅排除同一区域、同一服务地址中“本次请求模型仍在冷却”的账号；同一账号的其他模型仍可用。每个请求对每个账号最多尝试一次。默认关闭。",
           "settings.autoSwitch.loading": "正在读取自动切换设置…",
-          "settings.autoCheckin.title": "全局自动签到",
+          "settings.autoCheckin.title": "WorkBuddy 自动签到",
           "settings.autoCheckin.description": "开启后由代理立即检查全部关联账号，并按北京时间计划自动签到。未知状态不会自动签到；关闭后会取消待执行计划。默认关闭。",
           "settings.autoCheckin.loading": "正在读取自动签到设置…",
           "footer.note": "账号管理仅供本机使用。切换账号会影响之后发起的代理请求，已经开始的请求会继续使用原账号。",
@@ -336,6 +401,9 @@
           "account.active": "当前账号",
           "button.checkinQuery": "查询签到",
           "button.checkin": "签到",
+          "button.relogin": "重新登录",
+          "notice.reloginSuccess": "「{name}」重新登录成功。",
+          "error.reloginMismatch": "登录账号与所选账号不一致，或所选账号已删除，请重试",
           "button.activate": "设为当前",
           "button.delete": "删除",
           "checkin.today": "今日签到：{status}",
@@ -482,12 +550,47 @@
           "error.accountDoesNotExist": "账号不存在"
         },
         en: {
+          "workbuddy.heading": "WorkBuddy accounts",
+          "workbuddy.description": "Manage WorkBuddy accounts used for proxy requests.",
+          "trae.heading": "Trae CN accounts",
+          "trae.description": "Manage Trae CN check-in accounts independently of the WorkBuddy proxy account.",
+          "trae.add": "Link a Trae CN account",
+          "trae.openLogin": "Open sign-in page",
+          "trae.cancelLogin": "Cancel sign-in",
+          "trae.autoTitle": "Automatic Trae CN check-in",
+          "trae.autoDescription": "Check linked Trae accounts on a schedule. Off by default.",
+          "trae.empty": "No linked Trae CN accounts yet",
+          "trae.defaultName": "Trae CN account",
+          "trae.today": "Today: {status}",
+          "models.show": "Show models",
+          "models.hide": "Hide models",
+          "models.refresh": "Refresh models",
+          "models.loading": "Loading models…",
+          "models.empty": "No models to display.",
+          "models.failed": "Could not load models. Try again.",
+          "models.count": "{count} models · {source}",
+          "models.stale": "May be out of date",
+          "models.source.live": "Live upstream",
+          "models.source.cached": "Upstream cache",
+          "models.source.client_cache": "Client cache",
+          "models.source.builtin": "Built-in fallback",
+          "models.source.unknown": "Unknown source",
+          "trae.deviceChecked": "Device already checked in",
+          "trae.operationDone": "Operation completed",
+          "trae.deleteConfirm": "Delete this Trae CN account?",
+          "trae.preparing": "Preparing sign-in…",
+          "trae.authorize": "Complete authorization on the sign-in page.",
+          "trae.invalidUrl": "Invalid sign-in URL",
+          "trae.loginSuccess": "Account linked",
+          "trae.loginCancelled": "Cancelled",
+          "trae.loginFailed": "Sign-in failed",
+          "trae.settingSaved": "Trae check-in setting saved",
           "page.title": "CodeBuddy Account Manager",
           "language.label": "Language",
           "language.select": "Page language",
           "hero.brand": "CodeBuddy · Local Proxy",
           "hero.title": "Account manager",
-          "hero.lead": "Link, switch, and manage CodeBuddy accounts here. Credentials are stored by the local proxy; session contents are never shown on this page.",
+          "hero.lead": "Manage WorkBuddy and Trae CN accounts here. Credentials are stored by the local proxy; session contents are never shown on this page.",
           "login.heading": "Link an account",
           "login.description": "Choose the account region. The account will be saved locally after sign-in.",
           "login.hint": "Sign-in opens in a new window. Complete CodeBuddy sign-in there.",
@@ -506,7 +609,7 @@
           "settings.autoSwitch.title": "Switch accounts automatically on 429",
           "settings.autoSwitch.description": "Skip only same-region, same-endpoint accounts whose cooldown for this request's model is still active. Other models on the same account remain available. Try each account at most once per request. Off by default.",
           "settings.autoSwitch.loading": "Loading automatic-switch setting…",
-          "settings.autoCheckin.title": "Automatic check-in for all accounts",
+          "settings.autoCheckin.title": "Automatic WorkBuddy check-in",
           "settings.autoCheckin.description": "When enabled, the proxy checks every linked account and checks in on its Beijing-time schedule. Unknown status is never signed automatically. Turning it off cancels pending work. Off by default.",
           "settings.autoCheckin.loading": "Loading automatic check-in setting…",
           "footer.note": "Account management is local only. Switching affects new proxy requests; requests already in progress keep using their original account.",
@@ -520,6 +623,9 @@
           "account.active": "Current",
           "button.checkinQuery": "Check status",
           "button.checkin": "Check in",
+          "button.relogin": "Sign in again",
+          "notice.reloginSuccess": "Signed in again as “{name}”.",
+          "error.reloginMismatch": "The signed-in account does not match the selected account, or the selected account was deleted. Try again.",
           "button.activate": "Set active",
           "button.delete": "Delete",
           "checkin.today": "Today's check-in: {status}",
@@ -679,6 +785,7 @@
         "账号管理状态文件版本不受支持，未修改任何数据": "error.managerVersion",
         "无法保存账号管理状态": "error.managerSave",
         "账号管理器已关闭": "error.managerClosed",
+        "登录账号与所选账号不一致，或所选账号已删除，请重试": "error.reloginMismatch",
         "当前登录任务较多，请稍后重试": "error.tooManyJobs",
         "登录超时，请重新尝试": "error.loginTimeout",
         "登录信息无效，请重新尝试": "error.loginInvalid",
@@ -746,6 +853,7 @@
         listError: null,
         loginRun: null,
         lastLoginBackend: "domestic",
+        lastLoginAccount: null,
         autoSwitchOn429: false,
         autoCheckinEnabled: false,
         defaultCooldownSeconds: 60,
@@ -914,6 +1022,9 @@
         if (state.progressDescriptor) renderProgress();
         renderAssociateButton();
         renderAccounts();
+        renderTrae();
+        if (traeStatusKey) traeStatus.textContent = t(traeStatusKey);
+        if (traeMessageKey) traeMessage.textContent = t(traeMessageKey);
         if (state.loginRun && state.loginRun.popup && !state.loginRun.authUrl) showInitialPopup(state.loginRun.popup);
       }
 
@@ -946,7 +1057,7 @@
         if (options.body !== undefined) headers.set("Content-Type", "application/json");
         let response;
         try {
-          response = await fetch(`${API}${path}`, {
+          response = await fetch(options.root ? path : `${API}${path}`, {
             method: options.method || "GET",
             headers,
             body: options.body === undefined ? undefined : JSON.stringify(options.body),
@@ -1324,6 +1435,82 @@
         if (error && error.message) showErrorNotice(error, "notice.detail");
       }
 
+      const modelViews = new Map();
+      function modelView(provider, accountId) {
+        const key = `${provider}:${accountId}`;
+        if (!modelViews.has(key)) modelViews.set(key, { open: false, loading: false, items: null, source: null, stale: false, error: false, sequence: 0 });
+        return modelViews.get(key);
+      }
+      function renderProviderModels(provider, account) {
+        const view = modelView(provider, account.id);
+        const panel = document.createElement("div");
+        panel.className = "model-panel";
+        const heading = document.createElement("div");
+        heading.className = "model-panel-heading";
+        const toggle = makeButton(t(view.open ? "models.hide" : "models.show"), "button small", () => {
+          view.open = !view.open;
+          if (view.open && !view.items && !view.loading) void loadProviderModels(provider, account, false);
+          else if (provider === "workbuddy") renderAccounts();
+          else renderTrae();
+        });
+        toggle.setAttribute("aria-expanded", String(view.open));
+        heading.append(toggle);
+        if (view.open) {
+          const refresh = makeButton(t("models.refresh"), "button small", () => loadProviderModels(provider, account, true));
+          refresh.disabled = view.loading;
+          heading.append(refresh);
+        }
+        panel.append(heading);
+        if (!view.open) return panel;
+        const status = document.createElement("p");
+        status.className = "model-panel-status";
+        status.setAttribute("role", "status");
+        if (view.loading) status.textContent = t("models.loading");
+        else if (view.error) status.textContent = t("models.failed");
+        else if (view.items) {
+          const sourceKey = ({live: "live", upstream: "live", cached: "cached", upstream_cache: "cached", client_cache: "client_cache", builtin: "builtin", static_fallback: "builtin"})[view.source] || "unknown";
+          status.textContent = t("models.count", {count: view.items.length, source: t(`models.source.${sourceKey}`)}) + (view.stale ? ` · ${t("models.stale")}` : "");
+        } else status.textContent = t("models.empty");
+        panel.append(status);
+        if (view.items && view.items.length) {
+          const list = document.createElement("ul");
+          list.className = "provider-model-list";
+          for (const item of view.items) {
+            if (!item || typeof item.id !== "string") continue;
+            const name = typeof item.display_name === "string" ? item.display_name : item.id;
+            list.append(makeText("li", "", name !== item.id ? `${name} (${item.id})` : item.id));
+          }
+          panel.append(list);
+        }
+        return panel;
+      }
+      async function loadProviderModels(provider, account, refresh) {
+        const view = modelView(provider, account.id);
+        const sequence = ++view.sequence;
+        view.loading = true;
+        view.error = false;
+        if (provider === "workbuddy") renderAccounts(); else renderTrae();
+        try {
+          const query = refresh ? "?refresh=true" : "";
+          const result = provider === "workbuddy"
+            ? await request(`/accounts/${encodeURIComponent(account.id)}/models${query}`)
+            : await request(`/trae/v1/models${query}`, {root: true, headers: {"X-Trae-Account-Id": account.id}});
+          if (view.sequence !== sequence) return;
+          const items = provider === "workbuddy" ? result && result.models : result && result.data;
+          if (!Array.isArray(items)) throw new Error("invalid model list");
+          view.items = items;
+          view.source = provider === "workbuddy" ? result.catalog && result.catalog.source : result.source;
+          view.stale = provider === "workbuddy" ? result.catalog && result.catalog.stale === true : result.stale === true;
+        } catch (_) {
+          if (view.sequence === sequence) view.error = true;
+        } finally {
+          if (view.sequence === sequence) {
+            view.loading = false;
+            if (provider === "workbuddy") renderAccounts(); else renderTrae();
+          }
+        }
+      }
+
       function renderAccounts() {
         els.accountList.replaceChildren();
         state.cooldownElements = [];
@@ -1394,6 +1581,7 @@
           if (nextPlan) checkinInfo.append(makeText("span", "", t("checkin.nextPlan", { time: nextPlan })));
           if (checkin.status === "error" && checkin.error) checkinInfo.append(makeText("span", "checkin-state error", localizedRaw(checkin.error, "source.checkinError")));
           info.append(checkinInfo);
+          info.append(renderProviderModels("workbuddy", account));
 
           const actions = document.createElement("div");
           actions.className = "account-actions";
@@ -1405,11 +1593,16 @@
           checkinActions.children[0].disabled = isCheckinBusy;
           checkinActions.children[1].disabled = isCheckinBusy || checkin.status === "checked" || checkin.checked === true;
           actions.append(checkinActions);
-          if (!isActive) {
+          {
             const manageActions = document.createElement("div");
             manageActions.className = "manage-actions";
+            const relogin = makeButton(t("button.relogin"), "button small", () => startLogin(account));
+            relogin.disabled = !!state.loginRun;
+            manageActions.append(relogin);
+            if (!isActive) {
             manageActions.append(makeButton(t("button.activate"), "button small", () => activateAccount(account)));
             manageActions.append(makeButton(t("button.delete"), "button small danger", () => deleteAccount(account)));
+            }
             actions.append(manageActions);
           }
           card.append(info, actions);
@@ -1631,7 +1824,7 @@
 
       function setSelectedBackend(backend) {
         state.backend = backend;
-        for (const button of document.querySelectorAll("[data-backend]")) {
+      for (const button of document.querySelectorAll("[data-backend]")) {
           button.setAttribute("aria-pressed", String(button.dataset.backend === backend));
         }
       }
@@ -1687,6 +1880,8 @@
           const addedAccount = job.account_id && state.accounts.find((account) => account.id === job.account_id);
           if (!refreshed) {
             showNotice("notice.loginListFailed", "error");
+          } else if (run.accountId && addedAccount) {
+            showNotice("notice.reloginSuccess", "success", { name: addedAccount.nickname || addedAccount.uid || { i18nKey: "account.defaultName" } });
           } else if (beforeActive == null && state.activeAccountId === job.account_id) {
             showNotice("notice.loginFirstActive", "success");
           } else if (addedAccount) {
@@ -1779,11 +1974,12 @@
         } catch (_) { /* Some browsers expose a blank document only briefly. */ }
       }
 
-      async function startLogin() {
+      async function startLogin(account = null) {
         if (state.loginRun) return;
         clearNotice();
-        const backend = state.backend;
+        const backend = account ? account.backend : state.backend;
         state.lastLoginBackend = backend;
+        state.lastLoginAccount = account;
         const popup = window.open("about:blank", "codebuddy-account-login", "popup=yes,width=560,height=760,resizable=yes,scrollbars=yes");
         showInitialPopup(popup);
         setButtonBusy(els.associate, true);
@@ -1796,6 +1992,7 @@
         const run = {
           popup,
           backend,
+          accountId: account ? account.id : null,
           jobId: null,
           authUrl: null,
           cancelInFlight: false,
@@ -1810,7 +2007,7 @@
           const job = await request("/logins", {
             method: "POST",
             write: true,
-            body: { backend },
+            body: account ? { backend, account_id: account.id } : { backend },
             signal: controller.signal
           });
           if (!job || typeof job.id !== "string") throw new Error("代理未返回有效的登录任务编号，请重试。");
@@ -1856,16 +2053,101 @@
         }
       }
 
+      const traeList = document.getElementById("trae-list");
+      const traeMessage = document.getElementById("trae-message");
+      const traeStatus = document.getElementById("trae-login-status");
+      const traeLink = document.getElementById("trae-login-link");
+      const traeCancel = document.getElementById("trae-cancel");
+      const traeAuto = document.getElementById("trae-auto");
+      let traeJob = null;
+      let traePopup = null;
+      let traeAccounts = null;
+      let traeStatusKey = null;
+      let traeMessageKey = null;
+      function setTraeStatus(key) { traeStatusKey = key; traeStatus.textContent = t(key); }
+      function setTraeMessage(key) { traeMessageKey = key; traeMessage.textContent = t(key); }
+      function renderTrae() {
+          if (!traeAccounts) return;
+          traeList.replaceChildren();
+          if (!traeAccounts.length) traeList.append(makeText("p", "hint", t("trae.empty")));
+          for (const account of traeAccounts) {
+            const card = document.createElement("div"); card.className = "account-card";
+            const info = document.createElement("div");
+            info.append(makeText("strong", "account-name", account.nickname || t("trae.defaultName")));
+            info.append(makeText("div", "account-meta", t("account.uid", {uid: account.uid})));
+            info.append(makeText("div", "account-meta", t("trae.today", {status: account.checkin?.status === "device_checked" ? t("trae.deviceChecked") : t(`checkin.${["unknown", "checking", "unchecked", "checked", "signing", "error"].includes(account.checkin?.status) ? account.checkin.status : "unknown"}`)})));
+            info.append(renderProviderModels("trae", account));
+            const actions = document.createElement("div"); actions.className = "checkin-actions";
+            const operation = async (path, opts = {}) => {
+              try { await request(path, opts); setTraeMessage("trae.operationDone"); await refreshTrae(); }
+              catch (error) { traeMessageKey = null; traeMessage.textContent = error.message; }
+            };
+            const base = `/trae/accounts/${encodeURIComponent(account.id)}`;
+            actions.append(makeButton(t("button.checkinQuery"), "button small", () => operation(`${base}/checkin-status`)));
+            actions.append(makeButton(t("button.checkin"), "button small primary", () => operation(`${base}/checkin`, {method:"POST", write:true})));
+            actions.append(makeButton(t("button.relogin"), "button small", () => startTraeLogin(account.id)));
+            actions.append(makeButton(t("button.delete"), "button small", () => { if (window.confirm(t("trae.deleteConfirm"))) operation(base, {method:"DELETE", write:true}); }));
+            card.append(info, actions); traeList.append(card);
+          }
+      }
+      async function refreshTrae() {
+        try {
+          const data = await request("/trae/accounts");
+          traeAuto.checked = data.auto_checkin_enabled === true;
+          traeAccounts = data.accounts;
+          renderTrae();
+        } catch (error) { traeMessageKey = null; traeMessage.textContent = error.message; }
+      }
+      async function startTraeLogin(accountId = null) {
+        if (traeJob) return;
+        traePopup = window.open("about:blank", "trae-account-login", "popup=yes,width=560,height=760,resizable=yes,scrollbars=yes");
+        setTraeStatus("trae.preparing"); traeLink.hidden = true;
+        try {
+          const job = await request("/trae/logins", {method:"POST", write:true, body:accountId ? {account_id:accountId} : {}});
+          traeJob = job.id; traeCancel.hidden = false;
+          async function poll() {
+            if (traeJob !== job.id) return;
+            try {
+              const current = await request(`/trae/logins/${encodeURIComponent(job.id)}`);
+              if (current.auth_url && traeLink.hidden) {
+                const url = new URL(current.auth_url);
+                if (url.protocol !== "https:" || url.username || url.password) throw new Error(t("trae.invalidUrl"));
+                traeLink.href = url.href; traeLink.hidden = false;
+                if (traePopup && !traePopup.closed) traePopup.location.href = url.href;
+                setTraeStatus("trae.authorize");
+              }
+              if (current.status === "pending") { window.setTimeout(poll, 1000); return; }
+              traeJob = null; traeCancel.hidden = true; traeLink.hidden = true;
+              if (traePopup && !traePopup.closed) traePopup.close();
+              if (current.status === "succeeded") setTraeStatus("trae.loginSuccess");
+              else if (current.status === "cancelled") setTraeStatus("trae.loginCancelled");
+              else if (current.error) { traeStatusKey = null; traeStatus.textContent = current.error; }
+              else setTraeStatus("trae.loginFailed");
+              await refreshTrae();
+            } catch (error) { traeStatusKey = null; traeStatus.textContent = error.message; window.setTimeout(poll, 3000); }
+          }
+          void poll();
+        } catch (error) { if (traePopup && !traePopup.closed) traePopup.close(); traeStatusKey = null; traeStatus.textContent = error.message; }
+      }
+      document.getElementById("trae-add").addEventListener("click", () => startTraeLogin());
+      document.getElementById("trae-refresh").addEventListener("click", refreshTrae);
+      traeCancel.addEventListener("click", async () => { if (!traeJob) return; try { await request(`/trae/logins/${encodeURIComponent(traeJob)}`, {method:"DELETE", write:true}); } catch (error) { traeStatusKey = null; traeStatus.textContent = error.message; } });
+      traeAuto.addEventListener("change", async () => {
+        try { await request("/trae/settings", {method:"PATCH", write:true, body:{auto_checkin_enabled:traeAuto.checked}}); setTraeMessage("trae.settingSaved"); }
+        catch (error) { traeMessageKey = null; traeMessage.textContent = error.message; await refreshTrae(); }
+      });
+      void refreshTrae();
+
       for (const button of document.querySelectorAll("[data-backend]")) {
         button.addEventListener("click", () => setSelectedBackend(button.dataset.backend));
       }
       if (els.language) els.language.addEventListener("change", () => setLanguage(els.language.value));
       els.refresh.addEventListener("click", () => refreshAccounts());
-      els.associate.addEventListener("click", startLogin);
+      els.associate.addEventListener("click", () => startLogin());
       els.cancel.addEventListener("click", cancelLogin);
       els.retry.addEventListener("click", () => {
         if (state.backend !== state.lastLoginBackend) setSelectedBackend(state.lastLoginBackend);
-        startLogin();
+        startLogin(state.lastLoginAccount);
       });
       els.autoSwitch.addEventListener("change", saveAutoSwitchSetting);
       els.autoCheckin.addEventListener("change", saveAutoCheckinSetting);

@@ -26,4 +26,14 @@ jobs:
           python -m pytest -q \
             test_anthropic_tool_pairing.py \
             test_responses_tool_pairing.py \
+            test_responses_context_compat.py \
+            test_responses_tools_compat.py \
+            test_protocol_response_strategies.py \
+            test_developer_role_compat.py \
+            test_upstream_request_pipeline.py \
+            test_buddy_alignment.py \
+            test_endpoint_migration.py \
+            test_intl_conversation_headers.py \
+            test_backend_profiles.py \
+            test_stream_error_propagation.py \
             test_desensitize_claude_harness.py

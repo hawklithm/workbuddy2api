@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "buddy-agent-auth"
-version = "0.1.0"
+version = "0.1.1"
 description = "Brand-separated agent account authentication"
 requires-python = ">=3.10"
 

@@ -63,3 +63,12 @@ archive/
 *.backup
 *.orig
 *.rej
+!docs/buddy-context-migration-2026-11-18.md
+!docs/buddy-upstream-alignment-2026-11-21.md
+!src/codebuddy_proxy/default_prompt.md
+
+# Local prompt-extraction research artifacts (not runtime resources)
+/docs/assets/cli-prompts.json
+/docs/assets/vsix-prompts.external.json
+/docs/assets/vsix-prompts.internal.json
+/docs/assets/harness-observed-system-prompt.txt

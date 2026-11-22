@@ -74,6 +74,7 @@ def _convert_anthropic_message(msg: dict) -> list[dict]:
     if role == "assistant":
         text_parts = []
         tool_calls = []
+        reasoning_parts = []
         
         for block in content:
             if not isinstance(block, dict):
@@ -83,6 +84,8 @@ def _convert_anthropic_message(msg: dict) -> list[dict]:
             
             if block_type == "text":
                 text_parts.append(block.get("text", ""))
+            elif block_type == "thinking":
+                reasoning_parts.append(block.get("thinking", ""))
             
             elif block_type == "tool_use":
                 tool_calls.append({
@@ -101,6 +104,8 @@ def _convert_anthropic_message(msg: dict) -> list[dict]:
         }
         if tool_calls:
             assistant_msg["tool_calls"] = tool_calls
+        if reasoning_parts:
+            assistant_msg["reasoning_content"] = "".join(reasoning_parts)
         messages.append(assistant_msg)
     
     # user消息处理
@@ -199,7 +204,8 @@ def anthropic_request_to_chat(body: dict) -> dict:
         chat["tool_choice"] = _convert_tool_choice(tool_choice)
     
     # 透传参数
-    for key in ("max_tokens", "temperature", "top_p", "stop", "top_k"):
+    for key in ("max_tokens", "temperature", "top_p", "stop", "top_k", "thinking", "reasoning_effort",
+                "reasoningEffort", "metadata", "session_id", "conversation_id", "prompt_cache_key"):
         if key in body:
             chat[key] = body[key]
     
@@ -295,6 +301,7 @@ class AnthropicStreamConverter:
         self.finish_reason: str | None = None
         self.usage: dict | None = None
         self.open_blocks: set[int] = set()  # 已打开但未关闭的块index
+        self.thinking_index: int | None = None
     
     def feed_chunk(self, chunk: dict) -> list[tuple[str, dict]]:
         """处理一个Chat SSE chunk，返回Anthropic事件列表"""
@@ -325,6 +332,23 @@ class AnthropicStreamConverter:
         for choice in chunk.get("choices", []):
             self.finish_reason = choice.get("finish_reason") or self.finish_reason
             delta = choice.get("delta", {})
+            if delta.get("reasoning_content"):
+                if self.text_block_index in self.open_blocks:
+                    events.append(("content_block_stop", {"type": "content_block_stop", "index": self.text_block_index}))
+                    self.open_blocks.remove(self.text_block_index)
+                    self.text_block_index = None
+                if self.thinking_index is None:
+                    self.thinking_index = self.next_anthropic_index
+                    self.next_anthropic_index += 1
+                    self.open_blocks.add(self.thinking_index)
+                    events.append(("content_block_start", {"type": "content_block_start",
+                        "index": self.thinking_index, "content_block": {"type": "thinking", "thinking": ""}}))
+                events.append(("content_block_delta", {"type": "content_block_delta", "index": self.thinking_index,
+                    "delta": {"type": "thinking_delta", "thinking": delta["reasoning_content"]}}))
+            if (delta.get("content") or delta.get("tool_calls")) and self.thinking_index in self.open_blocks:
+                events.append(("content_block_stop", {"type": "content_block_stop", "index": self.thinking_index}))
+                self.open_blocks.remove(self.thinking_index)
+                self.thinking_index = None
             
             # 文本内容
             if delta.get("content"):

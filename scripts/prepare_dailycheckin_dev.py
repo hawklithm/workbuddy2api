@@ -259,6 +259,13 @@ def main(argv=None) -> int:
                      auth_version, distribution='buddy-agent-auth')
     verify_installed(uv, workbuddy, workbuddy_env, daily_wheel, 'daily_checkin', 'workbuddy.py', daily_version)
     verify_installed(uv, workbuddy, workbuddy_env, daily_wheel, 'daily_checkin', 'trae.py', daily_version)
+    verify_installed(uv, workbuddy, workbuddy_env, auth_wheel, 'buddy_agent_auth.providers.codebuddy', 'login_jobs.py',
+                     auth_version, distribution='buddy-agent-auth')
+    verify_installed(uv, workbuddy, workbuddy_env, auth_wheel, 'buddy_agent_auth.providers.codebuddy', 'bootstrap.py',
+                     auth_version, distribution='buddy-agent-auth')
+    verify_installed(uv, workbuddy, workbuddy_env, auth_wheel, 'buddy_agent_auth.providers.trae', 'accounts.py',
+                     auth_version, distribution='buddy-agent-auth')
+    verify_installed(uv, workbuddy, workbuddy_env, daily_wheel, 'daily_checkin', 'trae_accounts.py', daily_version)
     print(f'Local development dependencies are ready. DailyCheckin wheel: {daily_wheel}', flush=True)
     return 0
 

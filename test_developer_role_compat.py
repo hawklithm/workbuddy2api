@@ -189,6 +189,6 @@ def test_other_protocols_keep_instruction_roles(monkeypatch, capture_gateway, pa
     with TestClient(proxy.app) as http:
         response = http.post(path, json=body)
     assert response.status_code == 200, response.text
-    upstream_body = stub.sent_body if path == "/v1/responses" else sent[0]
+    upstream_body = sent[0]
     assert upstream_body["messages"][0]["role"] == "system"
     assert upstream_body["messages"][0]["content"] == "coding guidance"

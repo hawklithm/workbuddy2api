@@ -28,3 +28,7 @@ headers = client.auth_headers()
 登录可通过 `CodeBuddyClient.login()` 完成，再通过 `AccountStore.import_client()` 导入；后台操作不应自动启动浏览器。账号目录事务使用跨进程锁，token 刷新使用每个 session 的独立跨进程锁，刷新前重新读取磁盘，保存时检查旧状态。进程中发生重关联或删除时，较早的刷新响应不会覆盖新数据。为兼容仍在运行的旧版客户端，账号目录内的锁文件保留旧名称 `.workbuddy-auth.lock`；账号文件路径和格式不变。
 
 在仓库开发时：`python -m pip install -e packages/buddy-agent-auth`。发行前需先发布该包及 DailyCheckin 的匹配版本；目前没有执行任何公开发布。
+
+### 独立账号登录任务
+
+`buddy_agent_auth.providers.codebuddy.login_jobs.WorkBuddyLoginManager` 为 `AccountStore` 提供有并发上限、可取消的后台登录任务；`buddy_agent_auth.providers.trae.accounts.TraeAccountManager` 管理独立 Trae 账号和设备身份。它们均不依赖 WorkBuddy2API 或 DailyCheckin。Trae 登录流提供 `cancel()` 和 `on_event`（授权地址、交换、账号信息阶段）供宿主接入；宿主不必读取内部事件或解析日志。Trae 账号仍保存在宿主账号目录的 `trae-cn` 子目录中。

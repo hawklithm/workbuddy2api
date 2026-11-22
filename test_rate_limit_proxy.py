@@ -210,10 +210,12 @@ def test_same_region_429_retries_once_on_distinct_uid_for_each_protocol_mode(
     )
     manager.set_settings(auto_switch_on_429=True)
     seen = []
+    correlation = []
 
     async def upstream(request):
         authorization = request.headers["authorization"]
         seen.append(authorization)
+        correlation.append((dict(request.headers), json.loads(request.content)["prompt_cache_key"]))
         if authorization == "Bearer token-domestic-a":
             return _error_response("a", retry_after="120")
         return _success_response("recovered-from-b")
@@ -224,6 +226,11 @@ def test_same_region_429_retries_once_on_distinct_uid_for_each_protocol_mode(
             response = app.post(path, json=_request_body(path, body, stream))
         assert response.status_code == 200
         assert seen == ["Bearer token-domestic-a", "Bearer token-domestic-b"]
+        first, second = correlation
+        assert first[0]["x-conversation-id"] == second[0]["x-conversation-id"]
+        assert first[0]["x-conversation-request-id"] == second[0]["x-conversation-request-id"]
+        assert first[0]["x-conversation-message-id"] != second[0]["x-conversation-message-id"]
+        assert first[1] != second[1]
         assert "recovered-from-b" in response.text
         assert manager.store.active_account_id == account_ids["b"]
 

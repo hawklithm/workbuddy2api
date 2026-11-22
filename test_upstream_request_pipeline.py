@@ -78,14 +78,13 @@ def test_preparer_normalizes_choice_and_forces_stream_without_mutating_client(st
     assert req.body["stream"] is True
     assert req.body["stream_options"] == {"include_usage": True}
     assert req.body["tool_choice"] == "read"
-    assert req.headers == {
-        "User-Agent": "Mozilla/5.0 (compatible; Genie-IDE/1.0)",
-        "Authorization": "Bearer test",
-        "X-IDE-Type": "vscode",
-        "X-Machine-Id": "machine-1",
-        "Content-Type": "application/json",
-        "Accept": "text/event-stream",
-    }
+    assert req.headers["User-Agent"].startswith("WorkBuddy/")
+    assert req.headers["Authorization"] == "Bearer test"
+    assert req.headers["Content-Type"] == "application/json"
+    assert req.headers["Accept"] == "application/json, text/event-stream"
+    assert req.headers["X-Product"] == "SaaS"
+    assert req.headers["X-Conversation-ID"]
+    assert "X-IDE-Type" not in req.headers and "X-Machine-Id" not in req.headers
     assert body == original
     assert req.body is not body
     assert client.calls == [
@@ -98,7 +97,8 @@ def test_explicit_stream_options_are_preserved_by_setdefault():
     original_options = {"include_usage": False, "custom": "yes"}
     body = {"stream_options": original_options, "stream": True}
     prepared = _preparer(FakeClient()).prepare(body, "openai")
-    assert prepared.body["stream_options"] is original_options
+    assert prepared.body["stream_options"] == original_options
+    assert prepared.body["stream_options"] is not original_options
     assert original_options == {"include_usage": False, "custom": "yes"}
 
 
@@ -153,7 +153,7 @@ def test_transform_steps_run_in_existing_order():
     assert [name for name, _ in effects] == ["upstream_role_compat"]
 
 
-def test_intl_conversation_headers_get_fully_transformed_body():
+def test_intl_conversation_headers_use_request_local_context():
     client = FakeClient(endpoint="https://www.codebuddy.ai", backend="global")
     effects = []
     req = _preparer(client, effects=effects).prepare(
@@ -161,32 +161,28 @@ def test_intl_conversation_headers_get_fully_transformed_body():
         "openai",
     )
     conv_call = [details for name, details in client.calls if name == "conversation_headers"]
-    assert len(conv_call) == 1
-    assert conv_call[0] == req.body
-    assert conv_call[0]["stream"] is True
-    assert conv_call[0]["messages"][0]["role"] == "system"
-    assert req.headers["X-Conversation-ID"] == "0123456789abcdef"
+    assert conv_call == []
+    assert req.body["stream"] is True
+    assert req.body["messages"][0]["role"] == "system"
+    assert req.headers["X-Conversation-ID"]
     assert effects == [
         ("upstream_role_compat", {
             "protocol": "openai", "backend": "global",
             "mapping": "developer_to_system", "count": 1,
         }),
-        ("intl_conversation_headers", {"conversation_id": "0123456789ab..."}),
     ]
 
 
-def test_intl_headers_failure_is_best_effort_and_diagnostic_is_truncated():
+def test_legacy_client_conversation_hook_is_not_needed_for_complete_headers():
     client = FakeClient(endpoint="https://www.codebuddy.ai", backend="global")
     client.fail_conversation_headers = True
     effects = []
     req = _preparer(client, effects=effects).prepare(
         {"messages": [{"role": "user", "content": "hello"}]}, "openai",
     )
-    assert "X-Conversation-ID" not in req.headers
+    assert req.headers["X-Conversation-ID"]
     assert req.headers["Authorization"] == "Bearer test"
-    assert effects == [
-        ("intl_conversation_headers_failed", {"error": "invalid conversation metadata"}),
-    ]
+    assert effects == []
 
 
 def test_custom_gateway_strategies_can_be_composed_without_modifying_builder():
