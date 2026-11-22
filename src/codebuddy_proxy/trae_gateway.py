@@ -5,6 +5,7 @@ import asyncio
 import copy
 import hashlib
 import json
+import logging
 import time
 import uuid
 
@@ -17,6 +18,36 @@ APP_ID = "6eefa01c-1036-4c7e-9ca5-d891f63bfcd8"
 VERSION = "0.1.50"
 VERSION_CODE = "20260811"
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+class TraeStreamProtocolError(ValueError):
+    """A fixed diagnostic code, without response content or credentials."""
+
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+
+def stream_error(exc):
+    if isinstance(exc, TraeStreamProtocolError):
+        code = exc.code
+    elif isinstance(exc, httpx.TimeoutException):
+        code = 'upstream_timeout'
+    elif isinstance(exc, httpx.HTTPError):
+        code = 'upstream_transport_error'
+    else:
+        code = 'upstream_protocol_error'
+    logger.warning('Trae stream failed: code=%s exception=%s', code, type(exc).__name__)
+    messages = {
+        'invalid_sse_json': 'Trae upstream returned an invalid stream event',
+        'invalid_sse_shape': 'Trae upstream returned an unsupported stream event',
+        'upstream_timeout': 'Trae upstream stream timed out',
+        'upstream_transport_error': 'Trae upstream stream connection failed',
+        'missing_finish': 'Trae upstream stream ended without a completion event',
+        'upstream_protocol_error': 'Trae upstream stream protocol failed',
+    }
+    return {'message': messages.get(code, messages['upstream_protocol_error']), 'type': 'upstream_error', 'code': code}
 
 
 def prepare_body(body, uid, device_id, machine_id):
@@ -193,24 +224,40 @@ class Converter:
 
 
 async def events(response):
+    relevant = {'output', 'thought', 'token_usage', 'done', 'turn_completion', 'error'}
     event, data = "", []
+    def decode(kind, lines):
+        raw = "\n".join(lines)
+        if raw.strip() == '[DONE]' and kind in ('', 'done', 'turn_completion'):
+            return 'done', {}
+        if kind not in relevant:
+            return None
+        if not raw.strip() and kind in ('done', 'turn_completion'):
+            return kind, {}
+        try:
+            value = json.loads(raw)
+        except ValueError:
+            raise TraeStreamProtocolError('invalid_sse_json') from None
+        if value is None and kind in ('done', 'turn_completion'):
+            value = {}
+        if not isinstance(value, dict):
+            raise TraeStreamProtocolError('invalid_sse_shape')
+        return kind, value
     async for line in response.aiter_lines():
         if not line:
-            if data:
-                try:
-                    value = json.loads("\n".join(data))
-                except ValueError:
-                    raise ValueError("invalid Trae event") from None
-                if not isinstance(value, dict):
-                    raise ValueError("invalid Trae event")
-                yield event, value
+            if data or event in ('done', 'turn_completion'):
+                parsed = decode(event, data)
+                if parsed is not None:
+                    yield parsed
             event, data = "", []
         elif line.startswith("event:"):
             event = line[6:].strip()
         elif line.startswith("data:"):
             data.append(line[5:].lstrip())
-    if data:
-        raise ValueError("incomplete Trae event stream")
+    if data or event in ('done', 'turn_completion'):
+        parsed = decode(event, data)
+        if parsed is not None:
+            yield parsed
 
 
 @router.post("/trae/v1/chat/completions")
@@ -258,9 +305,10 @@ async def forward_trae(body, accounts, account_id=None):
                 if converter.finished:
                     break
             if not converter.finished:
-                yield 'data: {"error":{"message":"Trae stream ended prematurely","type":"upstream_error"}}\n\n'
-        except (ValueError, httpx.HTTPError):
-            yield 'data: {"error":{"message":"Trae stream failed","type":"upstream_error"}}\n\n'
+                error = stream_error(TraeStreamProtocolError('missing_finish'))
+                yield 'data: ' + json.dumps({'error': error}, ensure_ascii=False) + '\n\n'
+        except (ValueError, httpx.HTTPError) as exc:
+            yield 'data: ' + json.dumps({'error': stream_error(exc)}, ensure_ascii=False) + '\n\n'
         finally:
             await response.aclose()
             await client.aclose()
@@ -275,9 +323,10 @@ async def forward_trae(body, accounts, account_id=None):
             if converter.finished:
                 break
         if not converter.finished:
-            raise ValueError("incomplete stream")
+            raise TraeStreamProtocolError('missing_finish')
         return JSONResponse(converter.result())
-    except (ValueError, httpx.HTTPError):
+    except (ValueError, httpx.HTTPError) as exc:
+        stream_error(exc)
         raise HTTPException(502, "Trae upstream stream failed") from None
     finally:
         await response.aclose()

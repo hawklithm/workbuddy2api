@@ -39,7 +39,7 @@ def test_endpoint_stream_and_aggregate(monkeypatch):
     app.state.trae_parse_request_body = lambda request: request.json()
     app.state.trae_get_account_manager = lambda: type("Manager", (), {"trae_accounts": object()})()
     monkeypatch.setattr(gateway, "load_account", lambda accounts, requested: ("user", "jwt", "device", "machine"))
-    payload = b'event: output\ndata: {"response":"hello"}\n\nevent: token_usage\ndata: {"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}\n\nevent: done\ndata: {}\n\n'
+    payload = b'event: output\ndata: {"response":"hello"}\n\nevent: token_usage\ndata: {"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}\n\nevent: done\ndata: {}'
     real_client = httpx.AsyncClient
     requests = []
     def mock_upstream(request):
@@ -63,13 +63,83 @@ def test_endpoint_stream_and_aggregate(monkeypatch):
 
 def test_premature_stream_is_error():
     async def run():
-        response = httpx.Response(200, content=b'event: output\ndata: {"response":"partial"}')
+        response = httpx.Response(200, content=b'event: output\ndata: {"response":"partial"')
         try:
             async for _ in gateway.events(response):
                 pass
         except ValueError:
             return
         assert False, "an incomplete SSE event must fail"
+    asyncio.run(run())
+
+
+def test_ignored_metadata_and_valid_final_event_without_blank_line():
+    async def run():
+        response = httpx.Response(200, content=(
+            b'event: metadata\ndata: null\n\n'
+            b'event: timing_cost\ndata: not-json\n\n'
+            b'event: output\ndata: {"response":"hello"}\n\n'
+            b'event: done\ndata: {"finish_reason":"stop"}'
+        ))
+        parsed = [item async for item in gateway.events(response)]
+        assert parsed == [('output', {'response':'hello'}), ('done', {'finish_reason':'stop'})]
+    asyncio.run(run())
+
+
+def test_unframed_output_does_not_imply_success():
+    async def run():
+        response = httpx.Response(200, content=b'event: output\ndata: {"response":"partial"}')
+        converter = gateway.Converter('m')
+        async for kind, data in gateway.events(response):
+            converter.event(kind, data)
+        assert converter.content == 'partial'
+        assert not converter.finished
+    asyncio.run(run())
+
+
+def test_malformed_relevant_event_diagnostic_does_not_leak(caplog):
+    async def run():
+        response = httpx.Response(200, content=b'event: output\ndata: private-token-not-json\n\n')
+        with pytest.raises(gateway.TraeStreamProtocolError) as error:
+            _ = [item async for item in gateway.events(response)]
+        result = gateway.stream_error(error.value)
+        assert result['code'] == 'invalid_sse_json'
+        assert 'private-token' not in str(result)
+        assert 'private-token' not in caplog.text
+    import pytest
+    asyncio.run(run())
+
+
+def test_done_sentinel_and_empty_done_event():
+    async def run():
+        for data in (b'data: [DONE]\n\n', b'event: done\ndata: null\n\n', b'event: done\n\n'):
+            response = httpx.Response(200, content=data)
+            assert [item async for item in gateway.events(response)] == [('done', {})]
+    asyncio.run(run())
+
+
+def test_transport_failure_is_classified_without_leaking_details(monkeypatch, caplog):
+    from fastapi import FastAPI
+    app = FastAPI()
+    app.include_router(gateway.router)
+    app.state.trae_parse_request_body = lambda request: request.json()
+    app.state.trae_get_account_manager = lambda: type('Manager', (), {'trae_accounts': object()})()
+    monkeypatch.setattr(gateway, 'load_account', lambda *args: ('user', 'jwt', 'device', 'machine'))
+    class FailingStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'event: output\ndata: {"response":"partial"}\n\n'
+            raise httpx.ReadTimeout('private-token-or-conversation')
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(gateway.httpx, 'AsyncClient', lambda **kwargs: real_client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, stream=FailingStream())), **kwargs))
+    async def run():
+        async with real_client(transport=httpx.ASGITransport(app=app), base_url='http://local') as client:
+            response = await client.post('/trae/v1/chat/completions', json={'model':'m', 'stream':True, 'messages':[]})
+            assert response.status_code == 200
+            assert '"code": "upstream_timeout"' in response.text
+            assert 'private-token-or-conversation' not in response.text
+            assert 'private-token-or-conversation' not in caplog.text
+            assert 'code=upstream_timeout' in caplog.text
     asyncio.run(run())
 
 

@@ -87,13 +87,17 @@ def test_user_center_packages_merge_precise_values_and_expired():
     assert credits.parse_workbuddy_resources(summary, None, free)['partial'] is True
 
 
-def test_waf_error_does_not_trigger_more_requests_or_refresh(monkeypatch):
+def test_rejected_new_endpoints_try_legacy_without_refresh(monkeypatch):
     real_client = httpx.AsyncClient
     requests = []
+    client_options = []
     def handler(request):
         requests.append(request)
         return httpx.Response(403, json={'code':10085, 'msg':'private upstream detail'})
-    monkeypatch.setattr(credits.httpx, 'AsyncClient', lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs))
+    def make_client(**kwargs):
+        client_options.append(kwargs)
+        return real_client(transport=httpx.MockTransport(handler), **kwargs)
+    monkeypatch.setattr(credits.httpx, 'AsyncClient', make_client)
     class Client:
         endpoint = 'https://copilot.tencent.com'
         profile = SimpleNamespace(key='domestic')
@@ -101,7 +105,56 @@ def test_waf_error_does_not_trigger_more_requests_or_refresh(monkeypatch):
         def _auth_headers_for_session(self, session): return {'Authorization':'Bearer test'}
     with pytest.raises(credits.CreditsError, match='upstream_rejected'):
         asyncio.run(credits.workbuddy_credits(Client()))
-    assert len(requests) == 1
+    assert [request.url.path for request in requests] == [
+        credits.SUMMARY_PATH, credits.PAID_PATH, credits.FREE_PATH, credits.WORKBUDDY_PATH,
+    ]
     assert requests[0].url.host == 'www.workbuddy.cn'
     assert requests[0].url.path == credits.SUMMARY_PATH
     assert requests[0].headers['x-client-platform'] == 'web'
+    assert requests[0].headers['user-agent'] == 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36'
+    assert requests[-1].url.host == 'www.codebuddy.cn'
+    assert requests[-1].headers['origin'] == 'https://www.codebuddy.cn'
+    assert client_options[0]['trust_env'] is False
+
+
+def test_rejected_summary_keeps_available_package_details(monkeypatch):
+    real_client = httpx.AsyncClient
+    requests = []
+    def handler(request):
+        requests.append(request.url.path)
+        if request.url.path == credits.SUMMARY_PATH:
+            return httpx.Response(403, json={'code': 10085})
+        if request.url.path == credits.PAID_PATH:
+            return httpx.Response(200, json={'code': 0, 'data': {'Accounts': [{'CapacityRemain': 12}]}})
+        if request.url.path == credits.FREE_PATH:
+            return httpx.Response(200, json={'code': 0, 'data': {'Accounts': []}})
+        pytest.fail('legacy fallback must not run when package details are available')
+    monkeypatch.setattr(credits.httpx, 'AsyncClient', lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs))
+    class Client:
+        endpoint = 'https://copilot.tencent.com'
+        profile = SimpleNamespace(key='domestic')
+        def _snapshot_session(self): return ({'auth': {'domain': 'www.workbuddy.cn'}}, None)
+        def _auth_headers_for_session(self, session): return {'Authorization': 'Bearer test'}
+    result = asyncio.run(credits.workbuddy_credits(Client()))
+    assert result['remaining'] == 12
+    assert result['source'] == 'user_center'
+    assert result['partial'] is True
+    assert requests == [credits.SUMMARY_PATH, credits.PAID_PATH, credits.FREE_PATH]
+
+
+def test_rejected_new_endpoints_can_use_legacy_balance(monkeypatch):
+    real_client = httpx.AsyncClient
+    def handler(request):
+        if request.url.path != credits.WORKBUDDY_PATH:
+            return httpx.Response(403, json={'code': 10085})
+        return httpx.Response(200, json={'code': 0, 'data': {'Response': {'Data': {'Accounts': [{'CapacityRemain': 7}]}}}})
+    monkeypatch.setattr(credits.httpx, 'AsyncClient', lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs))
+    class Client:
+        endpoint = 'https://copilot.tencent.com'
+        profile = SimpleNamespace(key='domestic')
+        def _snapshot_session(self): return ({'auth': {'domain': 'www.workbuddy.cn'}}, None)
+        def _auth_headers_for_session(self, session): return {'Authorization': 'Bearer test'}
+    result = asyncio.run(credits.workbuddy_credits(Client()))
+    assert result['remaining'] == 7
+    assert result['source'] == 'legacy'
+    assert result['partial'] is False

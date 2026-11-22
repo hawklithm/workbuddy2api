@@ -205,19 +205,22 @@ async def workbuddy_credits(client):
                if key.lower() in {'authorization', 'x-user-id', 'x-enterprise-id', 'x-tenant-id', 'x-domain'}}
     headers.update({'Accept': 'application/json', 'Content-Type': 'application/json'})
     endpoint = client.endpoint.rstrip('/')
+    legacy_endpoint = endpoint
     parts = urlsplit(endpoint)
     # The official CN chat host and billing host differ; explicitly configured
     # alternative hosts retain their own origin and credentials stay scoped there.
     if client.profile.key == 'domestic' and parts.scheme == 'https' and parts.netloc.lower() == 'copilot.tencent.com':
         domain = str((session.get('auth') or {}).get('domain') or '').lower().strip()
         endpoint = 'https://www.workbuddy.cn' if domain in ('workbuddy.cn', 'www.workbuddy.cn') else 'https://www.codebuddy.cn'
+        legacy_endpoint = 'https://www.codebuddy.cn'
     headers.update({'X-Client-Platform': 'web', 'Accept': 'application/json, text/plain, */*',
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36',
                     'Origin': endpoint, 'Referer': endpoint + '/profile/plans-usage'})
     now = datetime.now()
     body = {'PageNumber': 1, 'PageSize': 100, 'ProductCode': 'p_tcaca', 'Status': [0, 3],
             'PackageEndTimeRangeBegin': now.strftime('%Y-%m-%d %H:%M:%S'),
             'PackageEndTimeRangeEnd': (now + timedelta(days=365*101)).strftime('%Y-%m-%d %H:%M:%S')}
-    async with httpx.AsyncClient(timeout=15, follow_redirects=False) as http:
+    async with httpx.AsyncClient(timeout=30, follow_redirects=False, trust_env=False) as http:
         today = now.strftime('%Y-%m-%d')
         requests = [(SUMMARY_PATH, {}),
                     (PAID_PATH, {'PageNumber': 1, 'PageSize': 200, 'Status': [0, 3], 'PackageCodes': PAID_CODES, 'NeedRenewInfo': True}),
@@ -230,8 +233,6 @@ async def workbuddy_credits(client):
                     document = response.json()
                 except ValueError:
                     document = None
-                if _error_code(document) == '10085':
-                    raise CreditsError('upstream_rejected')
                 responses.append(document if response.is_success else None)
             except httpx.HTTPError:
                 responses.append(None)
@@ -239,7 +240,8 @@ async def workbuddy_credits(client):
             result = parse_workbuddy_resources(*responses)
             result['source'] = 'user_center'
         except CreditsError:
-            response = await http.post(endpoint + WORKBUDDY_PATH, headers=headers, json=body)
+            legacy_headers = {**headers, 'Origin': legacy_endpoint, 'Referer': legacy_endpoint + '/profile/plans-usage'}
+            response = await http.post(legacy_endpoint + WORKBUDDY_PATH, headers=legacy_headers, json=body)
             try:
                 document = response.json()
             except ValueError:
