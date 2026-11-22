@@ -151,6 +151,38 @@ def test_upstream_error_is_not_treated_as_completion():
     assert converter.event("done", {}) == []
 
 
+def test_rate_limit_event_reports_safe_code(caplog):
+    converter = gateway.Converter('m')
+    frames = converter.event('error', {'code': 4008, 'message': 'private detail'})
+    assert frames[0]['error']['type'] == 'rate_limit_error'
+    assert frames[0]['error']['code'] == 4008
+    assert 'premium usage limit' in frames[0]['error']['message']
+    assert 'private detail' not in str(frames)
+    assert 'code=4008' in caplog.text
+    assert 'private detail' not in caplog.text
+
+
+def test_rate_limit_propagates_through_stream_and_non_stream(monkeypatch):
+    from fastapi import FastAPI
+    app = FastAPI()
+    app.include_router(gateway.router)
+    app.state.trae_parse_request_body = lambda request: request.json()
+    app.state.trae_get_account_manager = lambda: type('Manager', (), {'trae_accounts': object()})()
+    monkeypatch.setattr(gateway, 'load_account', lambda *args: ('user', 'jwt', 'device', 'machine'))
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(gateway.httpx, 'AsyncClient', lambda **kwargs: real_client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=b'event: error\ndata: {"code":4008,"message":"private"}\n\n')), **kwargs))
+    async def run():
+        async with real_client(transport=httpx.ASGITransport(app=app), base_url='http://local') as client:
+            for stream in (False, True):
+                response = await client.post('/trae/v1/chat/completions', json={'model':'m', 'stream':stream, 'messages':[]})
+                assert response.status_code == (200 if stream else 429)
+                assert 'rate_limit_error' in response.text
+                assert '4008' in response.text
+                assert 'private' not in response.text
+    asyncio.run(run())
+
+
 def test_tool_choice_none_removes_tools():
     body = gateway.prepare_body({"model": "glm", "messages": [], "tool_choice": "none",
                                  "tools": [{"type": "function", "function": {"name": "f"}}]}, "u", "d", "m")

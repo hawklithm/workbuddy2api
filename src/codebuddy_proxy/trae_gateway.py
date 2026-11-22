@@ -152,7 +152,12 @@ class Converter:
             return []
         if kind == "error":
             self.finished = True
-            return [{"error": {"message": "Trae upstream returned an error", "type": "upstream_error", "code": data.get("code")}}]
+            code = data.get("code")
+            code = code if type(code) is int else None
+            logger.warning('Trae upstream error: code=%s', code)
+            if code == 4008:
+                return [{"error": {"message": "Trae premium usage limit reached (4008); check credits and usage limits", "type": "rate_limit_error", "code": code}}]
+            return [{"error": {"message": "Trae upstream returned an error", "type": "upstream_error", "code": code}}]
         if kind == "token_usage":
             self.usage = {k: data[k] for k in ("prompt_tokens", "completion_tokens", "total_tokens") if k in data}
             return []
@@ -319,7 +324,7 @@ async def forward_trae(body, accounts, account_id=None):
         async for kind, data in events(response):
             chunks = converter.event(kind, data)
             if chunks and "error" in chunks[0]:
-                return JSONResponse(chunks[0], status_code=502)
+                return JSONResponse(chunks[0], status_code=429 if chunks[0]['error']['code'] == 4008 else 502)
             if converter.finished:
                 break
         if not converter.finished:
