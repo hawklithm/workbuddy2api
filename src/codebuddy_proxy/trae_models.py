@@ -101,13 +101,9 @@ def parse_catalog(payload):
 
 
 def selected_record(accounts, account_id):
+    from codebuddy_proxy.trae_accounts import selected_record as resolve_record
     with accounts.lock:
-        records = accounts._records()
-        if account_id:
-            records = [record for record in records if record["id"] == account_id]
-        if len(records) != 1:
-            raise ValueError("select one linked account")
-        record = records[0]
+        record = resolve_record(accounts, account_id)
         return record, accounts._path(record["id"]) / "models-cache.json"
 
 
@@ -182,16 +178,20 @@ async def fetch_catalog(token, device, machine):
 async def trae_models(request: Request, refresh: bool = False):
     manager = request.app.state.trae_get_account_manager()
     accounts = getattr(manager, "trae_accounts", None)
+    return await models_for_account(request.app, accounts, request.headers.get("x-trae-account-id"), refresh)
+
+
+async def models_for_account(app, accounts, account_id, refresh=False):
     if accounts is None:
         raise HTTPException(503, "Trae account management unavailable")
     try:
-        record, cache_path = await asyncio.to_thread(selected_record, accounts, request.headers.get("x-trae-account-id"))
+        record, cache_path = await asyncio.to_thread(selected_record, accounts, account_id)
     except ValueError:
-        raise HTTPException(400, "Select one linked Trae account with X-Trae-Account-Id") from None
+        raise HTTPException(400, "Set a current Trae account or select one with X-Trae-Account-Id") from None
     # Per-app, per-account single flight; subsequent waiters recheck the cache.
-    locks = getattr(request.app.state, "trae_model_locks", None)
+    locks = getattr(app.state, "trae_model_locks", None)
     if locks is None:
-        locks = request.app.state.trae_model_locks = {}
+        locks = app.state.trae_model_locks = {}
     lock = locks.setdefault(str(cache_path), asyncio.Lock())
     async with lock:
         cached = await asyncio.to_thread(read_cache, cache_path, record["uid"])

@@ -85,13 +85,9 @@ def headers(jwt, device_id, machine_id):
 
 def load_account(accounts, requested):
     from buddy_agent_auth.providers.trae.auth import TraeAuth
+    from codebuddy_proxy.trae_accounts import selected_record
     with accounts.lock:
-        records = accounts._records()
-        if requested:
-            records = [record for record in records if record["id"] == requested]
-        if len(records) != 1:
-            raise ValueError("select one linked Trae account with X-Trae-Account-Id")
-        record = records[0]
+        record = selected_record(accounts, requested)
         path = accounts._path(record["id"]) / "credentials.json"
         auth = TraeAuth(creds_file=path)
         try:
@@ -220,20 +216,23 @@ async def events(response):
 @router.post("/trae/v1/chat/completions")
 async def trae_chat(request: Request):
     body = await request.app.state.trae_parse_request_body(request)
+    manager = request.app.state.trae_get_account_manager()
+    return await forward_trae(body, getattr(manager, "trae_accounts", None), request.headers.get("x-trae-account-id"))
+
+
+async def forward_trae(body, accounts, account_id=None):
     try:
         # Validate before any account/network operation.
         prepare_body(body, "validation", "validation", "validation")
     except (ValueError, TypeError, AttributeError):
         raise HTTPException(400, "Invalid Trae chat request") from None
     try:
-        manager = request.app.state.trae_get_account_manager()
-        accounts = getattr(manager, "trae_accounts", None)
         if accounts is None:
             raise HTTPException(503, "Trae account management unavailable")
-        uid, token, device, machine = await asyncio.to_thread(load_account, accounts, request.headers.get("x-trae-account-id"))
+        uid, token, device, machine = await asyncio.to_thread(load_account, accounts, account_id)
         upstream = prepare_body(body, uid, device, machine)
     except ValueError:
-        raise HTTPException(400, "Select one linked Trae account with X-Trae-Account-Id and ensure it is logged in") from None
+        raise HTTPException(400, "Set a current Trae account or select one with X-Trae-Account-Id; ensure it is logged in") from None
     except HTTPException:
         raise
     except Exception:

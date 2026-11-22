@@ -8,7 +8,11 @@
 
 Windows 代理无异常记录却自动退出时，使用[独立进程监控](docs/external-process-monitor.md)，在不重启代理的情况下采集 uv/Python 生命周期、退出码、内存、探活和可读取的系统事件。
 
-Trae CN 的实验性 OpenAI 入口包括 `GET /trae/v1/models` 和 `POST /trae/v1/chat/completions`，使用账号管理页已关联的 Trae 账号。只有一个账号时自动选中；有多个时，请通过 `X-Trae-Account-Id` 请求头指定账号 ID，可从本机 `GET /admin/api/trae/accounts` 的 `accounts[].id` 获取。模型列表按账号缓存 6 小时，可用 `GET /trae/v1/models?refresh=true` 强制刷新；响应中的 `source` 与 `stale` 标明来源和是否回退到客户端缓存、过期缓存或内置清单。内置清单可能过时，不保证该账号可用。聊天请求需提供模型名和 `messages`，支持流式与非流式响应；暂不支持 Trae 的 Responses 或 Anthropic 接口。基本文本调用已用真实账号验证，工具调用仅经离线验证。此入口使用 Trae 服务额度，并且与 WorkBuddy 账号切换独立。
+Trae CN 的实验性 OpenAI 入口包括 `GET /trae/v1/models` 和 `POST /trae/v1/chat/completions`，使用账号管理页已关联的 Trae 账号。只有一个账号时自动选中；有多个时，独立 Trae 接口可通过 `X-Trae-Account-Id` 请求头指定账号 ID；统一入口可在管理页按模型配置路由，账号 ID 可从本机 `GET /admin/api/trae/accounts` 的 `accounts[].id` 获取。模型列表按账号缓存 6 小时，可用 `GET /trae/v1/models?refresh=true` 强制刷新；响应中的 `source` 与 `stale` 标明来源和是否回退到客户端缓存、过期缓存或内置清单。内置清单可能过时，不保证该账号可用。聊天请求需提供模型名和 `messages`，支持流式与非流式响应；暂不支持 Trae 的 Responses 或 Anthropic 接口。基本文本调用已用真实账号验证，工具调用仅经离线验证。此入口使用 Trae 服务额度，并且与 WorkBuddy 账号切换独立。
+
+账号管理页可按账号手动查询 WorkBuddy 和 Trae CN 剩余积分及积分包；查询失败或上游未提供可解析额度时显示未知，不当作零积分。
+
+账号管理页的“模型路由”标签按账号实际获取的模型列表配置供应商和账号。`/v1/chat/completions`、`/v1/responses` 和 `/v1/messages` 对已配置模型使用指定账号；未配置模型从实际提供该模型的供应商默认账号中选择，双方都提供时优先 WorkBuddy。没有可用模型清单或路由账号失效时返回错误，失败后不自动切换供应商。
 
 ## ✨ 核心特性
 

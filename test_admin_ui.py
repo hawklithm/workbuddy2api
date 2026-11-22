@@ -143,7 +143,8 @@ function makePageElements() {
     'retry-button', 'manual-auth-link', 'auto-switch-toggle', 'settings-status',
     'auto-checkin-toggle', 'checkin-settings-status', 'sync-status', 'language-select',
     'trae-list', 'trae-message', 'trae-login-status', 'trae-login-link', 'trae-cancel',
-    'trae-auto', 'trae-add', 'trae-refresh'
+    'trae-auto', 'trae-add', 'add-account-button', 'add-account-dialog', 'add-dialog-close', 'add-workbuddy-global',
+    'accounts-tab', 'routing-tab', 'accounts-panel', 'routing-panel', 'routing-refresh', 'routing-status', 'routing-list', 'routing-default-account', 'routing-default-trae'
   ];
   const elements = Object.fromEntries(ids.map((id) => [id, new Element(
     id === 'associate-button' ? 'button' : id === 'language-select' ? 'select' : 'div', id
@@ -151,6 +152,7 @@ function makePageElements() {
   const label = new Element('span');
   label.textContent = '关联所选区域';
   elements['associate-button'].append(label);
+  elements['add-account-dialog'].hidden = true;
   return elements;
 }
 
@@ -289,12 +291,93 @@ function startPage(document, window, fetch, clock = Date) {
 
 async function flush() { await new Promise((resolve) => setImmediate(resolve)); }
 
+async function verifyModelRoutingTab() {
+  const elements = makePageElements(), document = makeDocument(elements), {window} = makeWindow(makeTimers());
+  const writes = [];
+  async function fetch(url, options = {}) {
+    if (url.endsWith('/model-routing') && options.method === 'PUT') {
+      writes.push(JSON.parse(options.body));
+      assert.equal(options.headers.get('X-Account-Manager'), '1');
+      return jsonResponse({routes:{shared:writes[0].target}});
+    }
+    if (url.includes('/model-routing')) return jsonResponse({models:{shared:[
+      {provider:'workbuddy',account_id:'wb',label:'WB user',backend:'domestic'},
+      {provider:'trae',account_id:'tr',label:'Trae user',backend:'trae-cn'}]},routes:{},unavailable_sources:0});
+    if (url.endsWith('/accounts')) return jsonResponse(snapshotFixture([]));
+    if (url.endsWith('/settings')) return jsonResponse(settingsFixture());
+    return jsonResponse({});
+  }
+  let activeTrae = 'tr';
+  fetch.trae = async (url, options = {}) => {
+    if (url.endsWith('/accounts/tr2/activate')) {
+      assert.equal(options.headers.get('X-Account-Manager'), '1');
+      activeTrae = 'tr2'; return jsonResponse({active_account_id:'tr2'});
+    }
+    return jsonResponse({accounts:[{id:'tr',uid:'u1'}, {id:'tr2',uid:'u2'}],active_account_id:activeTrae,auto_checkin_enabled:false});
+  };
+  startPage(document, window, fetch);
+  await flush(); await flush();
+  await elements['routing-tab'].dispatch('click');
+  await flush(); await flush();
+  assert.equal(elements['accounts-panel'].hidden, true);
+  assert.equal(elements['routing-panel'].hidden, false);
+  assert.equal(elements['routing-default-trae'].value, 'tr');
+  elements['routing-default-trae'].value = 'tr2';
+  await elements['routing-default-trae'].dispatch('change');
+  assert.equal(activeTrae, 'tr2');
+  const select = walk(elements['routing-list']).find(node => node.tagName === 'SELECT');
+  assert.ok(select);
+  assert.equal(select.children.length, 3);
+  select.value = JSON.stringify(['trae','tr']);
+  await select.dispatch('change');
+  assert.deepEqual(writes, [{model:'shared',target:{provider:'trae',account_id:'tr'}}]);
+}
+
+async function verifyUnifiedAddDialog() {
+  for (const [choice, expected] of [['associate-button', 'domestic'], ['add-workbuddy-global', 'global'], ['trae-add', 'trae']]) {
+    const elements = makePageElements();
+    const document = makeDocument(elements);
+    const { window, popup } = makeWindow(makeTimers());
+    const opened = [], writes = [];
+    window.open = (...args) => { opened.push(args); return popup; };
+    async function fetch(url, options = {}) {
+      if (url.endsWith('/accounts')) return jsonResponse(snapshotFixture([]));
+      if (url.endsWith('/settings')) return jsonResponse(settingsFixture());
+      if (url.endsWith('/logins') && options.method === 'POST') {
+        writes.push(JSON.parse(options.body));
+        return jsonResponse({id:'job', status:'cancelled'});
+      }
+      return jsonResponse({});
+    }
+    fetch.trae = async (url, options) => {
+      if (url.endsWith('/logins') && options.method === 'POST') {
+        writes.push({provider:'trae'});
+        return jsonResponse({id:'trae-job', status:'cancelled'});
+      }
+      if (url.endsWith('/logins/trae-job')) return jsonResponse({id:'trae-job', status:'cancelled'});
+      return jsonResponse({accounts:[], auto_checkin_enabled:false});
+    };
+    startPage(document, window, fetch);
+    await flush(); await flush();
+    await elements['add-account-button'].dispatch('click');
+    assert.equal(elements['add-account-dialog'].hidden, false);
+    assert.equal(opened.length, 0, 'opening the chooser must not open a sign-in window');
+    await elements[choice].dispatch('click');
+    await flush(); await flush();
+    assert.equal(elements['add-account-dialog'].hidden, true);
+    assert.equal(opened.length, 1);
+    assert.equal(expected === 'trae' ? writes[0].provider : writes[0].backend, expected);
+  }
+}
+
 async function verifyProviderModelLists() {
   const elements = makePageElements();
   const document = makeDocument(elements);
   const { window } = makeWindow(makeTimers());
   const requests = [];
+  let traeCreditUnknown = false;
   async function fetch(url) {
+    if (url.endsWith('/accounts/existing/credits')) return jsonResponse({remaining:12, packages:[{name:'monthly', remaining:12, total:20}]});
     if (url.includes('/accounts/existing/models')) {
       requests.push(url);
       return jsonResponse({models:[{id:'wb-model', display_name:'WB Model'}], catalog:{source:'cached', stale:true}});
@@ -304,6 +387,7 @@ async function verifyProviderModelLists() {
     return jsonResponse({});
   }
   fetch.trae = async (url, options) => {
+    if (url.endsWith('/accounts/trae-1/credits')) return traeCreditUnknown ? jsonResponse({error:'unknown_balance'}, false, 502) : jsonResponse({remaining:8, packages:[{name:'daily', remaining:8, total:10}]});
     if (url.startsWith('/trae/v1/models')) {
       requests.push(url);
       assert.equal(options.headers.get('X-Trae-Account-Id'), 'trae-1');
@@ -315,6 +399,9 @@ async function verifyProviderModelLists() {
   await flush(); await flush();
   assert.equal(requests.length, 0, 'model lists load on demand');
   const workbuddy = findAccountCard(elements, 'existing');
+  await walk(workbuddy).find((node) => node.textContent === '查询积分').dispatch('click');
+  await flush(); await flush();
+  assert.ok(walk(findAccountCard(elements, 'existing')).some((node) => node.textContent === '剩余积分：12'));
   await walk(workbuddy).find((node) => node.textContent === '查看模型').dispatch('click');
   await flush(); await flush();
   assert.ok(walk(findAccountCard(elements, 'existing')).some((node) => node.textContent === 'WB Model (wb-model)'));
@@ -322,6 +409,14 @@ async function verifyProviderModelLists() {
   await walk(elements['trae-list']).find((node) => node.textContent === '查看模型').dispatch('click');
   await flush(); await flush();
   assert.ok(walk(elements['trae-list']).some((node) => node.textContent === 'trae-model'));
+  await walk(elements['trae-list']).find((node) => node.textContent === '查询积分').dispatch('click');
+  await flush(); await flush();
+  assert.ok(walk(elements['trae-list']).some((node) => node.textContent === '剩余积分：8'));
+  traeCreditUnknown = true;
+  await walk(elements['trae-list']).find((node) => node.textContent === '刷新积分').dispatch('click');
+  await flush(); await flush();
+  assert.ok(walk(elements['trae-list']).some((node) => node.textContent.includes('未提供可解析')));
+  assert.ok(!walk(elements['trae-list']).some((node) => node.textContent === '剩余积分：0'));
   await walk(elements['trae-list']).find((node) => node.textContent === '刷新模型').dispatch('click');
   await flush();
   assert.ok(requests.some((url) => url === '/trae/v1/models?refresh=true'));
@@ -337,6 +432,7 @@ async function verifyTraeControlsInitialize() {
   const { window } = makeWindow(timers);
   const writes = [];
   let traeReads = 0;
+  let currentTrae = null;
   async function fetch(url) {
     if (url.endsWith('/accounts')) return jsonResponse(snapshotFixture([]));
     if (url.endsWith('/settings')) return jsonResponse(settingsFixture());
@@ -344,8 +440,9 @@ async function verifyTraeControlsInitialize() {
   }
   fetch.trae = async (url, options) => {
     if (url.endsWith('/settings')) { writes.push(JSON.parse(options.body)); return jsonResponse({auto_checkin_enabled:true}); }
+    if (url.endsWith('/accounts/account-1/activate')) { assert.equal(options.headers.get('X-Account-Manager'), '1'); currentTrae = 'account-1'; return jsonResponse({active_account_id:currentTrae}); }
     traeReads += 1;
-    return jsonResponse({accounts:[{id:'account-1', uid:'uid-1', nickname:'Trae user', checkin:{status:'device_checked'}}], auto_checkin_enabled:false});
+    return jsonResponse({accounts:[{id:'account-1', uid:'uid-1', nickname:'Trae user', checkin:{status:'device_checked'}}], active_account_id:currentTrae, auto_checkin_enabled:false});
   };
   startPage(document, window, fetch);
   await flush(); await flush();
@@ -1264,6 +1361,8 @@ async function verifyAutoCheckinIsBackendOwned() {
 }
 
 (async () => {
+  await verifyModelRoutingTab();
+  await verifyUnifiedAddDialog();
   await verifyProviderModelLists();
   await verifyTraeControlsInitialize();
   await verifyReloginButtons();
@@ -1311,7 +1410,7 @@ def test_admin_inline_script_syntax_and_terminal_controls(tmp_path: Path) -> Non
     )
 
 
-def test_provider_panels_group_their_own_controls():
+def test_unified_account_list_and_provider_dialog():
     class PanelParser(HTMLParser):
         def __init__(self):
             super().__init__()
@@ -1332,7 +1431,10 @@ def test_provider_panels_group_their_own_controls():
 
     parser = PanelParser()
     parser.feed(ADMIN_HTML.read_text(encoding="utf-8"))
-    for control in ("associate-button", "login-progress", "account-list", "auto-switch-toggle", "auto-checkin-toggle"):
-        assert parser.controls[control] == "workbuddy-heading"
-    for control in ("trae-add", "trae-list", "trae-auto"):
-        assert parser.controls[control] == "trae-heading"
+    for control in ("add-account-button", "login-progress", "account-list", "trae-list", "auto-switch-toggle", "auto-checkin-toggle", "trae-auto"):
+        assert parser.controls[control] == "accounts-heading"
+    text = ADMIN_HTML.read_text(encoding="utf-8")
+    assert 'id="add-account-dialog"' in text
+    assert 'role="dialog"' in text
+    for control in ("associate-button", "add-workbuddy-global", "trae-add"):
+        assert f'id="{control}"' in text

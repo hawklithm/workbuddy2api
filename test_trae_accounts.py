@@ -123,6 +123,82 @@ def test_trae_routes_require_local_write_header(manager):
         assert client.patch('/admin/api/trae/settings', headers=headers, json={'auto_checkin_enabled': True}).status_code == 200
         assert client.post('/admin/api/trae/logins', headers={'X-Account-Manager': '1', 'Origin': 'http://evil.test'}, json={}).status_code == 403
 
+
+def test_active_trae_account_persists_and_explicit_selection_wins(manager, tmp_path, monkeypatch):
+    from codebuddy_proxy.trae_accounts import selected_record
+    from codebuddy_proxy.trae_models import selected_record as selected_model_record
+    from codebuddy_proxy.trae_gateway import load_account
+    first = wait_job(manager, manager.start_login())['account_id']
+    assert manager.snapshot()['active_account_id'] == first
+    Flow.uid = 'user-2'
+    second = wait_job(manager, manager.start_login())['account_id']
+    assert manager.snapshot()['active_account_id'] == first
+    manager.activate(second)
+    assert manager.snapshot()['active_account_id'] == second
+    with manager.lock:
+        assert selected_record(manager)['id'] == second
+        assert selected_record(manager, first)['id'] == first
+    assert selected_model_record(manager, None)[0]['id'] == second
+    assert selected_model_record(manager, first)[0]['id'] == first
+    class FakeAuth:
+        def __init__(self, creds_file):
+            uid = json.loads(creds_file.read_text(encoding='utf-8'))['auth']['userId']
+            self.creds = SimpleNamespace(user_id=uid)
+            self.device = SimpleNamespace(device_id='device', machine_id='machine')
+            self.http = SimpleNamespace(close=lambda: None)
+        def load(self): pass
+        def token_valid(self): return True
+        def get_jwt(self): return 'jwt'
+    monkeypatch.setattr('buddy_agent_auth.providers.trae.auth.TraeAuth', FakeAuth)
+    assert load_account(manager, None)[0] == 'user-2'
+    assert load_account(manager, first)[0] == 'user-1'
+    other = TraeAccounts(tmp_path)
+    try:
+        assert other.snapshot()['active_account_id'] == second
+    finally:
+        asyncio.run(other.close())
+    asyncio.run(manager.delete(second))
+    assert manager.snapshot()['active_account_id'] == first
+
+
+def test_trae_activation_requires_marker_and_rejects_unknown(manager):
+    account_id = wait_job(manager, manager.start_login())['account_id']
+    owner = SimpleNamespace(_lock=threading.RLock(), trae_accounts=manager)
+    app = FastAPI()
+    app.include_router(create_admin_router(lambda: owner))
+    with TestClient(app, base_url='http://localhost', client=('127.0.0.1', 1234)) as client:
+        path = f'/admin/api/trae/accounts/{account_id}/activate'
+        assert client.post(path).status_code == 403
+        headers = {'X-Account-Manager': '1', 'Origin': 'http://localhost'}
+        assert client.post(path, headers=headers).json()['active_account_id'] == account_id
+        assert client.post('/admin/api/trae/accounts/missing/activate', headers=headers).status_code == 404
+        assert client.get('/admin/api/trae/accounts').json()['active_account_id'] == account_id
+
+
+def test_trae_credits_are_for_requested_account(manager, monkeypatch):
+    import codebuddy_proxy.account_credits as credits
+    account_id = wait_job(manager, manager.start_login())['account_id']
+    async def fake_credits(selected_manager, selected_id):
+        assert selected_manager is manager and selected_id == account_id
+        return {'remaining': 10, 'packages': []}
+    monkeypatch.setattr(credits, 'trae_credits', fake_credits)
+    owner = SimpleNamespace(_lock=threading.RLock(), trae_accounts=manager)
+    app = FastAPI()
+    app.include_router(create_admin_router(lambda: owner))
+    with TestClient(app, base_url='http://localhost', client=('127.0.0.1', 1234)) as client:
+        assert client.get(f'/admin/api/trae/accounts/{account_id}/credits').json()['remaining'] == 10
+        assert client.get('/admin/api/trae/accounts/unknown/credits').status_code == 404
+        async def unknown(*args):
+            raise credits.CreditsError('unknown_balance')
+        monkeypatch.setattr(credits, 'trae_credits', unknown)
+        response = client.get(f'/admin/api/trae/accounts/{account_id}/credits')
+        assert response.status_code == 502 and response.json() == {'error': 'unknown_balance'}
+        async def private_failure(*args):
+            raise ValueError('private-token')
+        monkeypatch.setattr(credits, 'trae_credits', private_failure)
+        response = client.get(f'/admin/api/trae/accounts/{account_id}/credits')
+        assert response.status_code == 502 and 'private-token' not in response.text
+
 def test_installed_scheduler_loads_independent_account_without_network(manager, tmp_path, monkeypatch):
     monkeypatch.setenv('TRAE2API_HOME', str(tmp_path / 'device-data'))
     account_id = 'a' * 32

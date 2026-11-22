@@ -367,6 +367,39 @@ def create_admin_router(get_manager: Callable[[], AccountManager]) -> APIRouter:
         except Exception as exc:
             _raise_manager_error(exc)
 
+    @router.get("/admin/api/model-routing")
+    async def get_model_routing(request: Request, refresh: bool = False):
+        from codebuddy_proxy.model_routing import ModelRouting, RoutingError, list_candidates
+        manager = get_manager()
+        try:
+            routes = ModelRouting(manager.store.root).read()
+            candidates, failed = await list_candidates(request.app, manager, refresh)
+            return {'routes': routes, 'models': candidates, 'unavailable_sources': failed}
+        except RoutingError:
+            raise HTTPException(503, '模型路由配置损坏') from None
+
+    @router.put("/admin/api/model-routing")
+    async def set_model_routing(request: Request):
+        from codebuddy_proxy.model_routing import ModelRouting, RoutingError, list_candidates
+        _require_write_header(request)
+        payload = await _read_json_object(request, _MAX_SETTINGS_BODY)
+        if set(payload) != {'model', 'target'} or not isinstance(payload['model'], str):
+            raise HTTPException(400, '请求参数无效')
+        model, target = payload['model'], payload['target']
+        manager = get_manager()
+        if target is not None:
+            if (not isinstance(target, dict) or set(target) != {'provider', 'account_id'}
+                    or target.get('provider') not in ('workbuddy', 'trae') or not isinstance(target.get('account_id'), str)):
+                raise HTTPException(400, '请求参数无效')
+            candidates, _ = await list_candidates(request.app, manager)
+            if not any(item['provider'] == target['provider'] and item['account_id'] == target['account_id'] for item in candidates.get(model, [])):
+                raise HTTPException(409, '所选账号的模型列表中没有该模型')
+        try:
+            routes = ModelRouting(manager.store.root).set(model, target)
+            return {'routes': routes}
+        except RoutingError:
+            raise HTTPException(400, '模型路由配置无效') from None
+
     @router.get("/admin/api/accounts/{account_id}/models")
     async def account_models(account_id: str, request: Request, refresh: bool = False) -> dict[str, Any]:
         manager = get_manager()
@@ -379,6 +412,20 @@ def create_admin_router(get_manager: Callable[[], AccountManager]) -> APIRouter:
             raise
         except Exception:
             raise HTTPException(status_code=502, detail="获取模型列表失败") from None
+
+    @router.get("/admin/api/accounts/{account_id}/credits")
+    async def account_credits(account_id: str):
+        from codebuddy_proxy.account_credits import CreditsError, workbuddy_credits
+        manager = get_manager()
+        if not _manager_has_account(manager, account_id):
+            raise HTTPException(status_code=404, detail="未找到该账号")
+        try:
+            client = manager.store.get_client(account_id)
+            return await workbuddy_credits(client)
+        except CreditsError as exc:
+            return JSONResponse({'error': str(exc)}, status_code=502)
+        except Exception:
+            return JSONResponse({'error': 'query_failed'}, status_code=502)
 
     @router.get("/admin/api/settings")
     async def get_settings() -> dict[str, Any]:
@@ -520,6 +567,28 @@ def create_admin_router(get_manager: Callable[[], AccountManager]) -> APIRouter:
             return trae_manager().snapshot()
         except Exception as exc:
             _raise_manager_error(exc)
+
+    @router.post("/admin/api/trae/accounts/{account_id}/activate")
+    async def trae_activate(account_id: str, request: Request):
+        _require_write_header(request)
+        try:
+            return trae_manager().activate(account_id)
+        except Exception as exc:
+            _raise_manager_error(exc)
+
+    @router.get("/admin/api/trae/accounts/{account_id}/credits")
+    async def trae_account_credits(account_id: str):
+        from codebuddy_proxy.account_credits import CreditsError, trae_credits
+        manager = trae_manager()
+        with manager.lock:
+            if not any(record['id'] == account_id for record in manager._records()):
+                raise HTTPException(status_code=404, detail="未找到该账号")
+        try:
+            return await trae_credits(manager, account_id)
+        except CreditsError as exc:
+            return JSONResponse({'error': str(exc)}, status_code=502)
+        except Exception:
+            return JSONResponse({'error': 'query_failed'}, status_code=502)
 
     @router.post("/admin/api/trae/logins", status_code=202)
     async def trae_login(request: Request):

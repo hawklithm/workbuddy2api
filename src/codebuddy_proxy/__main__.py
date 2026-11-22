@@ -1038,7 +1038,46 @@ app.state.admin_workbuddy_models = admin_workbuddy_models
 @app.get("/v1/models")
 async def list_models(refresh: bool = False):
     state = get_request_state()
-    result = await workbuddy_models_for_client(state.client, state.model_catalog, refresh)
+    manager = getattr(state, 'account_runtime', None)
+    root = getattr(getattr(manager, 'store', None), 'root', None)
+    if root is None:
+        result = await workbuddy_models_for_client(state.client, state.model_catalog, refresh)
+    else:
+        from codebuddy_proxy.model_routing import ModelRouting, RoutingError, provider_defaults, list_candidates, automatic_target
+        try:
+            routes = ModelRouting(root).read()
+            defaults = provider_defaults(manager, state.client)
+        except RoutingError:
+            raise HTTPException(503, '模型路由配置损坏') from None
+        except Exception:
+            raise HTTPException(503, '供应商默认账号不可用') from None
+        candidates, failed = await list_candidates(app, manager, refresh, defaults, include_metadata=True)
+        models = []
+        for name, options in candidates.items():
+            target = automatic_target(name, candidates)
+            chosen = next(option for option in options if option['provider'] == target['provider'] and option['account_id'] == target['account_id'])
+            entry = chosen['metadata']
+            if target['provider'] == 'trae':
+                entry = model_to_codex_format({'id': name, 'name': entry.get('display_name') or name,
+                                               'vendor': 'trae', 'max_input': entry.get('context_length')})
+            models.append(entry)
+        result = {'models': models, 'catalog': {'source': 'provider_catalogs', 'unavailable_sources': failed}}
+        known = {model['id']: index for index, model in enumerate(models)}
+        trae = getattr(manager, 'trae_accounts', None)
+        for name, target in routes.items():
+            if target['provider'] == 'workbuddy':
+                exists = manager.has_account(target['account_id'])
+            else:
+                exists = trae is not None and any(a['id'] == target['account_id'] for a in trae.snapshot()['accounts'])
+            if exists:
+                # A shared model name may have different capabilities per provider.
+                # Do not advertise the default account's metadata for a routed account.
+                entry = model_to_codex_format({'id': name, 'name': name, 'vendor': target['provider']})
+                if name in known:
+                    result['models'][known[name]] = entry
+                else:
+                    known[name] = len(result['models'])
+                    result['models'].append(entry)
 
     # 记录模型列表请求
     diagnostic(
@@ -1094,6 +1133,101 @@ app.state.trae_parse_request_body = parse_request_body
 app.state.trae_get_account_manager = get_account_manager
 app.include_router(trae_gateway_router)
 
+
+async def route_model_chat(body, protocol, original=None):
+    """Pin an explicit target or a model-capable provider's default account."""
+    from codebuddy_proxy.model_routing import ModelRouting, RoutingError, provider_defaults, list_candidates, automatic_target
+    state = get_request_state()
+    manager = getattr(state, 'account_runtime', None)
+    root = getattr(getattr(manager, 'store', None), 'root', None)
+    if root is None:
+        return await forward_chat(body, protocol, original=original)
+    try:
+        name = body.get('model')
+        target = ModelRouting(root).read().get(name) if isinstance(name, str) else None
+    except RoutingError:
+        raise HTTPException(503, '模型路由配置损坏') from None
+    if target is None:
+        if not isinstance(name, str) or not name.strip():
+            raise HTTPException(400, '必须指定模型名称')
+        try:
+            defaults = provider_defaults(manager, state.client)
+            if not any(defaults.values()):
+                raise HTTPException(401, detail={'error': {'type': 'authentication_error', 'message': '请先关联供应商账号并设置默认账号'}})
+            candidates, failed = await list_candidates(app, manager, defaults=defaults)
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(503, '无法获取供应商模型列表') from None
+        target = automatic_target(name, candidates)
+        if target is None:
+            if failed:
+                raise HTTPException(503, '供应商模型列表不可用，无法确定模型路由')
+            raise HTTPException(404, '默认供应商账号均未提供该模型，请配置模型路由')
+    account_id = target['account_id']
+    if target['provider'] == 'workbuddy':
+        try:
+            client = manager.store.get_client(account_id)
+        except Exception:
+            raise HTTPException(409, '模型路由指向的 WorkBuddy 账号不可用') from None
+        routed = copy.copy(state)
+        routed._client = client
+        routed.account_manager = None
+        routed.account_runtime = None  # Never fail over to a different configured target.
+        token = _request_state.set(routed)
+        try:
+            return await forward_chat(body, protocol, original=original)
+        finally:
+            _request_state.reset(token)
+    from codebuddy_proxy.trae_gateway import forward_trae
+    accounts = getattr(manager, 'trae_accounts', None)
+    if accounts is None:
+        raise HTTPException(409, '模型路由指向的 Trae 账号不可用')
+    with accounts.lock:
+        if not any(item['id'] == account_id for item in accounts._records()):
+            raise HTTPException(409, '模型路由指向的 Trae 账号不可用')
+    response = await forward_trae(body, accounts, account_id)
+    if protocol == 'openai':
+        return response
+    if isinstance(response, JSONResponse):
+        if response.status_code >= 400:
+            return response
+        data = json.loads(response.body)
+        return JSONResponse(format_nonstream_response(data, protocol, original, lambda: int(time.time())))
+    converter = (ResponsesStreamConverter(model=body.get('model', 'auto'), original=original)
+                 if protocol == 'responses' else AnthropicStreamConverter((original or {}).get('model', 'default')))
+    async def converted_stream():
+        failed = False
+        try:
+            async for raw in response.body_iterator:
+                text = raw.decode('utf-8') if isinstance(raw, bytes) else raw
+                for line in text.splitlines():
+                    if not line.startswith('data:'):
+                        continue
+                    value = line[5:].strip()
+                    if value == '[DONE]':
+                        continue
+                    chunk = json.loads(value)
+                    if 'error' in chunk:
+                        failed = True
+                        error = chunk['error']
+                        events = (converter.fail('upstream_error', str(error.get('message', 'Trae upstream error')))
+                                  if protocol == 'responses' else [('error', {'type': 'error', 'error': {'type': 'api_error', 'message': 'Trae upstream error'}})])
+                    else:
+                        events = converter.feed_chunk(chunk)
+                    for event, data in events:
+                        yield f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                    if failed:
+                        break
+                if failed:
+                    break
+            if not failed:
+                for event, data in converter.finish():
+                    yield f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+        finally:
+            await response.body_iterator.aclose()
+    return StreamingResponse(converted_stream(), media_type='text/event-stream')
+
 # ============================================================================
 # 端点：/v1/chat/completions
 # ============================================================================
@@ -1106,7 +1240,7 @@ async def chat_completions(request: Request):
     log_client_request("POST", "/v1/chat/completions", body)
     diagnostic("request", protocol="openai", **body_summary(body))
     
-    return await forward_chat(body, "openai")
+    return await route_model_chat(body, "openai")
 
 
 # ============================================================================
@@ -1174,7 +1308,7 @@ async def create_response(request: Request):
                       filtered=filtered_names)
     
     diagnostic("request", protocol="responses", **body_summary(chat_body))
-    return await forward_chat(chat_body, "responses", original=body)
+    return await route_model_chat(chat_body, "responses", original=body)
 
 
 # ============================================================================
@@ -1197,7 +1331,7 @@ async def create_message(request: Request):
         raise HTTPException(status_code=422, detail=exc.as_detail()) from exc
     diagnostic("request", protocol="anthropic", **body_summary(chat_body))
     
-    return await forward_chat(chat_body, "anthropic", original=body)
+    return await route_model_chat(chat_body, "anthropic", original=body)
 
 
 # ============================================================================
