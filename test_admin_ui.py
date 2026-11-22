@@ -377,7 +377,7 @@ async function verifyProviderModelLists() {
   const requests = [];
   let traeCreditUnknown = false;
   async function fetch(url) {
-    if (url.endsWith('/accounts/existing/credits')) return jsonResponse({remaining:12, packages:[{name:'monthly', remaining:12, total:20}]});
+    if (url.endsWith('/accounts/existing/credits')) return jsonResponse({remaining:12, packages:[{name:'monthly', remaining:12, total:20}, {name:'wb-used',remaining:0}, {name:'wb-expired',remaining:4,expired:true}]});
     if (url.includes('/accounts/existing/models')) {
       requests.push(url);
       return jsonResponse({models:[{id:'wb-model', display_name:'WB Model'}], catalog:{source:'cached', stale:true}});
@@ -387,7 +387,7 @@ async function verifyProviderModelLists() {
     return jsonResponse({});
   }
   fetch.trae = async (url, options) => {
-    if (url.endsWith('/accounts/trae-1/credits')) return traeCreditUnknown ? jsonResponse({error:'unknown_balance'}, false, 502) : jsonResponse({remaining:8, packages:[{name:'daily', remaining:8, total:10}]});
+    if (url.endsWith('/accounts/trae-1/credits')) return traeCreditUnknown ? jsonResponse({error:'unknown_balance'}, false, 502) : jsonResponse({remaining:8, packages:[{name:'daily', remaining:8, total:10}, {name:'trae-used',remaining:0}, {name:'trae-expired',remaining:3,expire_at:1}]});
     if (url.startsWith('/trae/v1/models')) {
       requests.push(url);
       assert.equal(options.headers.get('X-Trae-Account-Id'), 'trae-1');
@@ -402,6 +402,8 @@ async function verifyProviderModelLists() {
   await walk(workbuddy).find((node) => node.textContent === '查询积分').dispatch('click');
   await flush(); await flush();
   assert.ok(walk(findAccountCard(elements, 'existing')).some((node) => node.textContent === '剩余积分：12'));
+  assert.ok(walk(findAccountCard(elements, 'existing')).some((node) => node.textContent.includes('monthly: 12')));
+  assert.ok(!walk(findAccountCard(elements, 'existing')).some((node) => /wb-used|wb-expired/.test(node.textContent)));
   await walk(workbuddy).find((node) => node.textContent === '查看模型').dispatch('click');
   await flush(); await flush();
   assert.ok(walk(findAccountCard(elements, 'existing')).some((node) => node.textContent === 'WB Model (wb-model)'));
@@ -412,6 +414,8 @@ async function verifyProviderModelLists() {
   await walk(elements['trae-list']).find((node) => node.textContent === '查询积分').dispatch('click');
   await flush(); await flush();
   assert.ok(walk(elements['trae-list']).some((node) => node.textContent === '剩余积分：8'));
+  assert.ok(walk(elements['trae-list']).some((node) => node.textContent.includes('daily: 8')));
+  assert.ok(!walk(elements['trae-list']).some((node) => /trae-used|trae-expired/.test(node.textContent)));
   traeCreditUnknown = true;
   await walk(elements['trae-list']).find((node) => node.textContent === '刷新积分').dispatch('click');
   await flush(); await flush();

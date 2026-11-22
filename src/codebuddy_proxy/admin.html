@@ -1565,14 +1565,14 @@
         if (view.data && view.data.packages.length) {
           const list = document.createElement("ul"); list.className = "provider-model-list";
           for (const item of view.data.packages) {
-            if (!item || typeof item.remaining !== "number") continue;
+            if (!item || typeof item.remaining !== "number" || !Number.isFinite(item.remaining) || item.remaining <= 0 || item.expired ||
+                (typeof item.expire_at === "number" && item.expire_at > 0 && item.expire_at * 1000 <= Date.now())) continue;
             const name = typeof item.name === "string" && item.name ? item.name : t("credits.unnamed");
             const total = typeof item.total === "number" ? ` / ${item.total}` : "";
             const expire = typeof item.expire_at === "number" ? ` · ${new Date(item.expire_at * 1000).toLocaleDateString()}` : "";
-            const expired = item.expired ? ` · ${t("credits.expired")}` : "";
-            list.append(makeText("li", "", `${name}: ${item.remaining}${total}${expire}${expired}`));
+            list.append(makeText("li", "", `${name}: ${item.remaining}${total}${expire}`));
           }
-          panel.append(list);
+          if (list.children.length) panel.append(list);
         }
         return panel;
       }
