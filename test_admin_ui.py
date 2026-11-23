@@ -295,6 +295,16 @@ async function verifyModelRoutingTab() {
   const elements = makePageElements(), document = makeDocument(elements), {window} = makeWindow(makeTimers());
   const writes = [];
   async function fetch(url, options = {}) {
+    if (url.endsWith('/model-routing/auto-assign') && options.method === 'PUT') {
+      writes.push(JSON.parse(options.body));
+      assert.equal(options.headers.get('X-Account-Manager'), '1');
+      return jsonResponse({auto_assign:{shared:true}});
+    }
+    if (url.endsWith('/model-routing/auto-switch') && options.method === 'PUT') {
+      writes.push(JSON.parse(options.body));
+      assert.equal(options.headers.get('X-Account-Manager'), '1');
+      return jsonResponse({auto_switch:{shared:true}});
+    }
     if (url.endsWith('/model-routing') && options.method === 'PUT') {
       writes.push(JSON.parse(options.body));
       assert.equal(options.headers.get('X-Account-Manager'), '1');
@@ -331,6 +341,19 @@ async function verifyModelRoutingTab() {
   select.value = JSON.stringify(['trae','tr']);
   await select.dispatch('change');
   assert.deepEqual(writes, [{model:'shared',target:{provider:'trae',account_id:'tr'}}]);
+  const autoSwitch = walk(elements['routing-list']).find(node => node.tagName === 'INPUT' && node.type === 'checkbox');
+  assert.ok(autoSwitch);
+  assert.equal(autoSwitch.checked, false);
+  autoSwitch.checked = true;
+  await autoSwitch.dispatch('change');
+  assert.deepEqual(writes[1], {model:'shared',enabled:true});
+  assert.equal(walk(elements['routing-list']).find(node => node.tagName === 'INPUT' && node.type === 'checkbox').checked, true);
+  const assign = walk(elements['routing-list']).filter(node => node.tagName === 'INPUT' && node.type === 'checkbox')[1];
+  assert.equal(assign.checked, false);
+  assign.checked = true;
+  await assign.dispatch('change');
+  assert.deepEqual(writes[2], {model:'shared',enabled:true});
+  assert.equal(walk(elements['routing-list']).find(node => node.tagName === 'SELECT').disabled, true);
 }
 
 async function verifyUnifiedAddDialog() {

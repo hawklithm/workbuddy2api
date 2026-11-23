@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from pathlib import Path
 from buddy_agent_auth.providers.codebuddy.account_store import _atomic_json, _root_lock
 
@@ -44,8 +45,110 @@ class ModelRouting:
                 routes.pop(model, None)
             else:
                 routes[model] = {'provider': target['provider'], 'account_id': target['account_id']}
-            _atomic_json(self.path, {'version': 1, 'routes': routes})
+            _atomic_json(self.path, {'version': 1, 'routes': routes, 'auto_switch': self.read_auto_switch(), 'auto_assign': self.read_auto_assign()})
         return routes
+
+    def read_auto_switch(self):
+        with self.lock:
+            self.read()
+            if not self.path.exists():
+                return {}
+            try:
+                value = json.loads(self.path.read_text(encoding='utf-8')).get('auto_switch', {})
+                if not isinstance(value, dict) or any(not isinstance(k, str) or not k.strip() or type(v) is not bool for k, v in value.items()):
+                    raise ValueError()
+                return value
+            except (OSError, ValueError, TypeError):
+                raise RoutingError('模型路由配置损坏') from None
+
+    def set_auto_switch(self, model, enabled):
+        if not isinstance(model, str) or not model.strip() or len(model) > 256 or type(enabled) is not bool:
+            raise RoutingError('模型自动切换配置无效')
+        with self.lock:
+            routes, flags = self.read(), self.read_auto_switch()
+            if enabled:
+                flags[model] = True
+            else:
+                flags.pop(model, None)
+            _atomic_json(self.path, {'version': 1, 'routes': routes, 'auto_switch': flags, 'auto_assign': self.read_auto_assign()})
+            return flags
+
+    def read_auto_assign(self):
+        with self.lock:
+            self.read()
+            if not self.path.exists():
+                return {}
+            try:
+                value = json.loads(self.path.read_text(encoding='utf-8')).get('auto_assign', {})
+                if not isinstance(value, dict) or any(not isinstance(k, str) or not k.strip() or type(v) is not bool for k, v in value.items()):
+                    raise ValueError()
+                return value
+            except (OSError, ValueError, TypeError):
+                raise RoutingError('模型路由配置损坏') from None
+
+    def set_auto_assign(self, model, enabled):
+        if not isinstance(model, str) or not model.strip() or len(model) > 256 or type(enabled) is not bool:
+            raise RoutingError('模型自动分配配置无效')
+        with self.lock:
+            routes, flags = self.read(), self.read_auto_assign()
+            if enabled:
+                flags[model] = True
+            else:
+                flags.pop(model, None)
+            _atomic_json(self.path, {'version': 1, 'routes': routes, 'auto_switch': self.read_auto_switch(), 'auto_assign': flags})
+            return flags
+
+
+class FailoverState:
+    """Process-local model selection and consecutive upstream failures."""
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.models = {}
+
+    @staticmethod
+    def pair(target):
+        return target['provider'], target['account_id']
+
+    def choose(self, root, model, initial, options):
+        key, initial_pair = (str(root), model), self.pair(initial)
+        eligible = {self.pair(option) for option in options}
+        with self.lock:
+            state = self.models.get(key)
+            if state is None or state['initial'] != initial_pair:
+                state = {'initial': initial_pair, 'current': initial_pair, 'failed': set(), 'counts': {}}
+                self.models[key] = state
+            if state['current'] not in eligible and state['current'] != initial_pair:
+                state['current'] = initial_pair
+            provider, account_id = state['current']
+            return {'provider': provider, 'account_id': account_id}
+
+    def record(self, root, model, initial, target, options, outcome):
+        key, pair = (str(root), model), self.pair(target)
+        with self.lock:
+            state = self.models.get(key)
+            if not state or state['initial'] != self.pair(initial) or state['current'] != pair:
+                return
+            if outcome == 'success':
+                state['counts'][pair] = 0
+                return
+            if outcome not in ('quota', 'error'):
+                return
+            state['counts'][pair] = state['counts'].get(pair, 0) + 1
+            if outcome != 'quota' and state['counts'][pair] < 5:
+                return
+            state['failed'].add(pair)
+            for option in options:
+                candidate = self.pair(option)
+                if candidate not in state['failed']:
+                    state['current'] = candidate
+                    break
+
+    def clear(self, root, model):
+        with self.lock:
+            self.models.pop((str(root), model), None)
+
+
+failover_state = FailoverState()
 
 
 def provider_defaults(manager, pinned_client=None):

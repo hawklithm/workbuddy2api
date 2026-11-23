@@ -51,6 +51,7 @@ build/
 !README_zh.md
 !ACCOUNT_MANAGER_PLAN.md
 !ACCOUNT_MANAGER_ACCEPTANCE.md
+!docs/session-account-routing.md
 
 # VS Code 扩展文件
 *.vsix

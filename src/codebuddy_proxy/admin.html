@@ -91,6 +91,8 @@
     .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
     .routing-list { display: grid; gap: 10px; }
     .routing-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 1fr); align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
+    .routing-model-row { grid-template-columns: minmax(0, 1fr) minmax(180px, 1fr) auto auto; }
+    @media (max-width: 640px) { .routing-model-row { grid-template-columns: minmax(0, 1fr); } }
     .routing-row select { width: 100%; min-height: 38px; padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); }
     .panel {
       padding: 24px;
@@ -344,7 +346,7 @@
           "tabs.accounts": "账号管理",
           "tabs.routing": "模型路由",
           "routing.heading": "模型路由",
-          "routing.description": "为模型指定账号；未设置时从提供该模型的默认账号中选择，优先 WorkBuddy，失败不切换。",
+          "routing.description": "为模型指定账号；按会话自动分配需要客户端提供稳定的 session ID。额度受限后自动换号；连续异常换号由自动切换开关控制。",
           "routing.refresh": "刷新模型",
           "routing.loading": "正在获取各账号的模型列表…",
           "routing.default": "自动选择提供该模型的默认账号",
@@ -357,6 +359,9 @@
           "routing.failed": "模型路由读取或保存失败，请重试。",
           "routing.ready": "{count} 个模型；{failed} 个账号的模型来源不可用。",
           "routing.saved": "模型路由已保存。",
+          "routing.autoSwitch": "自动切换账号",
+          "routing.autoAssign": "按会话自动分配",
+          "routing.bindingCount": "{count} 个会话",
           "account.default": "默认账号",
           "unified.heading": "已关联账号",
           "unified.description": "在一个列表中管理 WorkBuddy 和 Trae CN 账号。",
@@ -606,7 +611,7 @@
           "tabs.accounts": "Accounts",
           "tabs.routing": "Model routing",
           "routing.heading": "Model routing",
-          "routing.description": "Choose an account per model. Unset models use a default account offering the model, preferring WorkBuddy without failover.",
+          "routing.description": "Session assignment requires a stable session ID. Quota limits trigger reassignment; the automatic switching setting controls switching after repeated errors.",
           "routing.refresh": "Refresh models",
           "routing.loading": "Loading account model lists…",
           "routing.default": "Automatically select a default account offering this model",
@@ -619,6 +624,9 @@
           "routing.failed": "Could not load or save model routing. Try again.",
           "routing.ready": "{count} models; {failed} account catalogs unavailable.",
           "routing.saved": "Model route saved.",
+          "routing.autoSwitch": "Switch accounts automatically",
+          "routing.autoAssign": "Assign by session",
+          "routing.bindingCount": "{count} sessions",
           "account.default": "Default account",
           "unified.heading": "Linked accounts",
           "unified.description": "Manage WorkBuddy and Trae CN accounts in one list.",
@@ -2301,7 +2309,7 @@
       });
       void refreshTrae();
 
-      const routingView = {loaded: false, models: {}, routes: {}, failed: 0};
+      const routingView = {loaded: false, models: {}, routes: {}, autoSwitch: {}, autoAssign: {}, bindingCounts: {}, failed: 0};
       let routingSaveChain = Promise.resolve();
       const routingList = document.getElementById('routing-list');
       const routingStatus = document.getElementById('routing-status');
@@ -2331,10 +2339,10 @@
         }
         traeDefault.disabled = !traeAccounts || !traeAccounts.length;
         traeDefault.value = traeActiveAccountId || '';
-        const names = [...new Set([...Object.keys(routingView.models), ...Object.keys(routingView.routes)])].sort();
+        const names = [...new Set([...Object.keys(routingView.models), ...Object.keys(routingView.routes), ...Object.keys(routingView.autoSwitch), ...Object.keys(routingView.autoAssign)])].sort();
         routingStatus.textContent = t('routing.ready', {count: names.length, failed: routingView.failed});
         for (const name of names) {
-          const row = document.createElement('div'); row.className = 'routing-row';
+          const row = document.createElement('div'); row.className = 'routing-row routing-model-row';
           row.append(makeText('strong', '', name));
           const select = document.createElement('select'); select.setAttribute('aria-label', name);
           const none = document.createElement('option'); none.value = ''; none.textContent = t('routing.default'); select.append(none);
@@ -2353,6 +2361,7 @@
             item.textContent = `${selected.provider} · ${t('routing.unavailable')}`; select.append(item);
           }
           select.value = selected ? JSON.stringify([selected.provider, selected.account_id]) : '';
+          select.disabled = routingView.autoAssign[name] === true;
           select.addEventListener('change', async () => {
             select.disabled = true;
             try {
@@ -2364,7 +2373,46 @@
               routingView.routes = result.routes; renderRouting(); routingStatus.textContent = t('routing.saved');
             } catch (_) { renderRouting(); routingStatus.textContent = t('routing.failed'); }
           });
-          row.append(select); routingList.append(row);
+          row.append(select);
+          const autoLabel = document.createElement('label');
+          const autoToggle = document.createElement('input'); autoToggle.type = 'checkbox';
+          autoToggle.checked = routingView.autoSwitch[name] === true;
+          autoToggle.setAttribute('aria-label', `${name} ${t('routing.autoSwitch')}`);
+          autoToggle.addEventListener('change', async () => {
+            autoToggle.disabled = true;
+            try {
+              const enabled = autoToggle.checked;
+              const save = () => request('/model-routing/auto-switch', {method:'PUT', write:true, body:{model:name, enabled}});
+              const pending = routingSaveChain.catch(() => {}).then(save);
+              routingSaveChain = pending;
+              const result = await pending;
+              routingView.autoSwitch = result.auto_switch; renderRouting(); routingStatus.textContent = t('routing.saved');
+            } catch (_) { renderRouting(); routingStatus.textContent = t('routing.failed'); }
+          });
+          autoLabel.append(autoToggle, makeText('span', '', t('routing.autoSwitch'))); row.append(autoLabel);
+          const assignLabel = document.createElement('label');
+          const assignToggle = document.createElement('input'); assignToggle.type = 'checkbox';
+          assignToggle.checked = routingView.autoAssign[name] === true;
+          assignToggle.setAttribute('aria-label', `${name} ${t('routing.autoAssign')}`);
+          assignToggle.addEventListener('change', async () => {
+            assignToggle.disabled = true;
+            try {
+              const enabled = assignToggle.checked;
+              const save = () => request('/model-routing/auto-assign', {method:'PUT', write:true, body:{model:name, enabled}});
+              const pending = routingSaveChain.catch(() => {}).then(save);
+              routingSaveChain = pending;
+              const result = await pending;
+              routingView.autoAssign = result.auto_assign; renderRouting(); routingStatus.textContent = t('routing.saved');
+            } catch (_) { renderRouting(); routingStatus.textContent = t('routing.failed'); }
+          });
+          assignLabel.append(assignToggle, makeText('span', '', t('routing.autoAssign'))); row.append(assignLabel); routingList.append(row);
+          if (routingView.autoAssign[name]) {
+            const counts = routingView.bindingCounts[name] || [];
+            for (const option of options) {
+              const count = counts.find(item => item.provider === option.provider && item.account_id === option.account_id)?.count || 0;
+              row.append(makeText('small', '', `${option.label} · ${t('routing.bindingCount', {count})}`));
+            }
+          }
         }
       }
       async function loadRouting(refresh = false) {
@@ -2373,7 +2421,7 @@
         try {
           const data = await request(`/model-routing${refresh ? '?refresh=true' : ''}`);
           if (!data || !data.models || !data.routes) throw new Error('invalid routing');
-          routingView.models = data.models; routingView.routes = data.routes; routingView.failed = data.unavailable_sources || 0; routingView.loaded = true;
+          routingView.models = data.models; routingView.routes = data.routes; routingView.autoSwitch = data.auto_switch || {}; routingView.autoAssign = data.auto_assign || {}; routingView.bindingCounts = data.binding_counts || {}; routingView.failed = data.unavailable_sources || 0; routingView.loaded = true;
           renderRouting();
         } catch (_) { routingStatus.textContent = t('routing.failed'); }
         finally { document.getElementById('routing-refresh').disabled = false; }

@@ -370,17 +370,21 @@ def create_admin_router(get_manager: Callable[[], AccountManager]) -> APIRouter:
     @router.get("/admin/api/model-routing")
     async def get_model_routing(request: Request, refresh: bool = False):
         from codebuddy_proxy.model_routing import ModelRouting, RoutingError, list_candidates
+        from codebuddy_proxy.session_routing import SessionRouting
         manager = get_manager()
         try:
-            routes = ModelRouting(manager.store.root).read()
+            routing = ModelRouting(manager.store.root)
+            routes = routing.read()
             candidates, failed = await list_candidates(request.app, manager, refresh)
-            return {'routes': routes, 'models': candidates, 'unavailable_sources': failed}
+            session_store = SessionRouting(manager.store.root)
+            counts = session_store.binding_counts() if session_store.path.exists() else {}
+            return {'routes': routes, 'auto_switch': routing.read_auto_switch(), 'auto_assign': routing.read_auto_assign(), 'binding_counts': counts, 'models': candidates, 'unavailable_sources': failed}
         except RoutingError:
             raise HTTPException(503, '模型路由配置损坏') from None
 
     @router.put("/admin/api/model-routing")
     async def set_model_routing(request: Request):
-        from codebuddy_proxy.model_routing import ModelRouting, RoutingError, list_candidates
+        from codebuddy_proxy.model_routing import ModelRouting, RoutingError, list_candidates, failover_state
         _require_write_header(request)
         payload = await _read_json_object(request, _MAX_SETTINGS_BODY)
         if set(payload) != {'model', 'target'} or not isinstance(payload['model'], str):
@@ -396,9 +400,44 @@ def create_admin_router(get_manager: Callable[[], AccountManager]) -> APIRouter:
                 raise HTTPException(409, '所选账号的模型列表中没有该模型')
         try:
             routes = ModelRouting(manager.store.root).set(model, target)
+            failover_state.clear(manager.store.root, model)
+            from codebuddy_proxy.session_routing import SessionRouting
+            session_store = SessionRouting(manager.store.root)
+            if session_store.path.exists():
+                session_store.clear_bindings(model)
             return {'routes': routes}
         except RoutingError:
             raise HTTPException(400, '模型路由配置无效') from None
+
+    @router.put('/admin/api/model-routing/auto-switch')
+    async def set_model_auto_switch(request: Request):
+        from codebuddy_proxy.model_routing import ModelRouting, RoutingError, failover_state
+        _require_write_header(request)
+        payload = await _read_json_object(request, _MAX_SETTINGS_BODY)
+        if set(payload) != {'model', 'enabled'} or not isinstance(payload['model'], str) or type(payload['enabled']) is not bool:
+            raise HTTPException(400, '请求参数无效')
+        root = get_manager().store.root
+        try:
+            flags = ModelRouting(root).set_auto_switch(payload['model'], payload['enabled'])
+            failover_state.clear(root, payload['model'])
+            return {'auto_switch': flags}
+        except RoutingError:
+            raise HTTPException(400, '模型自动切换配置无效') from None
+
+    @router.put('/admin/api/model-routing/auto-assign')
+    async def set_model_auto_assign(request: Request):
+        from codebuddy_proxy.model_routing import ModelRouting, RoutingError
+        _require_write_header(request)
+        payload = await _read_json_object(request, _MAX_SETTINGS_BODY)
+        if set(payload) != {'model', 'enabled'} or not isinstance(payload['model'], str) or type(payload['enabled']) is not bool:
+            raise HTTPException(400, '请求参数无效')
+        root = get_manager().store.root
+        try:
+            routing = ModelRouting(root)
+            flags = routing.set_auto_assign(payload['model'], payload['enabled'])
+            return {'auto_assign': flags}
+        except RoutingError:
+            raise HTTPException(400, '模型自动分配配置无效') from None
 
     @router.get("/admin/api/accounts/{account_id}/models")
     async def account_models(account_id: str, request: Request, refresh: bool = False) -> dict[str, Any]:

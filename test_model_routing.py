@@ -21,6 +21,260 @@ def test_persistent_rules_and_corruption(tmp_path):
         store.read()
 
 
+def test_auto_switch_is_per_model_persistent_and_default_off(tmp_path):
+    store = ModelRouting(tmp_path)
+    assert store.read_auto_switch() == {}
+    assert store.read_auto_assign() == {}
+    store.set_auto_assign('shared', True)
+    store.set_auto_switch('shared', True)
+    store.set('shared', {'provider': 'trae', 'account_id': 'a'})
+    assert ModelRouting(tmp_path).read_auto_switch() == {'shared': True}
+    assert ModelRouting(tmp_path).read_auto_assign() == {'shared': True}
+    store.set('shared', None)
+    assert store.read_auto_switch() == {'shared': True}
+    store.set_auto_switch('shared', False)
+    assert store.read_auto_switch() == {}
+
+
+def test_session_bindings_survive_restart_and_quota_switch(tmp_path):
+    from codebuddy_proxy.session_routing import SessionRouting, SessionRoutingError
+    first = {'provider':'workbuddy', 'account_id':'w'}
+    second = {'provider':'trae', 'account_id':'t'}
+    store = SessionRouting(tmp_path)
+    assert store.resolve('s1', 'm', [first, second]) == first
+    assert store.resolve('s2', 'm', [first, second]) == second
+    assert SessionRouting(tmp_path).resolve('s1', 'm', [first, second]) == first
+    store.record('m', first, 'quota', False)
+    assert store.resolve('s1', 'm', [first, second]) == second
+    assert store.resolve('s2', 'm', [first, second]) == second
+    store.record('m', second, 'quota', False)
+    with pytest.raises(SessionRoutingError, match='没有可用'):
+        store.resolve('s1', 'm', [first, second])
+
+
+def test_session_allocation_concurrent_requests_are_sticky(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from codebuddy_proxy.session_routing import SessionRouting
+    options = [{'provider':'workbuddy','account_id':'a'}, {'provider':'trae','account_id':'b'}]
+    def resolve(_): return SessionRouting(tmp_path).resolve('same', 'm', options)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(resolve, range(16)))
+    assert all(value == results[0] for value in results)
+
+
+def test_stale_success_does_not_clear_cooldown_or_restore_binding(tmp_path, monkeypatch):
+    from codebuddy_proxy.session_routing import SessionRouting
+    import codebuddy_proxy.session_routing as session_routing
+    clock = [10000.0]
+    monkeypatch.setattr(session_routing.time, 'time', lambda: clock[0])
+    store = SessionRouting(tmp_path)
+    a, b = {'provider':'workbuddy','account_id':'a'}, {'provider':'trae','account_id':'b'}
+    assert store.resolve('s', 'm', [a,b]) == a
+    store.record('m', a, 'quota', False)
+    store.record('m', a, 'success', False)
+    assert store.resolve('s', 'm', [a,b]) == b
+    clock[0] += 3601
+    assert store.resolve('s', 'm', [a,b]) == b
+
+
+def test_error_switch_requires_five_consecutive_failures_and_opt_in(tmp_path):
+    from codebuddy_proxy.session_routing import SessionRouting
+    store = SessionRouting(tmp_path)
+    a, b = {'provider':'workbuddy','account_id':'a'}, {'provider':'trae','account_id':'b'}
+    assert store.resolve('s', 'm', [a,b]) == a
+    for _ in range(6): store.record('m', a, 'error', False)
+    assert store.resolve('s', 'm', [a,b]) == a
+    for _ in range(4): store.record('m', a, 'error', True)
+    store.record('m', a, 'success', True)
+    for _ in range(4): store.record('m', a, 'error', True)
+    assert store.resolve('s', 'm', [a,b]) == a
+    store.record('m', a, 'error', True)
+    assert store.resolve('s', 'm', [a,b]) == b
+
+
+def test_catalog_failure_preserves_known_bound_account(tmp_path):
+    from codebuddy_proxy.session_routing import SessionRouting
+    store = SessionRouting(tmp_path)
+    a, b = {'provider':'workbuddy','account_id':'a'}, {'provider':'trae','account_id':'b'}
+    assert store.resolve('s', 'm', [a,b]) == a
+    assert store.resolve('s', 'm', [b], True, {('workbuddy','a'), ('trae','b')}) == a
+    assert store.resolve('s', 'm', [b], True, {('trae','b')}) == b
+
+
+def test_concurrent_reassignment_converges_on_one_binding(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from codebuddy_proxy.session_routing import SessionRouting
+    store = SessionRouting(tmp_path)
+    options = [{'provider':'workbuddy','account_id':'a'}, {'provider':'trae','account_id':'b'}, {'provider':'trae','account_id':'c'}]
+    old = store.resolve('same', 'm', options)
+    store.record('m', old, 'quota', False)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _: SessionRouting(tmp_path).resolve('same', 'm', options), range(16)))
+    assert all(value == results[0] for value in results)
+    assert results[0] != old
+
+
+def test_session_auto_assign_requires_explicit_id():
+    from codebuddy_proxy.session_routing import session_key, SessionRoutingError
+    assert session_key({'session_id':'a'}, {}) == session_key({}, {'x-session-id':'a'})
+    assert session_key({'session_id':'a'}, {}) == session_key({}, {'x-deepseek-harness-session-id':'a'})
+    with pytest.raises(SessionRoutingError):
+        session_key({'messages':[{'role':'user','content':'hello'}]}, {})
+
+
+def test_session_auto_assign_routes_independent_sessions_and_switches(tmp_path, monkeypatch):
+    from fastapi.responses import JSONResponse
+    import codebuddy_proxy.__main__ as proxy
+    import codebuddy_proxy.model_routing as routing
+    import codebuddy_proxy.trae_gateway as gateway
+    first = {'provider':'workbuddy','account_id':'w'}
+    second = {'provider':'trae','account_id':'t'}
+    ModelRouting(tmp_path).set_auto_assign('m', True)
+    manager = SimpleNamespace(store=SimpleNamespace(root=tmp_path, get_client=lambda value: value),
+        trae_accounts=SimpleNamespace(lock=threading.RLock(), _records=lambda: [{'id':'t'}]))
+    async def candidates(*args, **kwargs): return {'m':[first, second]}, 0
+    limit = [False]
+    async def wb(*args, **kwargs):
+        if limit[0]: return JSONResponse({'error':{'type':'insufficient_quota'}}, status_code=429)
+        return JSONResponse({'selected':'workbuddy'})
+    async def trae(*args): return JSONResponse({'selected':'trae'})
+    monkeypatch.setattr(routing, 'list_candidates', candidates)
+    monkeypatch.setattr(proxy, 'forward_chat', wb)
+    monkeypatch.setattr(gateway, 'forward_trae', trae)
+    async def run():
+        token = proxy._request_state.set(SimpleNamespace(account_runtime=manager, inbound_headers={}))
+        try:
+            async def request(session): return await proxy.route_model_chat({'model':'m','session_id':session}, 'openai')
+            assert json.loads((await request('a')).body)['selected'] == 'workbuddy'
+            assert json.loads((await request('b')).body)['selected'] == 'trae'
+            assert json.loads((await request('a')).body)['selected'] == 'workbuddy'
+            limit[0] = True
+            assert (await request('a')).status_code == 429
+            assert json.loads((await request('a')).body)['selected'] == 'trae'
+            assert json.loads((await request('b')).body)['selected'] == 'trae'
+        finally:
+            proxy._request_state.reset(token)
+    asyncio.run(run())
+
+
+def test_session_auto_assign_observes_stream_errors(tmp_path):
+    from fastapi.responses import StreamingResponse
+    from codebuddy_proxy.model_failover import observe_response
+    from codebuddy_proxy.session_routing import SessionRouting
+    store = SessionRouting(tmp_path)
+    a, b = {'provider':'trae','account_id':'a'}, {'provider':'workbuddy','account_id':'b'}
+    assert store.resolve('s', 'm', [a]) == a
+    async def run():
+        async def stream():
+            yield 'data: {"error":{"code":4008}}\n\n'
+        response = observe_response(StreamingResponse(stream()), tmp_path, 'm', a, a, [a,b],
+                                    recorder=lambda outcome: store.record('m', a, outcome, False))
+        assert '4008' in ''.join([chunk async for chunk in response.body_iterator])
+        assert store.resolve('s', 'm', [a,b]) == b
+    asyncio.run(run())
+
+
+def test_failover_counts_consecutive_errors_and_filters_candidates(tmp_path):
+    from codebuddy_proxy.model_routing import FailoverState
+    state = FailoverState()
+    first = {'provider': 'workbuddy', 'account_id': 'a'}
+    second = {'provider': 'trae', 'account_id': 'b'}
+    options = [first, second]
+    assert state.choose(tmp_path, 'shared', first, options) == first
+    for _ in range(4):
+        state.record(tmp_path, 'shared', first, first, options, 'error')
+    state.record(tmp_path, 'shared', first, first, options, 'success')
+    for _ in range(4):
+        state.record(tmp_path, 'shared', first, first, options, 'error')
+    assert state.choose(tmp_path, 'shared', first, options) == first
+    state.record(tmp_path, 'shared', first, first, options, 'error')
+    assert state.choose(tmp_path, 'shared', first, options) == second
+    assert state.choose(tmp_path, 'other-model', first, [first]) == first
+
+
+def test_failover_observes_stream_quota_without_replay(tmp_path):
+    from fastapi.responses import StreamingResponse
+    from codebuddy_proxy.model_failover import observe_response
+    from codebuddy_proxy.model_routing import failover_state
+    first = {'provider': 'trae', 'account_id': 'a'}
+    second = {'provider': 'workbuddy', 'account_id': 'b'}
+    options = [first, second]
+    failover_state.choose(tmp_path, 'm', first, options)
+    async def run():
+        async def chunks():
+            yield 'data: {"choices":[]}\n\n'
+            yield 'data: {"error":{"code":4008}}\n\n'
+            yield 'data: [DONE]\n\n'
+        response = observe_response(StreamingResponse(chunks()), tmp_path, 'm', first, first, options)
+        result = ''.join([chunk async for chunk in response.body_iterator])
+        assert '4008' in result
+        assert failover_state.choose(tmp_path, 'm', first, options) == second
+    asyncio.run(run())
+
+
+def test_enabled_model_switches_only_after_five_errors(tmp_path, monkeypatch):
+    from fastapi.responses import JSONResponse
+    import codebuddy_proxy.__main__ as proxy
+    import codebuddy_proxy.model_routing as routing
+    import codebuddy_proxy.trae_gateway as gateway
+    first = {'provider':'workbuddy', 'account_id':'w'}
+    second = {'provider':'trae', 'account_id':'t'}
+    ModelRouting(tmp_path).set('m', first)
+    ModelRouting(tmp_path).set_auto_switch('m', True)
+    manager = SimpleNamespace(store=SimpleNamespace(root=tmp_path, get_client=lambda account_id: account_id),
+                              trae_accounts=SimpleNamespace(lock=threading.RLock(), _records=lambda: [{'id':'t'}]))
+    async def candidates(app, manager, **kwargs): return {'m':[first, second]}, 0
+    async def wb(*args, **kwargs): return JSONResponse({'error': {'message':'server failure'}}, status_code=502)
+    async def trae(*args): return JSONResponse({'selected':'trae'})
+    monkeypatch.setattr(routing, 'list_candidates', candidates)
+    monkeypatch.setattr(proxy, 'forward_chat', wb)
+    monkeypatch.setattr(gateway, 'forward_trae', trae)
+    async def run():
+        token = proxy._request_state.set(SimpleNamespace(account_runtime=manager))
+        try:
+            for _ in range(5):
+                assert (await proxy.route_model_chat({'model':'m'}, 'openai')).status_code == 502
+            result = await proxy.route_model_chat({'model':'m'}, 'openai')
+            assert json.loads(result.body)['selected'] == 'trae'
+        finally:
+            proxy._request_state.reset(token)
+    asyncio.run(run())
+
+
+def test_trae_stream_quota_switches_next_responses_request(tmp_path, monkeypatch):
+    from fastapi.responses import JSONResponse, StreamingResponse
+    import codebuddy_proxy.__main__ as proxy
+    import codebuddy_proxy.model_routing as routing
+    import codebuddy_proxy.trae_gateway as gateway
+    first = {'provider':'trae', 'account_id':'t'}
+    second = {'provider':'workbuddy', 'account_id':'w'}
+    ModelRouting(tmp_path).set('m', first)
+    ModelRouting(tmp_path).set_auto_switch('m', True)
+    manager = SimpleNamespace(store=SimpleNamespace(root=tmp_path, get_client=lambda account_id: account_id),
+                              trae_accounts=SimpleNamespace(lock=threading.RLock(), _records=lambda: [{'id':'t'}]))
+    async def candidates(app, manager, **kwargs): return {'m':[first, second]}, 0
+    async def trae(*args):
+        async def generate():
+            yield 'data: {"error":{"code":4008,"message":"limit"}}\n\n'
+            yield 'data: [DONE]\n\n'
+        return StreamingResponse(generate())
+    async def wb(*args, **kwargs): return JSONResponse({'selected':'workbuddy'})
+    monkeypatch.setattr(routing, 'list_candidates', candidates)
+    monkeypatch.setattr(proxy, 'forward_chat', wb)
+    monkeypatch.setattr(gateway, 'forward_trae', trae)
+    async def run():
+        token = proxy._request_state.set(SimpleNamespace(account_runtime=manager))
+        try:
+            first_result = await proxy.route_model_chat({'model':'m', 'messages':[], 'stream':True}, 'responses', original={'model':'m'})
+            output = ''.join([part async for part in first_result.body_iterator])
+            assert 'response.failed' in output
+            next_result = await proxy.route_model_chat({'model':'m'}, 'openai')
+            assert json.loads(next_result.body)['selected'] == 'workbuddy'
+        finally:
+            proxy._request_state.reset(token)
+    asyncio.run(run())
+
+
 def test_candidates_match_exact_model_and_exclude_static(tmp_path, monkeypatch):
     import codebuddy_proxy.trae_models as trae_models
     class Store:
@@ -133,6 +387,13 @@ def test_admin_only_accepts_offered_account_model_pair(tmp_path, monkeypatch):
         assert client.put('/admin/api/model-routing', headers=headers, json={'model':'shared','target':{'provider':'trae','account_id':'wrong'}}).status_code == 409
         assert client.put('/admin/api/model-routing', headers=headers, json={'model':'shared','target':{'provider':'trae','account_id':'t'}}).status_code == 200
         assert client.get('/admin/api/model-routing').json()['routes']['shared']['account_id'] == 't'
+        assert client.put('/admin/api/model-routing/auto-switch', json={'model':'shared','enabled':True}).status_code == 403
+        assert client.put('/admin/api/model-routing/auto-switch', headers=headers, json={'model':'shared','enabled':True}).json()['auto_switch'] == {'shared':True}
+        assert client.get('/admin/api/model-routing').json()['auto_switch'] == {'shared':True}
+        assert client.put('/admin/api/model-routing/auto-switch', headers=headers, json={'model':'shared','enabled':'yes'}).status_code == 400
+        assert client.put('/admin/api/model-routing/auto-assign', json={'model':'shared','enabled':True}).status_code == 403
+        assert client.put('/admin/api/model-routing/auto-assign', headers=headers, json={'model':'shared','enabled':True}).json()['auto_assign'] == {'shared':True}
+        assert client.get('/admin/api/model-routing').json()['auto_assign'] == {'shared':True}
 
 
 @pytest.mark.parametrize('protocol,finish_event', [('responses', 'response.completed'), ('anthropic', 'message_stop')])

@@ -1136,7 +1136,9 @@ app.include_router(trae_gateway_router)
 
 async def route_model_chat(body, protocol, original=None):
     """Pin an explicit target or a model-capable provider's default account."""
-    from codebuddy_proxy.model_routing import ModelRouting, RoutingError, provider_defaults, list_candidates, automatic_target
+    from codebuddy_proxy.model_routing import ModelRouting, RoutingError, provider_defaults, list_candidates, automatic_target, failover_state
+    from codebuddy_proxy.model_failover import observe_response, error_outcome
+    from codebuddy_proxy.session_routing import SessionRouting, SessionRoutingError, session_key
     state = get_request_state()
     manager = getattr(state, 'account_runtime', None)
     root = getattr(getattr(manager, 'store', None), 'root', None)
@@ -1144,9 +1146,27 @@ async def route_model_chat(body, protocol, original=None):
         return await forward_chat(body, protocol, original=original)
     try:
         name = body.get('model')
-        target = ModelRouting(root).read().get(name) if isinstance(name, str) else None
+        routing = ModelRouting(root)
+        target = routing.read().get(name) if isinstance(name, str) else None
+        auto_switch = routing.read_auto_switch().get(name, False) if isinstance(name, str) else False
+        auto_assign = routing.read_auto_assign().get(name, False) if isinstance(name, str) else False
     except RoutingError:
         raise HTTPException(503, '模型路由配置损坏') from None
+    if auto_assign:
+        try:
+            session = session_key(original if isinstance(original, dict) else body, getattr(state, 'inbound_headers', {}))
+            all_candidates, failed = await list_candidates(app, manager)
+            options = all_candidates.get(name, [])
+            known = {('workbuddy', item['id']) for item in manager.store.list_accounts()} if failed else None
+            trae_accounts = getattr(manager, 'trae_accounts', None)
+            if failed and trae_accounts is not None:
+                known.update(('trae', item['id']) for item in trae_accounts.snapshot()['accounts'])
+            session_routes = SessionRouting(root)
+            target = await asyncio.to_thread(session_routes.resolve, session, name, options, bool(failed), known)
+        except SessionRoutingError as exc:
+            raise HTTPException(409, str(exc)) from None
+        except Exception:
+            raise HTTPException(503, '无法分配会话账号或获取模型列表') from None
     if target is None:
         if not isinstance(name, str) or not name.strip():
             raise HTTPException(400, '必须指定模型名称')
@@ -1164,7 +1184,26 @@ async def route_model_chat(body, protocol, original=None):
             if failed:
                 raise HTTPException(503, '供应商模型列表不可用，无法确定模型路由')
             raise HTTPException(404, '默认供应商账号均未提供该模型，请配置模型路由')
+    initial = target
+    if not auto_assign:
+        options = []
+    if auto_switch and not auto_assign:
+        try:
+            all_candidates, _ = await list_candidates(app, manager)
+            options = all_candidates.get(name, [])
+            target = failover_state.choose(root, name, initial, options)
+        except Exception:
+            # Keep the configured target when catalogs are unavailable.
+            auto_switch = False
     account_id = target['account_id']
+    def record_outcome(outcome):
+        try:
+            if auto_assign:
+                session_routes.record(name, target, outcome, auto_switch)
+            elif auto_switch:
+                failover_state.record(root, name, initial, target, options, outcome)
+        except Exception:
+            logging.getLogger(__name__).warning('Failed to record account availability', exc_info=True)
     if target['provider'] == 'workbuddy':
         try:
             client = manager.store.get_client(account_id)
@@ -1176,7 +1215,14 @@ async def route_model_chat(body, protocol, original=None):
         routed.account_runtime = None  # Never fail over to a different configured target.
         token = _request_state.set(routed)
         try:
-            return await forward_chat(body, protocol, original=original)
+            try:
+                response = await forward_chat(body, protocol, original=original)
+            except HTTPException as exc:
+                if (auto_switch or auto_assign) and (exc.status_code in (401, 403, 429) or exc.status_code >= 500):
+                    detail = exc.detail.get('error', exc.detail) if isinstance(exc.detail, dict) else {}
+                    record_outcome(error_outcome(detail, target['provider']))
+                raise
+            return observe_response(response, root, name, initial, target, options, recorder=record_outcome) if (auto_switch or auto_assign) else response
         finally:
             _request_state.reset(token)
     from codebuddy_proxy.trae_gateway import forward_trae
@@ -1186,7 +1232,15 @@ async def route_model_chat(body, protocol, original=None):
     with accounts.lock:
         if not any(item['id'] == account_id for item in accounts._records()):
             raise HTTPException(409, '模型路由指向的 Trae 账号不可用')
-    response = await forward_trae(body, accounts, account_id)
+    try:
+        response = await forward_trae(body, accounts, account_id)
+    except HTTPException as exc:
+        if (auto_switch or auto_assign) and (exc.status_code in (401, 403, 429) or exc.status_code >= 500):
+            detail = exc.detail.get('error', exc.detail) if isinstance(exc.detail, dict) else {}
+            record_outcome(error_outcome(detail, target['provider']))
+        raise
+    if auto_switch or auto_assign:
+        response = observe_response(response, root, name, initial, target, options, recorder=record_outcome)
     if protocol == 'openai':
         return response
     if isinstance(response, JSONResponse):

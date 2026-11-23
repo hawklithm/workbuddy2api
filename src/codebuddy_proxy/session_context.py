@@ -10,7 +10,7 @@ import json
 import uuid
 from typing import Any, Mapping
 
-SESSION_HEADERS = ("x-claude-code-session-id", "x-session-id", "x-conversation-id")
+SESSION_HEADERS = ("x-claude-code-session-id", "x-deepseek-harness-session-id", "x-session-id", "x-conversation-id")
 CORRELATION_HEADERS = SESSION_HEADERS + ("x-conversation-request-id", "x-trace-id")
 SESSION_ID_HEADERS = frozenset(CORRELATION_HEADERS)
 
