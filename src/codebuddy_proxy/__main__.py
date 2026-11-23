@@ -351,8 +351,17 @@ async def start_account_checkin() -> None:
             manager = proxy_state.account_manager
             if getattr(manager, "trae_accounts", None) is None:
                 manager.trae_accounts = TraeAccounts(manager.store.root)
+            configure = getattr(manager.trae_accounts, "configure_logging", None)
+            if callable(configure):
+                configure(proxy_state.log_checkin)
             await manager.trae_accounts.start()
-        except Exception:
+        except Exception as exc:
+            try:
+                from daily_checkin.trae_diagnostics import safe_error_fields
+                proxy_state.log_checkin("trae_checkin_failure", brand="trae_cn", stage="host_start",
+                                        reason="startup", **safe_error_fields(exc))
+            except Exception:
+                pass
             logging.getLogger(__name__).warning("Trae account automation could not start")
 
 
