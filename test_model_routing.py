@@ -92,13 +92,75 @@ def test_error_switch_requires_five_consecutive_failures_and_opt_in(tmp_path):
     assert store.resolve('s', 'm', [a,b]) == b
 
 
-def test_catalog_failure_preserves_known_bound_account(tmp_path):
-    from codebuddy_proxy.session_routing import SessionRouting
+def test_catalog_failure_does_not_route_unconfirmed_bound_account(tmp_path):
+    from codebuddy_proxy.session_routing import SessionRouting, SessionRoutingError
     store = SessionRouting(tmp_path)
     a, b = {'provider':'workbuddy','account_id':'a'}, {'provider':'trae','account_id':'b'}
     assert store.resolve('s', 'm', [a,b]) == a
-    assert store.resolve('s', 'm', [b], True, {('workbuddy','a'), ('trae','b')}) == a
+    with pytest.raises(SessionRoutingError, match='无法确认'):
+        store.resolve('s', 'm', [b], True, {('workbuddy','a'), ('trae','b')})
     assert store.resolve('s', 'm', [b], True, {('trae','b')}) == b
+
+
+def test_failure_failover_respects_excluded_and_supported_accounts(tmp_path, monkeypatch):
+    from fastapi.responses import JSONResponse
+    import codebuddy_proxy.__main__ as proxy
+    import codebuddy_proxy.model_routing as routing
+    import codebuddy_proxy.trae_gateway as gateway
+    from codebuddy_proxy.session_routing import SessionRouting
+    a = {'provider':'workbuddy', 'account_id':'a'}
+    excluded = {'provider':'workbuddy', 'account_id':'b'}
+    permitted = {'provider':'trae', 'account_id':'t'}
+    options = [a, excluded, permitted]  # Unsupported accounts never enter the model catalog.
+    ModelRouting(tmp_path).set_auto_assign('m', True)
+    ModelRouting(tmp_path).set_auto_switch('m', True)
+    SessionRouting(tmp_path).set_assignment_excluded('m', 'workbuddy', 'b', True)
+    manager = SimpleNamespace(store=SimpleNamespace(root=tmp_path, get_client=lambda value: value),
+                              trae_accounts=SimpleNamespace(lock=threading.RLock(), _records=lambda: [{'id':'t'}]))
+    async def candidates(*args, **kwargs): return {'m': options}, 0
+    async def wb(*args, **kwargs):
+        assert proxy.get_request_state()._client == 'a'
+        return JSONResponse({'error': {'message':'unavailable'}}, status_code=502)
+    async def trae(body, accounts, account_id): return JSONResponse({'selected':account_id})
+    monkeypatch.setattr(routing, 'list_candidates', candidates)
+    monkeypatch.setattr(proxy, 'forward_chat', wb)
+    monkeypatch.setattr(gateway, 'forward_trae', trae)
+    async def run():
+        token = proxy._request_state.set(SimpleNamespace(account_runtime=manager, inbound_headers={}))
+        try:
+            for _ in range(5):
+                assert (await proxy.route_model_chat({'model':'m','session_id':'s'}, 'openai')).status_code == 502
+            result = await proxy.route_model_chat({'model':'m','session_id':'s'}, 'openai')
+            assert json.loads(result.body)['selected'] == 't'
+        finally:
+            proxy._request_state.reset(token)
+    asyncio.run(run())
+
+
+def test_assignment_exclusions_apply_to_existing_and_new_sessions(tmp_path):
+    from codebuddy_proxy.session_routing import SessionRouting, SessionRoutingError
+    store = SessionRouting(tmp_path)
+    a, b = {'provider':'workbuddy','account_id':'a'}, {'provider':'trae','account_id':'b'}
+    assert store.resolve('existing', 'm', [a, b]) == a
+    store.set_assignment_excluded('m', 'workbuddy', 'a', True)
+    assert SessionRouting(tmp_path).assignment_exclusions() == {'m':[a]}
+    assert store.resolve('existing', 'm', [a, b]) == b
+    assert store.resolve('new', 'm', [a, b]) == b
+    assert store.resolve('other-model', 'other', [a, b]) == a
+    store.set_assignment_excluded('m', 'trae', 'b', True)
+    with pytest.raises(SessionRoutingError, match='没有可用'):
+        store.resolve('existing', 'm', [a, b], True, {('workbuddy','a'), ('trae','b')})
+    store.set_assignment_excluded('m', 'workbuddy', 'a', False)
+    assert store.resolve('existing', 'm', [a, b]) == a
+
+
+def test_excluded_bound_account_is_not_reused_during_catalog_failure(tmp_path):
+    from codebuddy_proxy.session_routing import SessionRouting
+    store = SessionRouting(tmp_path)
+    a, b = {'provider':'workbuddy','account_id':'a'}, {'provider':'trae','account_id':'b'}
+    assert store.resolve('s', 'm', [a, b]) == a
+    store.set_assignment_excluded('m', 'workbuddy', 'a', True)
+    assert store.resolve('s', 'm', [b], True, {('workbuddy','a'), ('trae','b')}) == b
 
 
 def test_concurrent_reassignment_converges_on_one_binding(tmp_path):
@@ -379,7 +441,8 @@ def test_admin_only_accepts_offered_account_model_pair(tmp_path, monkeypatch):
     async def candidates(app, manager, refresh=False):
         return {'shared':[{'provider':'trae','account_id':'t'}]}, 0
     monkeypatch.setattr(routing, 'list_candidates', candidates)
-    manager = SimpleNamespace(store=SimpleNamespace(root=tmp_path))
+    manager = SimpleNamespace(store=SimpleNamespace(root=tmp_path, list_accounts=lambda: []),
+                              trae_accounts=SimpleNamespace(snapshot=lambda: {'accounts':[{'id':'t'}]}))
     app = FastAPI(); app.include_router(create_admin_router(lambda: manager))
     headers = {'X-Account-Manager':'1', 'Origin':'http://localhost'}
     with TestClient(app, base_url='http://localhost', client=('127.0.0.1', 1234)) as client:
@@ -394,6 +457,12 @@ def test_admin_only_accepts_offered_account_model_pair(tmp_path, monkeypatch):
         assert client.put('/admin/api/model-routing/auto-assign', json={'model':'shared','enabled':True}).status_code == 403
         assert client.put('/admin/api/model-routing/auto-assign', headers=headers, json={'model':'shared','enabled':True}).json()['auto_assign'] == {'shared':True}
         assert client.get('/admin/api/model-routing').json()['auto_assign'] == {'shared':True}
+        payload = {'model':'shared', 'provider':'trae', 'account_id':'t', 'enabled':False}
+        assert client.put('/admin/api/model-routing/assignment-account', json=payload).status_code == 403
+        assert client.put('/admin/api/model-routing/assignment-account', headers=headers, json={**payload, 'account_id':'wrong'}).status_code == 409
+        assert client.put('/admin/api/model-routing/assignment-account', headers=headers, json=payload).json()['assignment_exclusions'] == {'shared':[{'provider':'trae','account_id':'t'}]}
+        assert client.get('/admin/api/model-routing').json()['assignment_exclusions'] == {'shared':[{'provider':'trae','account_id':'t'}]}
+        assert client.put('/admin/api/model-routing/assignment-account', headers=headers, json={**payload, 'enabled':True}).json()['assignment_exclusions'] == {}
 
 
 @pytest.mark.parametrize('protocol,finish_event', [('responses', 'response.completed'), ('anthropic', 'message_stop')])

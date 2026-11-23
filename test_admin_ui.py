@@ -295,6 +295,11 @@ async function verifyModelRoutingTab() {
   const elements = makePageElements(), document = makeDocument(elements), {window} = makeWindow(makeTimers());
   const writes = [];
   async function fetch(url, options = {}) {
+    if (url.endsWith('/model-routing/assignment-account') && options.method === 'PUT') {
+      writes.push(JSON.parse(options.body));
+      assert.equal(options.headers.get('X-Account-Manager'), '1');
+      return jsonResponse({assignment_exclusions:{shared:[{provider:'workbuddy',account_id:'wb'}]}});
+    }
     if (url.endsWith('/model-routing/auto-assign') && options.method === 'PUT') {
       writes.push(JSON.parse(options.body));
       assert.equal(options.headers.get('X-Account-Manager'), '1');
@@ -354,6 +359,19 @@ async function verifyModelRoutingTab() {
   await assign.dispatch('change');
   assert.deepEqual(writes[2], {model:'shared',enabled:true});
   assert.equal(walk(elements['routing-list']).find(node => node.tagName === 'SELECT').disabled, true);
+  const choose = walk(elements['routing-list']).find(node => node.textContent === '选择分配账号');
+  assert.ok(choose);
+  await choose.dispatch('click');
+  let accountChecks = walk(elements['routing-list']).filter(node => node.tagName === 'INPUT' && node.type === 'checkbox').slice(2);
+  assert.equal(accountChecks.length, 2);
+  assert.ok(accountChecks.every(node => node.checked));
+  assert.ok(!walk(elements['routing-list']).some(node => node.textContent.includes('Trae CN · u2')));
+  accountChecks[0].checked = false;
+  await accountChecks[0].dispatch('change');
+  assert.deepEqual(writes[3], {model:'shared',provider:'workbuddy',account_id:'wb',enabled:false});
+  accountChecks = walk(elements['routing-list']).filter(node => node.tagName === 'INPUT' && node.type === 'checkbox').slice(2);
+  assert.equal(accountChecks[0].checked, false);
+  assert.equal(accountChecks[1].checked, true);
 }
 
 async function verifyUnifiedAddDialog() {

@@ -92,6 +92,7 @@
     .routing-list { display: grid; gap: 10px; }
     .routing-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 1fr); align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
     .routing-model-row { grid-template-columns: minmax(0, 1fr) minmax(180px, 1fr) auto auto; }
+    .assignment-accounts { grid-column: 1 / -1; display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; }
     @media (max-width: 640px) { .routing-model-row { grid-template-columns: minmax(0, 1fr); } }
     .routing-row select { width: 100%; min-height: 38px; padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); }
     .panel {
@@ -361,6 +362,10 @@
           "routing.saved": "模型路由已保存。",
           "routing.autoSwitch": "自动切换账号",
           "routing.autoAssign": "按会话自动分配",
+          "routing.chooseAccounts": "选择分配账号",
+          "routing.hideAccounts": "收起分配账号",
+          "routing.assignmentEmpty": "暂无已确认支持该模型的账号，请刷新模型列表。",
+          "routing.assignmentHelp": "仅确认提供此模型的勾选账号会参与分配；取消后，已绑定会话在下次请求时重新分配。",
           "routing.bindingCount": "{count} 个会话",
           "account.default": "默认账号",
           "unified.heading": "已关联账号",
@@ -626,6 +631,10 @@
           "routing.saved": "Model route saved.",
           "routing.autoSwitch": "Switch accounts automatically",
           "routing.autoAssign": "Assign by session",
+          "routing.chooseAccounts": "Choose accounts",
+          "routing.hideAccounts": "Hide accounts",
+          "routing.assignmentEmpty": "No accounts are confirmed to offer this model. Refresh the model list.",
+          "routing.assignmentHelp": "Only checked accounts confirmed to offer this model are eligible. Existing sessions are reassigned on their next request after exclusion.",
           "routing.bindingCount": "{count} sessions",
           "account.default": "Default account",
           "unified.heading": "Linked accounts",
@@ -2309,7 +2318,7 @@
       });
       void refreshTrae();
 
-      const routingView = {loaded: false, models: {}, routes: {}, autoSwitch: {}, autoAssign: {}, bindingCounts: {}, failed: 0};
+      const routingView = {loaded: false, models: {}, routes: {}, autoSwitch: {}, autoAssign: {}, exclusions: {}, bindingCounts: {}, expanded: null, failed: 0};
       let routingSaveChain = Promise.resolve();
       const routingList = document.getElementById('routing-list');
       const routingStatus = document.getElementById('routing-status');
@@ -2407,6 +2416,38 @@
           });
           assignLabel.append(assignToggle, makeText('span', '', t('routing.autoAssign'))); row.append(assignLabel); routingList.append(row);
           if (routingView.autoAssign[name]) {
+            const choose = makeButton(t(routingView.expanded === name ? 'routing.hideAccounts' : 'routing.chooseAccounts'), 'button small', () => {
+              routingView.expanded = routingView.expanded === name ? null : name;
+              renderRouting();
+            });
+            choose.setAttribute('aria-expanded', routingView.expanded === name ? 'true' : 'false');
+            row.append(choose);
+            if (routingView.expanded === name) {
+              const accounts = document.createElement('div'); accounts.className = 'assignment-accounts';
+              accounts.append(makeText('p', '', t('routing.assignmentHelp')));
+              if (!options.length) accounts.append(makeText('p', '', t('routing.assignmentEmpty')));
+              const excluded = routingView.exclusions[name] || [];
+              for (const option of options) {
+                const label = document.createElement('label');
+                const toggle = document.createElement('input'); toggle.type = 'checkbox';
+                toggle.checked = !excluded.some(item => item.provider === option.provider && item.account_id === option.account_id);
+                const provider = option.provider === 'trae' ? 'Trae CN' : option.backend === 'global' ? 'WorkBuddy Global' : 'WorkBuddy CN';
+                toggle.setAttribute('aria-label', `${name} ${provider} ${option.label}`);
+                toggle.addEventListener('change', async () => {
+                  toggle.disabled = true;
+                  try {
+                    const enabled = toggle.checked;
+                    const save = () => request('/model-routing/assignment-account', {method:'PUT', write:true, body:{model:name, provider:option.provider, account_id:option.account_id, enabled}});
+                    const pending = routingSaveChain.catch(() => {}).then(save);
+                    routingSaveChain = pending;
+                    const result = await pending;
+                    routingView.exclusions = result.assignment_exclusions; renderRouting(); routingStatus.textContent = t('routing.saved');
+                  } catch (_) { renderRouting(); routingStatus.textContent = t('routing.failed'); }
+                });
+                label.append(toggle, makeText('span', '', `${provider} · ${option.label}`)); accounts.append(label);
+              }
+              row.append(accounts);
+            }
             const counts = routingView.bindingCounts[name] || [];
             for (const option of options) {
               const count = counts.find(item => item.provider === option.provider && item.account_id === option.account_id)?.count || 0;
@@ -2421,7 +2462,7 @@
         try {
           const data = await request(`/model-routing${refresh ? '?refresh=true' : ''}`);
           if (!data || !data.models || !data.routes) throw new Error('invalid routing');
-          routingView.models = data.models; routingView.routes = data.routes; routingView.autoSwitch = data.auto_switch || {}; routingView.autoAssign = data.auto_assign || {}; routingView.bindingCounts = data.binding_counts || {}; routingView.failed = data.unavailable_sources || 0; routingView.loaded = true;
+          routingView.models = data.models; routingView.routes = data.routes; routingView.autoSwitch = data.auto_switch || {}; routingView.autoAssign = data.auto_assign || {}; routingView.exclusions = data.assignment_exclusions || {}; routingView.bindingCounts = data.binding_counts || {}; routingView.failed = data.unavailable_sources || 0; routingView.loaded = true;
           renderRouting();
         } catch (_) { routingStatus.textContent = t('routing.failed'); }
         finally { document.getElementById('routing-refresh').disabled = false; }

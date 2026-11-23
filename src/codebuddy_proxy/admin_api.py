@@ -378,7 +378,8 @@ def create_admin_router(get_manager: Callable[[], AccountManager]) -> APIRouter:
             candidates, failed = await list_candidates(request.app, manager, refresh)
             session_store = SessionRouting(manager.store.root)
             counts = session_store.binding_counts() if session_store.path.exists() else {}
-            return {'routes': routes, 'auto_switch': routing.read_auto_switch(), 'auto_assign': routing.read_auto_assign(), 'binding_counts': counts, 'models': candidates, 'unavailable_sources': failed}
+            exclusions = session_store.assignment_exclusions() if session_store.path.exists() else {}
+            return {'routes': routes, 'auto_switch': routing.read_auto_switch(), 'auto_assign': routing.read_auto_assign(), 'assignment_exclusions': exclusions, 'binding_counts': counts, 'models': candidates, 'unavailable_sources': failed}
         except RoutingError:
             raise HTTPException(503, '模型路由配置损坏') from None
 
@@ -438,6 +439,27 @@ def create_admin_router(get_manager: Callable[[], AccountManager]) -> APIRouter:
             return {'auto_assign': flags}
         except RoutingError:
             raise HTTPException(400, '模型自动分配配置无效') from None
+
+    @router.put('/admin/api/model-routing/assignment-account')
+    async def set_assignment_account(request: Request):
+        from codebuddy_proxy.model_routing import list_candidates
+        from codebuddy_proxy.session_routing import SessionRouting
+        _require_write_header(request)
+        payload = await _read_json_object(request, _MAX_SETTINGS_BODY)
+        if (set(payload) != {'model', 'provider', 'account_id', 'enabled'}
+                or not isinstance(payload['model'], str) or not payload['model'].strip() or len(payload['model']) > 256
+                or payload['provider'] not in ('workbuddy', 'trae')
+                or not isinstance(payload['account_id'], str) or not payload['account_id']
+                or type(payload['enabled']) is not bool):
+            raise HTTPException(400, '请求参数无效')
+        manager = get_manager()
+        candidates, _ = await list_candidates(request.app, manager)
+        if not any(item['provider'] == payload['provider'] and item['account_id'] == payload['account_id']
+                   for item in candidates.get(payload['model'], [])):
+            raise HTTPException(409, '未确认该账号支持此模型')
+        store = SessionRouting(manager.store.root)
+        store.set_assignment_excluded(payload['model'], payload['provider'], payload['account_id'], not payload['enabled'])
+        return {'assignment_exclusions': store.assignment_exclusions()}
 
     @router.get("/admin/api/accounts/{account_id}/models")
     async def account_models(account_id: str, request: Request, refresh: bool = False) -> dict[str, Any]:

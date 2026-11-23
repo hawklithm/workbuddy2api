@@ -35,6 +35,7 @@ class SessionRouting:
         db.execute('PRAGMA busy_timeout=10000')
         db.execute('CREATE TABLE IF NOT EXISTS bindings (session TEXT NOT NULL, model TEXT NOT NULL, provider TEXT NOT NULL, account TEXT NOT NULL, updated REAL NOT NULL, PRIMARY KEY(session,model))')
         db.execute('CREATE TABLE IF NOT EXISTS availability (model TEXT NOT NULL, provider TEXT NOT NULL, account TEXT NOT NULL, failures INTEGER NOT NULL DEFAULT 0, blocked_until REAL NOT NULL DEFAULT 0, reason TEXT, PRIMARY KEY(model,provider,account))')
+        db.execute('CREATE TABLE IF NOT EXISTS assignment_exclusions (model TEXT NOT NULL, provider TEXT NOT NULL, account TEXT NOT NULL, PRIMARY KEY(model,provider,account))')
         return db
 
     def resolve(self, session, model, options, catalog_incomplete=False, known_accounts=None):
@@ -46,11 +47,16 @@ class SessionRouting:
             db.execute('DELETE FROM bindings WHERE updated<?', (now - INACTIVE_BINDING_SECONDS,))
             row = db.execute('SELECT provider,account FROM bindings WHERE session=? AND model=?', (session, model)).fetchone()
             blocked = {tuple(r) for r in db.execute('SELECT provider,account FROM availability WHERE model=? AND blocked_until>?', (model, now))}
-            if row and row not in blocked and (row in eligible or (catalog_incomplete and known_accounts is not None and row in known_accounts)):
+            excluded = {tuple(r) for r in db.execute('SELECT provider,account FROM assignment_exclusions WHERE model=?', (model,))}
+            if row and row not in blocked and row not in excluded and row in eligible:
                 db.execute('UPDATE bindings SET updated=? WHERE session=? AND model=?', (now, session, model))
                 db.commit()
                 return {'provider': row[0], 'account_id': row[1]}
-            candidates = eligible - blocked
+            if (row and row not in blocked and row not in excluded and catalog_incomplete
+                    and known_accounts is not None and row in known_accounts):
+                db.rollback()
+                raise SessionRoutingError('当前绑定账号的模型列表不可用，无法确认是否支持该模型')
+            candidates = eligible - blocked - excluded
             if not candidates:
                 db.rollback()
                 raise SessionRoutingError('该模型没有可用的候选账号')
@@ -103,5 +109,27 @@ class SessionRouting:
             for model, provider, account, count in db.execute('SELECT model,provider,account,COUNT(*) FROM bindings GROUP BY model,provider,account'):
                 result.setdefault(model, []).append({'provider': provider, 'account_id': account, 'count': count})
             return result
+        finally:
+            db.close()
+
+    def assignment_exclusions(self):
+        db = self.connect()
+        try:
+            result = {}
+            for model, provider, account in db.execute('SELECT model,provider,account FROM assignment_exclusions'):
+                result.setdefault(model, []).append({'provider': provider, 'account_id': account})
+            return result
+        finally:
+            db.close()
+
+    def set_assignment_excluded(self, model, provider, account, excluded):
+        db = self.connect()
+        try:
+            db.execute('BEGIN IMMEDIATE')
+            if excluded:
+                db.execute('INSERT OR IGNORE INTO assignment_exclusions(model,provider,account) VALUES(?,?,?)', (model, provider, account))
+            else:
+                db.execute('DELETE FROM assignment_exclusions WHERE model=? AND provider=? AND account=?', (model, provider, account))
+            db.commit()
         finally:
             db.close()
