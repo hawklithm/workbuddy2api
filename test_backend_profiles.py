@@ -107,7 +107,7 @@ def test_session_profiles_are_isolated_and_saved_with_metadata(tmp_path):
     )
     saved = json.loads(saved_file.read_text(encoding="utf-8"))
     assert saved["backend"] == "global"
-    assert saved["endpoint"] == "https://www.codebuddy.ai"
+    assert saved["endpoint"] == "https://www.workbuddy.ai"
     assert saved["machineId"] == "machine-1"
     if os.name == "posix":
         assert stat.S_IMODE(saved_file.stat().st_mode) == 0o600
@@ -206,7 +206,7 @@ def test_refresh_preserves_session_metadata_and_machine_id(tmp_path, monkeypatch
     assert client.refresh() is True
     saved = json.loads(session_file.read_text(encoding="utf-8"))
     assert saved["backend"] == "global"
-    assert saved["endpoint"] == "https://www.codebuddy.ai"
+    assert saved["endpoint"] == "https://www.workbuddy.ai"
     assert saved["machineId"] == "machine-1"
     assert saved["account"] == {"uid": "u1"}
 
@@ -224,7 +224,7 @@ def test_domain_header_prefers_token_and_falls_back_to_resolved_authority(tmp_pa
         backend=resolve_backend(profile=GLOBAL_PROFILE, session_file=tmp_path / "global.json")
     )
     global_client.session = {"auth": {"accessToken": "token"}}
-    assert global_client.auth_headers()["X-Domain"] == "www.codebuddy.ai"
+    assert global_client.auth_headers()["X-Domain"] == "www.workbuddy.ai"
 
     port_client = CodeBuddyClient(
         endpoint="https://example.com:8443", session_file=tmp_path / "port.json"

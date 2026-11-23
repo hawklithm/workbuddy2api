@@ -8,7 +8,6 @@ import math
 import re
 import time
 import unicodedata
-from datetime import date as calendar_date
 from importlib import resources
 from typing import Any, Callable
 from urllib.parse import urlsplit
@@ -17,6 +16,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.routing import APIRoute
 from fastapi.exceptions import RequestValidationError
+
+from daily_checkin.workbuddy_api import safe_checkin as _safe_checkin
 
 from codebuddy_proxy.account_manager import (
     AccountManager,
@@ -39,19 +40,7 @@ _PUBLIC_ACCOUNT_FIELDS = (
     "checkin",
 )
 _PUBLIC_JOB_FIELDS = ("id", "backend", "status", "auth_url", "error", "account_id")
-_CHECKIN_STATUSES = frozenset(
-    {"unknown", "unchecked", "checked", "checking", "signing", "error"}
-)
-_SAFE_CHECKIN_ERRORS = frozenset(
-    {
-        "签到活动未开放",
-        "签到状态查询失败",
-        "签到请求失败",
-        "签到结果未确认",
-        "账号不存在",
-    }
-)
-_CHECKIN_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
 
 
 class _NoStoreRoute(APIRoute):
@@ -296,46 +285,6 @@ def _safe_settings(value: Any) -> dict[str, Any]:
     }
 
 
-def _safe_checkin(value: Any) -> dict[str, Any]:
-    """Return only the stable, non-sensitive check-in response fields."""
-
-    if not isinstance(value, dict):
-        value = {}
-    raw_date = value.get("date")
-    checkin_date = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 8 * 60 * 60))
-    if isinstance(raw_date, str) and _CHECKIN_DATE_RE.fullmatch(raw_date):
-        try:
-            calendar_date.fromisoformat(raw_date)
-            checkin_date = raw_date
-        except ValueError:
-            pass
-    status = value.get("status")
-    if not isinstance(status, str) or status not in _CHECKIN_STATUSES:
-        status = "error"
-    error = value.get("error")
-    if not isinstance(error, str) or error not in _SAFE_CHECKIN_ERRORS:
-        error = "签到状态查询失败" if status == "error" else None
-    return {
-        "date": checkin_date,
-        "status": status,
-        "checked": value.get("checked") if type(value.get("checked")) is bool else None,
-        "last_checked_at": (
-            float(value["last_checked_at"])
-            if _finite_number(value.get("last_checked_at"))
-            else None
-        ),
-        "last_checkin_at": (
-            float(value["last_checkin_at"])
-            if _finite_number(value.get("last_checkin_at"))
-            else None
-        ),
-        "error": error,
-        "next_checkin_at": (
-            float(value["next_checkin_at"])
-            if _finite_number(value.get("next_checkin_at"))
-            else None
-        ),
-    }
 
 
 class _DuplicateJSONKey(ValueError):
@@ -417,6 +366,127 @@ def create_admin_router(get_manager: Callable[[], AccountManager]) -> APIRouter:
             return _safe_snapshot(get_manager().snapshot())
         except Exception as exc:
             _raise_manager_error(exc)
+
+    @router.get("/admin/api/model-routing")
+    async def get_model_routing(request: Request, refresh: bool = False):
+        from codebuddy_proxy.model_routing import ModelRouting, RoutingError, list_candidates
+        from codebuddy_proxy.session_routing import SessionRouting
+        manager = get_manager()
+        try:
+            routing = ModelRouting(manager.store.root)
+            routes = routing.read()
+            candidates, failed = await list_candidates(request.app, manager, refresh)
+            session_store = SessionRouting(manager.store.root)
+            counts = session_store.binding_counts() if session_store.path.exists() else {}
+            exclusions = session_store.assignment_exclusions() if session_store.path.exists() else {}
+            return {'routes': routes, 'auto_switch': routing.read_auto_switch(), 'auto_assign': routing.read_auto_assign(), 'assignment_exclusions': exclusions, 'binding_counts': counts, 'models': candidates, 'unavailable_sources': failed}
+        except RoutingError:
+            raise HTTPException(503, '模型路由配置损坏') from None
+
+    @router.put("/admin/api/model-routing")
+    async def set_model_routing(request: Request):
+        from codebuddy_proxy.model_routing import ModelRouting, RoutingError, list_candidates, failover_state
+        _require_write_header(request)
+        payload = await _read_json_object(request, _MAX_SETTINGS_BODY)
+        if set(payload) != {'model', 'target'} or not isinstance(payload['model'], str):
+            raise HTTPException(400, '请求参数无效')
+        model, target = payload['model'], payload['target']
+        manager = get_manager()
+        if target is not None:
+            if (not isinstance(target, dict) or set(target) != {'provider', 'account_id'}
+                    or target.get('provider') not in ('workbuddy', 'trae') or not isinstance(target.get('account_id'), str)):
+                raise HTTPException(400, '请求参数无效')
+            candidates, _ = await list_candidates(request.app, manager)
+            if not any(item['provider'] == target['provider'] and item['account_id'] == target['account_id'] for item in candidates.get(model, [])):
+                raise HTTPException(409, '所选账号的模型列表中没有该模型')
+        try:
+            routes = ModelRouting(manager.store.root).set(model, target)
+            failover_state.clear(manager.store.root, model)
+            from codebuddy_proxy.session_routing import SessionRouting
+            session_store = SessionRouting(manager.store.root)
+            if session_store.path.exists():
+                session_store.clear_bindings(model)
+            return {'routes': routes}
+        except RoutingError:
+            raise HTTPException(400, '模型路由配置无效') from None
+
+    @router.put('/admin/api/model-routing/auto-switch')
+    async def set_model_auto_switch(request: Request):
+        from codebuddy_proxy.model_routing import ModelRouting, RoutingError, failover_state
+        _require_write_header(request)
+        payload = await _read_json_object(request, _MAX_SETTINGS_BODY)
+        if set(payload) != {'model', 'enabled'} or not isinstance(payload['model'], str) or type(payload['enabled']) is not bool:
+            raise HTTPException(400, '请求参数无效')
+        root = get_manager().store.root
+        try:
+            flags = ModelRouting(root).set_auto_switch(payload['model'], payload['enabled'])
+            failover_state.clear(root, payload['model'])
+            return {'auto_switch': flags}
+        except RoutingError:
+            raise HTTPException(400, '模型自动切换配置无效') from None
+
+    @router.put('/admin/api/model-routing/auto-assign')
+    async def set_model_auto_assign(request: Request):
+        from codebuddy_proxy.model_routing import ModelRouting, RoutingError
+        _require_write_header(request)
+        payload = await _read_json_object(request, _MAX_SETTINGS_BODY)
+        if set(payload) != {'model', 'enabled'} or not isinstance(payload['model'], str) or type(payload['enabled']) is not bool:
+            raise HTTPException(400, '请求参数无效')
+        root = get_manager().store.root
+        try:
+            routing = ModelRouting(root)
+            flags = routing.set_auto_assign(payload['model'], payload['enabled'])
+            return {'auto_assign': flags}
+        except RoutingError:
+            raise HTTPException(400, '模型自动分配配置无效') from None
+
+    @router.put('/admin/api/model-routing/assignment-account')
+    async def set_assignment_account(request: Request):
+        from codebuddy_proxy.model_routing import list_candidates
+        from codebuddy_proxy.session_routing import SessionRouting
+        _require_write_header(request)
+        payload = await _read_json_object(request, _MAX_SETTINGS_BODY)
+        if (set(payload) != {'model', 'provider', 'account_id', 'enabled'}
+                or not isinstance(payload['model'], str) or not payload['model'].strip() or len(payload['model']) > 256
+                or payload['provider'] not in ('workbuddy', 'trae')
+                or not isinstance(payload['account_id'], str) or not payload['account_id']
+                or type(payload['enabled']) is not bool):
+            raise HTTPException(400, '请求参数无效')
+        manager = get_manager()
+        candidates, _ = await list_candidates(request.app, manager)
+        if not any(item['provider'] == payload['provider'] and item['account_id'] == payload['account_id']
+                   for item in candidates.get(payload['model'], [])):
+            raise HTTPException(409, '未确认该账号支持此模型')
+        store = SessionRouting(manager.store.root)
+        store.set_assignment_excluded(payload['model'], payload['provider'], payload['account_id'], not payload['enabled'])
+        return {'assignment_exclusions': store.assignment_exclusions()}
+
+    @router.get("/admin/api/accounts/{account_id}/models")
+    async def account_models(account_id: str, request: Request, refresh: bool = False) -> dict[str, Any]:
+        manager = get_manager()
+        if not _manager_has_account(manager, account_id):
+            raise HTTPException(status_code=404, detail="未找到该账号")
+        try:
+            client = manager.store.get_client(account_id)
+            return await request.app.state.admin_workbuddy_models(client, refresh)
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=502, detail="获取模型列表失败") from None
+
+    @router.get("/admin/api/accounts/{account_id}/credits")
+    async def account_credits(account_id: str):
+        from codebuddy_proxy.account_credits import CreditsError, workbuddy_credits
+        manager = get_manager()
+        if not _manager_has_account(manager, account_id):
+            raise HTTPException(status_code=404, detail="未找到该账号")
+        try:
+            client = manager.store.get_client(account_id)
+            return await workbuddy_credits(client)
+        except CreditsError as exc:
+            return JSONResponse({'error': str(exc)}, status_code=502)
+        except Exception:
+            return JSONResponse({'error': 'query_failed'}, status_code=502)
 
     @router.get("/admin/api/settings")
     async def get_settings() -> dict[str, Any]:
@@ -515,8 +585,14 @@ def create_admin_router(get_manager: Callable[[], AccountManager]) -> APIRouter:
             raise HTTPException(status_code=400, detail="请求 JSON 无效") from None
         if not isinstance(payload, dict) or not isinstance(payload.get("backend"), str):
             raise HTTPException(status_code=400, detail="backend 必须为 domestic 或 global")
+        account_id = payload.get("account_id")
+        if account_id is not None and (not isinstance(account_id, str) or not account_id):
+            raise HTTPException(status_code=400, detail="account_id 无效")
         try:
-            job = _safe_job(get_manager().start_login(payload["backend"]))
+            if account_id is None:
+                job = _safe_job(get_manager().start_login(payload["backend"]))
+            else:
+                job = _safe_job(get_manager().start_login(payload["backend"], account_id=account_id))
             return JSONResponse(job, status_code=202)
         except Exception as exc:
             _raise_manager_error(exc)
@@ -533,6 +609,110 @@ def create_admin_router(get_manager: Callable[[], AccountManager]) -> APIRouter:
         _require_write_header(request)
         try:
             return _safe_job(get_manager().cancel_login(job_id))
+        except Exception as exc:
+            _raise_manager_error(exc)
+
+    def trae_manager():
+        manager = get_manager()
+        with manager._lock:
+            result = getattr(manager, "trae_accounts", None)
+            if result is None:
+                from codebuddy_proxy.trae_accounts import TraeAccounts
+                result = TraeAccounts(manager.store.root)
+                manager.trae_accounts = result
+            return result
+
+    @router.get("/admin/api/trae/accounts")
+    async def trae_list():
+        try:
+            return trae_manager().snapshot()
+        except Exception as exc:
+            _raise_manager_error(exc)
+
+    @router.post("/admin/api/trae/accounts/{account_id}/activate")
+    async def trae_activate(account_id: str, request: Request):
+        _require_write_header(request)
+        try:
+            return trae_manager().activate(account_id)
+        except Exception as exc:
+            _raise_manager_error(exc)
+
+    @router.get("/admin/api/trae/accounts/{account_id}/credits")
+    async def trae_account_credits(account_id: str):
+        from codebuddy_proxy.account_credits import CreditsError, trae_credits
+        manager = trae_manager()
+        with manager.lock:
+            if not any(record['id'] == account_id for record in manager._records()):
+                raise HTTPException(status_code=404, detail="未找到该账号")
+        try:
+            return await trae_credits(manager, account_id)
+        except CreditsError as exc:
+            return JSONResponse({'error': str(exc)}, status_code=502)
+        except Exception:
+            return JSONResponse({'error': 'query_failed'}, status_code=502)
+
+    @router.post("/admin/api/trae/logins", status_code=202)
+    async def trae_login(request: Request):
+        _require_write_header(request)
+        payload = await _read_json_object(request, _MAX_LOGIN_BODY)
+        if set(payload) - {"account_id"} or ("account_id" in payload and (not isinstance(payload["account_id"], str) or not payload["account_id"])):
+            raise HTTPException(status_code=400, detail="请求参数无效")
+        try:
+            return trae_manager().start_login(payload.get("account_id"))
+        except Exception as exc:
+            _raise_manager_error(exc)
+
+    @router.get("/admin/api/trae/logins/{job_id}")
+    async def trae_login_status(job_id: str):
+        try:
+            manager = trae_manager()
+            job = manager.job(job_id)
+            if job["status"] == "succeeded":
+                await manager.ensure_scheduled(job["account_id"])
+            return job
+        except Exception as exc:
+            _raise_manager_error(exc)
+
+    @router.delete("/admin/api/trae/logins/{job_id}")
+    async def trae_cancel_login(job_id: str, request: Request):
+        _require_write_header(request)
+        try:
+            return trae_manager().job(job_id, cancel=True)
+        except Exception as exc:
+            _raise_manager_error(exc)
+
+    @router.delete("/admin/api/trae/accounts/{account_id}")
+    async def trae_delete(account_id: str, request: Request):
+        _require_write_header(request)
+        try:
+            await trae_manager().delete(account_id)
+            return {"ok": True}
+        except Exception as exc:
+            _raise_manager_error(exc)
+
+    @router.get("/admin/api/trae/accounts/{account_id}/checkin-status")
+    async def trae_status(account_id: str):
+        try:
+            return await trae_manager().checkin(account_id)
+        except Exception as exc:
+            _raise_manager_error(exc)
+
+    @router.post("/admin/api/trae/accounts/{account_id}/checkin")
+    async def trae_claim(account_id: str, request: Request):
+        _require_write_header(request)
+        try:
+            return await trae_manager().checkin(account_id, claim=True)
+        except Exception as exc:
+            _raise_manager_error(exc)
+
+    @router.patch("/admin/api/trae/settings")
+    async def trae_settings(request: Request):
+        _require_write_header(request)
+        payload = await _read_json_object(request, _MAX_SETTINGS_BODY)
+        if set(payload) != {"auto_checkin_enabled"} or type(payload["auto_checkin_enabled"]) is not bool:
+            raise HTTPException(status_code=400, detail="请求参数无效")
+        try:
+            return await trae_manager().set_auto(payload["auto_checkin_enabled"])
         except Exception as exc:
             _raise_manager_error(exc)
 

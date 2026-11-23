@@ -664,7 +664,7 @@ def test_disable_during_status_get_prevents_automatic_post():
 
         service = AccountCheckinService(manager, requester=requester)
         task = asyncio.create_task(
-            service._automatic_checkin("acct-a", "2026-10-24", "startup")
+            service._automatic_checkin("acct-a", service._today(), "startup")
         )
         await wait_event(get_started)
         manager.settings["auto_checkin_enabled"] = False

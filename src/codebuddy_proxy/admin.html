@@ -78,6 +78,23 @@
     h1 { margin: 0; font-size: clamp(29px, 5vw, 42px); line-height: 1.15; letter-spacing: -.035em; }
     .lead { max-width: 630px; margin: 12px 0 0; color: var(--muted); font-size: 15px; line-height: 1.7; }
     .layout { display: grid; gap: 18px; }
+    .unified-account-list { display: grid; gap: 11px; margin-top: 18px; }
+    .trae-login-feedback:not(:empty) { margin-top: 12px; }
+    .modal-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 20px; background: rgb(10 16 32 / 55%); }
+    .modal-card { width: min(100%, 480px); padding: 24px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); }
+    .modal-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+    .modal-close { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 26px; line-height: 1; }
+    .provider-options { display: grid; gap: 10px; margin-top: 22px; }
+    .provider-option { display: grid; gap: 4px; width: 100%; padding: 15px 16px; text-align: left; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); color: var(--text); cursor: pointer; font-weight: 700; }
+    .provider-option:hover, .provider-option:focus-visible { border-color: var(--accent); outline-color: var(--accent); }
+    .provider-option small { color: var(--muted); font-size: 12px; font-weight: 400; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+    .routing-list { display: grid; gap: 10px; }
+    .routing-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 1fr); align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
+    .routing-model-row { grid-template-columns: minmax(0, 1fr) minmax(180px, 1fr) auto auto; }
+    .assignment-accounts { grid-column: 1 / -1; display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; }
+    @media (max-width: 640px) { .routing-model-row { grid-template-columns: minmax(0, 1fr); } }
+    .routing-row select { width: 100%; min-height: 38px; padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); }
     .panel {
       padding: 24px;
       border: 1px solid var(--line);
@@ -87,6 +104,9 @@
     }
     .panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 19px; }
     h2 { margin: 0; font-size: 18px; line-height: 1.35; letter-spacing: -.015em; }
+    h3 { margin: 0; font-size: 15px; line-height: 1.35; }
+    .account-section { margin-top: 24px; padding-top: 22px; border-top: 1px solid var(--line); }
+    .provider-list { margin-top: 18px; }
     .section-note { margin: 5px 0 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
     .button {
       display: inline-flex;
@@ -142,6 +162,11 @@
     .progress-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 13px; }
     .auth-link { color: var(--accent); font-size: 13px; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
     .account-list { display: grid; gap: 11px; }
+    .model-panel { margin-top: 12px; }
+    .model-panel-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+    .model-panel-status { margin: 8px 0; color: var(--muted); font-size: 12px; }
+    .provider-model-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
+    .provider-model-list li { max-width: 100%; overflow-wrap: anywhere; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
     .account-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
     .account-card.active { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); background: linear-gradient(120deg, var(--accent-soft), var(--surface) 70%); }
     .account-name-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
@@ -188,7 +213,7 @@
     @media (max-width: 620px) {
       .shell { width: min(100% - 22px, 940px); padding-top: 30px; }
       .panel { padding: 18px; border-radius: 16px; }
-      .panel-heading { align-items: center; }
+      .panel-heading { align-items: center; flex-wrap: wrap; }
       .account-card { grid-template-columns: 1fr; gap: 13px; }
       .account-actions { justify-items: start; }
       .progress-top { align-items: flex-start; }
@@ -210,26 +235,25 @@
         </label>
       </div>
       <h1 data-i18n="hero.title">账号管理</h1>
-      <p class="lead" data-i18n="hero.lead">在这里关联、切换和管理 CodeBuddy 登录账号。账号凭据由本机代理保存，页面不会显示会话内容。</p>
+      <p class="lead" data-i18n="hero.lead">在这里管理 WorkBuddy 和 Trae CN 账号。账号凭据由本机代理保存，页面不会显示会话内容。</p>
     </header>
 
     <div id="notice" class="notice" role="status" aria-live="polite"></div>
 
+    <nav class="tabs" aria-label="管理页面">
+      <button id="accounts-tab" class="button primary" type="button" data-i18n="tabs.accounts">账号管理</button>
+      <button id="routing-tab" class="button" type="button" data-i18n="tabs.routing">模型路由</button>
+    </nav>
+
     <div class="layout">
-      <section class="panel" aria-labelledby="login-heading">
+      <section id="accounts-panel" class="panel" aria-labelledby="accounts-heading">
         <div class="panel-heading">
-          <div>
-            <h2 id="login-heading" data-i18n="login.heading">关联账号</h2>
-            <p class="section-note" data-i18n="login.description">选择账号所属区域，登录完成后会保存到本机账号库。</p>
+          <div><h2 id="accounts-heading" data-i18n="unified.heading">已关联账号</h2>
+            <p class="section-note" data-i18n="unified.description">在一个列表中管理 WorkBuddy 和 Trae CN 账号。</p></div>
+          <div class="toolbar">
+            <button id="refresh-button" class="button small" type="button" aria-label="刷新账号列表" data-i18n="button.refresh" data-i18n-aria-label="button.refreshAria">刷新列表</button>
+            <button id="add-account-button" class="button primary" type="button" data-i18n="unified.add">添加账号</button>
           </div>
-        </div>
-        <div class="region-picker" role="group" aria-label="选择 CodeBuddy 区域" data-i18n-aria-label="region.group">
-          <button class="region-option" type="button" data-backend="domestic" aria-pressed="true" data-i18n="region.domestic">国内</button>
-          <button class="region-option" type="button" data-backend="global" aria-pressed="false" data-i18n="region.global">Global</button>
-        </div>
-        <div class="associate-row">
-          <button id="associate-button" class="button primary" type="button"><span>关联所选区域</span></button>
-          <p class="hint" data-i18n="login.hint">登录页面会在新窗口打开；请在该窗口完成 CodeBuddy 登录。</p>
         </div>
         <div id="login-progress" class="login-progress" aria-live="polite">
           <div class="progress-top">
@@ -245,19 +269,15 @@
             <button id="cancel-button" class="button small" type="button" disabled data-i18n="button.cancel">取消</button>
           </div>
         </div>
-      </section>
-
-      <section class="panel" aria-labelledby="accounts-heading">
-        <div class="panel-heading">
-          <div>
-            <h2 id="accounts-heading" data-i18n="accounts.heading">已关联账号</h2>
-            <p class="section-note" data-i18n="accounts.description">当前账号会用于新发起的代理请求。</p>
-          </div>
-          <div class="toolbar">
-            <button id="refresh-button" class="button small" type="button" aria-label="刷新账号列表" data-i18n="button.refresh" data-i18n-aria-label="button.refreshAria">刷新列表</button>
-          </div>
+        <div class="trae-login-feedback"><span id="trae-login-status" role="status" aria-live="polite"></span>
+          <a id="trae-login-link" class="auth-link" target="_blank" rel="noopener noreferrer" hidden data-i18n="trae.openLogin">打开登录页</a>
+          <button id="trae-cancel" class="button small" type="button" hidden data-i18n="trae.cancelLogin">取消登录</button>
         </div>
-        <div id="account-list" class="account-list" aria-live="polite"></div>
+        <div class="unified-account-list" aria-live="polite">
+          <div id="account-list" class="account-list"></div>
+          <div id="trae-list" class="account-list"></div>
+        </div>
+        <div class="account-section">
         <div class="settings-row">
           <div class="settings-copy">
             <strong data-i18n="settings.autoSwitch.title">遇到 429 自动切换账号</strong>
@@ -271,18 +291,44 @@
         <p id="settings-status" class="settings-status" aria-live="polite" data-i18n="settings.autoSwitch.loading">正在读取自动切换设置…</p>
         <div class="settings-row">
           <div class="settings-copy">
-            <strong data-i18n="settings.autoCheckin.title">全局自动签到</strong>
+            <strong data-i18n="settings.autoCheckin.title">WorkBuddy 自动签到</strong>
             <p data-i18n="settings.autoCheckin.description">开启后由代理立即检查全部关联账号，并按北京时间计划自动签到。未知状态不会自动签到；关闭后会取消待执行计划。默认关闭。</p>
           </div>
-          <label class="switch-control" aria-label="全局自动签到" data-i18n-aria-label="settings.autoCheckin.title">
-            <input id="auto-checkin-toggle" type="checkbox" aria-label="全局自动签到" data-i18n-aria-label="settings.autoCheckin.title">
+          <label class="switch-control" aria-label="WorkBuddy 自动签到" data-i18n-aria-label="settings.autoCheckin.title">
+            <input id="auto-checkin-toggle" type="checkbox" aria-label="WorkBuddy 自动签到" data-i18n-aria-label="settings.autoCheckin.title">
             <span class="switch-track" aria-hidden="true"></span>
           </label>
         </div>
         <p id="checkin-settings-status" class="settings-status" aria-live="polite" data-i18n="settings.autoCheckin.loading">正在读取自动签到设置…</p>
         <p id="sync-status" class="sync-status" role="status" aria-live="polite" hidden></p>
         <p class="footer-note" data-i18n="footer.note">账号管理仅供本机使用。切换账号会影响之后发起的新请求，已经开始的请求会继续使用原账号。</p>
+      <div class="settings-row"><div class="settings-copy"><strong data-i18n="trae.autoTitle">Trae CN 自动签到</strong>
+      <p data-i18n="trae.autoDescription">对已关联的 Trae 账号自动查询并按计划签到，默认关闭。</p></div>
+      <label class="switch-control" aria-label="Trae CN 自动签到" data-i18n-aria-label="trae.autoTitle"><input id="trae-auto" type="checkbox" aria-label="Trae CN 自动签到" data-i18n-aria-label="trae.autoTitle"><span class="switch-track" aria-hidden="true"></span></label></div>
+      <p id="trae-message" class="settings-status" role="status" aria-live="polite"></p>
+        </div>
       </section>
+      <section id="routing-panel" class="panel" aria-labelledby="routing-heading" hidden>
+        <div class="panel-heading"><div><h2 id="routing-heading" data-i18n="routing.heading">模型路由</h2>
+          <p class="section-note" data-i18n="routing.description">为模型指定账号；未设置时根据模型清单选择供应商的默认账号。</p></div>
+          <button id="routing-refresh" class="button small" type="button" data-i18n="routing.refresh">刷新模型</button></div>
+        <div class="routing-row"><label for="routing-default-account" data-i18n="routing.defaultAccount">WorkBuddy 默认账号</label><select id="routing-default-account"></select></div>
+        <div class="routing-row"><label for="routing-default-trae" data-i18n="routing.defaultTrae">Trae CN 默认账号</label><select id="routing-default-trae"></select></div>
+        <p id="routing-status" class="settings-status" role="status" aria-live="polite"></p>
+        <div id="routing-list" class="routing-list"></div>
+      </section>
+    </div>
+    <div id="add-account-dialog" class="modal-backdrop" hidden>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="add-dialog-title" aria-describedby="add-dialog-description">
+        <div class="modal-heading"><div><h2 id="add-dialog-title" data-i18n="unified.dialogTitle">选择账号类型</h2>
+          <p id="add-dialog-description" class="section-note" data-i18n="unified.dialogDescription">选择服务商后，将打开对应的登录窗口。</p></div>
+          <button id="add-dialog-close" class="modal-close" type="button" aria-label="关闭" data-i18n-aria-label="unified.close">×</button></div>
+        <div class="provider-options">
+          <button id="associate-button" class="provider-option" type="button"><span>WorkBuddy 国内</span><small data-i18n="unified.cnDescription">国内版账号</small></button>
+          <button id="add-workbuddy-global" class="provider-option" type="button"><span data-i18n="unified.global">WorkBuddy Global</span><small data-i18n="unified.globalDescription">国际版账号</small></button>
+          <button id="trae-add" class="provider-option" type="button"><span data-i18n="unified.trae">Trae CN</span><small data-i18n="unified.traeDescription">Trae 中国版账号</small></button>
+        </div>
+      </div>
     </div>
   </main>
 
@@ -298,12 +344,94 @@
       const LANGUAGE_STORAGE_KEY = "codebuddy.admin.language";
       const STRINGS = {
         "zh-CN": {
+          "tabs.accounts": "账号管理",
+          "tabs.routing": "模型路由",
+          "routing.heading": "模型路由",
+          "routing.description": "为模型指定账号；按会话自动分配需要客户端提供稳定的 session ID。额度受限后自动换号；连续异常换号由自动切换开关控制。",
+          "routing.refresh": "刷新模型",
+          "routing.loading": "正在获取各账号的模型列表…",
+          "routing.default": "自动选择提供该模型的默认账号",
+          "routing.defaultAccount": "WorkBuddy 默认账号",
+          "routing.defaultTrae": "Trae CN 默认账号",
+          "routing.chooseTrae": "请选择 Trae 默认账号",
+          "routing.noTrae": "没有可用的 Trae 账号",
+          "routing.noAccount": "没有可用的 WorkBuddy 账号",
+          "routing.unavailable": "已设置的账号暂不可用",
+          "routing.failed": "模型路由读取或保存失败，请重试。",
+          "routing.ready": "{count} 个模型；{failed} 个账号的模型来源不可用。",
+          "routing.saved": "模型路由已保存。",
+          "routing.autoSwitch": "自动切换账号",
+          "routing.autoAssign": "按会话自动分配",
+          "routing.chooseAccounts": "选择分配账号",
+          "routing.hideAccounts": "收起分配账号",
+          "routing.assignmentEmpty": "暂无已确认支持该模型的账号，请刷新模型列表。",
+          "routing.assignmentHelp": "仅确认提供此模型的勾选账号会参与分配；取消后，已绑定会话在下次请求时重新分配。",
+          "routing.bindingCount": "{count} 个会话",
+          "account.default": "默认账号",
+          "unified.heading": "已关联账号",
+          "unified.description": "在一个列表中管理 WorkBuddy 和 Trae CN 账号。",
+          "unified.add": "添加账号",
+          "unified.dialogTitle": "选择账号类型",
+          "unified.dialogDescription": "选择服务商后，将打开对应的登录窗口。",
+          "unified.close": "关闭",
+          "unified.cn": "WorkBuddy 国内",
+          "unified.cnDescription": "国内版账号",
+          "unified.global": "WorkBuddy Global",
+          "unified.globalDescription": "国际版账号",
+          "unified.trae": "Trae CN",
+          "unified.traeDescription": "Trae 中国版账号",
+          "workbuddy.heading": "WorkBuddy 账号",
+          "workbuddy.description": "管理用于代理请求的 WorkBuddy 账号。",
+          "trae.heading": "Trae CN 账号",
+          "trae.description": "独立管理 Trae CN 签到账号；不会切换 WorkBuddy 代理账号。",
+          "trae.add": "关联 Trae CN 账号",
+          "trae.openLogin": "打开登录页",
+          "trae.cancelLogin": "取消登录",
+          "trae.autoTitle": "Trae CN 自动签到",
+          "trae.autoDescription": "对已关联的 Trae 账号自动查询并按计划签到，默认关闭。",
+          "trae.empty": "尚未关联 Trae CN 账号",
+          "trae.defaultName": "Trae CN 账号",
+          "trae.today": "今日签到：{status}",
+          "models.show": "查看模型",
+          "models.hide": "收起模型",
+          "models.refresh": "刷新模型",
+          "models.loading": "正在获取模型列表…",
+          "models.empty": "没有可展示的模型。",
+          "models.failed": "获取模型列表失败，请重试。",
+          "models.count": "{count} 个模型 · {source}",
+          "models.stale": "可能已过期",
+          "models.source.live": "上游实时",
+          "models.source.cached": "上游缓存",
+          "models.source.client_cache": "客户端缓存",
+          "models.source.builtin": "内置兜底",
+          "models.source.unknown": "来源未知",
+          "credits.query": "查询积分",
+          "credits.refresh": "刷新积分",
+          "credits.loading": "正在查询积分…",
+          "credits.remaining": "剩余积分：{amount}",
+          "credits.total": "总额 {amount}",
+          "credits.unnamed": "积分包",
+          "credits.unknown": "上游未提供可解析的积分额度",
+          "credits.error": "积分查询失败，请检查登录状态或稍后重试。",
+          "credits.rejected": "上游拒绝了积分查询（10085），请稍后重试或联系服务商。",
+          "credits.partial": "部分积分包未返回，余额可能不完整",
+          "credits.expired": "已过期",
+          "trae.deviceChecked": "设备已签到",
+          "trae.operationDone": "操作完成",
+          "trae.deleteConfirm": "确定删除该 Trae CN 账号？",
+          "trae.preparing": "正在准备登录…",
+          "trae.authorize": "请在登录页完成授权。",
+          "trae.invalidUrl": "登录地址无效",
+          "trae.loginSuccess": "关联成功",
+          "trae.loginCancelled": "已取消",
+          "trae.loginFailed": "登录失败",
+          "trae.settingSaved": "Trae 签到设置已保存",
           "page.title": "CodeBuddy 账号管理",
           "language.label": "语言",
           "language.select": "页面语言",
           "hero.brand": "CodeBuddy · 本机代理",
           "hero.title": "账号管理",
-          "hero.lead": "在这里关联、切换和管理 CodeBuddy 登录账号。账号凭据由本机代理保存，页面不会显示会话内容。",
+          "hero.lead": "在这里管理 WorkBuddy 和 Trae CN 账号。账号凭据由本机代理保存，页面不会显示会话内容。",
           "login.heading": "关联账号",
           "login.description": "选择账号所属区域，登录完成后会保存到本机账号库。",
           "login.hint": "登录页面会在新窗口打开；请在该窗口完成 CodeBuddy 登录。",
@@ -322,7 +450,7 @@
           "settings.autoSwitch.title": "遇到 429 自动切换账号",
           "settings.autoSwitch.description": "仅排除同一区域、同一服务地址中“本次请求模型仍在冷却”的账号；同一账号的其他模型仍可用。每个请求对每个账号最多尝试一次。默认关闭。",
           "settings.autoSwitch.loading": "正在读取自动切换设置…",
-          "settings.autoCheckin.title": "全局自动签到",
+          "settings.autoCheckin.title": "WorkBuddy 自动签到",
           "settings.autoCheckin.description": "开启后由代理立即检查全部关联账号，并按北京时间计划自动签到。未知状态不会自动签到；关闭后会取消待执行计划。默认关闭。",
           "settings.autoCheckin.loading": "正在读取自动签到设置…",
           "footer.note": "账号管理仅供本机使用。切换账号会影响之后发起的代理请求，已经开始的请求会继续使用原账号。",
@@ -336,6 +464,9 @@
           "account.active": "当前账号",
           "button.checkinQuery": "查询签到",
           "button.checkin": "签到",
+          "button.relogin": "重新登录",
+          "notice.reloginSuccess": "「{name}」重新登录成功。",
+          "error.reloginMismatch": "登录账号与所选账号不一致，或所选账号已删除，请重试",
           "button.activate": "设为当前",
           "button.delete": "删除",
           "checkin.today": "今日签到：{status}",
@@ -482,12 +613,94 @@
           "error.accountDoesNotExist": "账号不存在"
         },
         en: {
+          "tabs.accounts": "Accounts",
+          "tabs.routing": "Model routing",
+          "routing.heading": "Model routing",
+          "routing.description": "Session assignment requires a stable session ID. Quota limits trigger reassignment; the automatic switching setting controls switching after repeated errors.",
+          "routing.refresh": "Refresh models",
+          "routing.loading": "Loading account model lists…",
+          "routing.default": "Automatically select a default account offering this model",
+          "routing.defaultAccount": "Default WorkBuddy account",
+          "routing.defaultTrae": "Default Trae CN account",
+          "routing.chooseTrae": "Select a default Trae account",
+          "routing.noTrae": "No Trae account available",
+          "routing.noAccount": "No WorkBuddy account available",
+          "routing.unavailable": "Configured account unavailable",
+          "routing.failed": "Could not load or save model routing. Try again.",
+          "routing.ready": "{count} models; {failed} account catalogs unavailable.",
+          "routing.saved": "Model route saved.",
+          "routing.autoSwitch": "Switch accounts automatically",
+          "routing.autoAssign": "Assign by session",
+          "routing.chooseAccounts": "Choose accounts",
+          "routing.hideAccounts": "Hide accounts",
+          "routing.assignmentEmpty": "No accounts are confirmed to offer this model. Refresh the model list.",
+          "routing.assignmentHelp": "Only checked accounts confirmed to offer this model are eligible. Existing sessions are reassigned on their next request after exclusion.",
+          "routing.bindingCount": "{count} sessions",
+          "account.default": "Default account",
+          "unified.heading": "Linked accounts",
+          "unified.description": "Manage WorkBuddy and Trae CN accounts in one list.",
+          "unified.add": "Add account",
+          "unified.dialogTitle": "Choose account type",
+          "unified.dialogDescription": "Select a provider to open its sign-in window.",
+          "unified.close": "Close",
+          "unified.cn": "WorkBuddy CN",
+          "unified.cnDescription": "Domestic account",
+          "unified.global": "WorkBuddy Global",
+          "unified.globalDescription": "International account",
+          "unified.trae": "Trae CN",
+          "unified.traeDescription": "Trae China account",
+          "workbuddy.heading": "WorkBuddy accounts",
+          "workbuddy.description": "Manage WorkBuddy accounts used for proxy requests.",
+          "trae.heading": "Trae CN accounts",
+          "trae.description": "Manage Trae CN check-in accounts independently of the WorkBuddy proxy account.",
+          "trae.add": "Link a Trae CN account",
+          "trae.openLogin": "Open sign-in page",
+          "trae.cancelLogin": "Cancel sign-in",
+          "trae.autoTitle": "Automatic Trae CN check-in",
+          "trae.autoDescription": "Check linked Trae accounts on a schedule. Off by default.",
+          "trae.empty": "No linked Trae CN accounts yet",
+          "trae.defaultName": "Trae CN account",
+          "trae.today": "Today: {status}",
+          "models.show": "Show models",
+          "models.hide": "Hide models",
+          "models.refresh": "Refresh models",
+          "models.loading": "Loading models…",
+          "models.empty": "No models to display.",
+          "models.failed": "Could not load models. Try again.",
+          "models.count": "{count} models · {source}",
+          "models.stale": "May be out of date",
+          "models.source.live": "Live upstream",
+          "models.source.cached": "Upstream cache",
+          "models.source.client_cache": "Client cache",
+          "models.source.builtin": "Built-in fallback",
+          "models.source.unknown": "Unknown source",
+          "credits.query": "Check credits",
+          "credits.refresh": "Refresh credits",
+          "credits.loading": "Loading credits…",
+          "credits.remaining": "Credits remaining: {amount}",
+          "credits.total": "Total {amount}",
+          "credits.unnamed": "Credit package",
+          "credits.unknown": "The upstream did not provide a readable credit balance",
+          "credits.error": "Could not load credits. Check sign-in or try again later.",
+          "credits.rejected": "The provider rejected the credit request (10085). Try later or contact support.",
+          "credits.partial": "Some packages were unavailable; the balance may be incomplete",
+          "credits.expired": "Expired",
+          "trae.deviceChecked": "Device already checked in",
+          "trae.operationDone": "Operation completed",
+          "trae.deleteConfirm": "Delete this Trae CN account?",
+          "trae.preparing": "Preparing sign-in…",
+          "trae.authorize": "Complete authorization on the sign-in page.",
+          "trae.invalidUrl": "Invalid sign-in URL",
+          "trae.loginSuccess": "Account linked",
+          "trae.loginCancelled": "Cancelled",
+          "trae.loginFailed": "Sign-in failed",
+          "trae.settingSaved": "Trae check-in setting saved",
           "page.title": "CodeBuddy Account Manager",
           "language.label": "Language",
           "language.select": "Page language",
           "hero.brand": "CodeBuddy · Local Proxy",
           "hero.title": "Account manager",
-          "hero.lead": "Link, switch, and manage CodeBuddy accounts here. Credentials are stored by the local proxy; session contents are never shown on this page.",
+          "hero.lead": "Manage WorkBuddy and Trae CN accounts here. Credentials are stored by the local proxy; session contents are never shown on this page.",
           "login.heading": "Link an account",
           "login.description": "Choose the account region. The account will be saved locally after sign-in.",
           "login.hint": "Sign-in opens in a new window. Complete CodeBuddy sign-in there.",
@@ -506,7 +719,7 @@
           "settings.autoSwitch.title": "Switch accounts automatically on 429",
           "settings.autoSwitch.description": "Skip only same-region, same-endpoint accounts whose cooldown for this request's model is still active. Other models on the same account remain available. Try each account at most once per request. Off by default.",
           "settings.autoSwitch.loading": "Loading automatic-switch setting…",
-          "settings.autoCheckin.title": "Automatic check-in for all accounts",
+          "settings.autoCheckin.title": "Automatic WorkBuddy check-in",
           "settings.autoCheckin.description": "When enabled, the proxy checks every linked account and checks in on its Beijing-time schedule. Unknown status is never signed automatically. Turning it off cancels pending work. Off by default.",
           "settings.autoCheckin.loading": "Loading automatic check-in setting…",
           "footer.note": "Account management is local only. Switching affects new proxy requests; requests already in progress keep using their original account.",
@@ -520,6 +733,9 @@
           "account.active": "Current",
           "button.checkinQuery": "Check status",
           "button.checkin": "Check in",
+          "button.relogin": "Sign in again",
+          "notice.reloginSuccess": "Signed in again as “{name}”.",
+          "error.reloginMismatch": "The signed-in account does not match the selected account, or the selected account was deleted. Try again.",
           "button.activate": "Set active",
           "button.delete": "Delete",
           "checkin.today": "Today's check-in: {status}",
@@ -679,6 +895,7 @@
         "账号管理状态文件版本不受支持，未修改任何数据": "error.managerVersion",
         "无法保存账号管理状态": "error.managerSave",
         "账号管理器已关闭": "error.managerClosed",
+        "登录账号与所选账号不一致，或所选账号已删除，请重试": "error.reloginMismatch",
         "当前登录任务较多，请稍后重试": "error.tooManyJobs",
         "登录超时，请重新尝试": "error.loginTimeout",
         "登录信息无效，请重新尝试": "error.loginInvalid",
@@ -746,6 +963,7 @@
         listError: null,
         loginRun: null,
         lastLoginBackend: "domestic",
+        lastLoginAccount: null,
         autoSwitchOn429: false,
         autoCheckinEnabled: false,
         defaultCooldownSeconds: 60,
@@ -914,6 +1132,10 @@
         if (state.progressDescriptor) renderProgress();
         renderAssociateButton();
         renderAccounts();
+        renderTrae();
+        if (routingView.loaded) renderRouting();
+        if (traeStatusKey) traeStatus.textContent = t(traeStatusKey);
+        if (traeMessageKey) traeMessage.textContent = t(traeMessageKey);
         if (state.loginRun && state.loginRun.popup && !state.loginRun.authUrl) showInitialPopup(state.loginRun.popup);
       }
 
@@ -946,7 +1168,7 @@
         if (options.body !== undefined) headers.set("Content-Type", "application/json");
         let response;
         try {
-          response = await fetch(`${API}${path}`, {
+          response = await fetch(options.root ? path : `${API}${path}`, {
             method: options.method || "GET",
             headers,
             body: options.body === undefined ? undefined : JSON.stringify(options.body),
@@ -965,7 +1187,9 @@
         }
         if (!response.ok) {
           const fallback = `请求失败（HTTP ${response.status}）。请稍后重试。`;
-          throw new Error(safeDetail(payload, fallback));
+          const error = new Error(safeDetail(payload, fallback));
+          if (payload && typeof payload.error === "string") error.code = payload.error;
+          throw error;
         }
         return payload;
       }
@@ -981,7 +1205,7 @@
             spinner.setAttribute("aria-hidden", "true");
             span.append(spinner);
           }
-          span.append(t(state.associateButtonBusy ? "login.preparingButton" : "login.associate"));
+          span.append(t(state.associateButtonBusy ? "login.preparingButton" : "unified.cn"));
         }
         els.associate.disabled = state.associateButtonBusy || Boolean(state.progressDescriptor && state.progressDescriptor.busy);
       }
@@ -1324,6 +1548,126 @@
         if (error && error.message) showErrorNotice(error, "notice.detail");
       }
 
+      const modelViews = new Map();
+      const creditViews = new Map();
+      function renderProviderCredits(provider, account) {
+        const key = `${provider}:${account.id}`;
+        if (!creditViews.has(key)) creditViews.set(key, {loading: false, data: null, error: null});
+        const view = creditViews.get(key);
+        const panel = document.createElement("div");
+        panel.className = "model-panel";
+        const button = makeButton(t(view.data ? "credits.refresh" : "credits.query"), "button small", async () => {
+          view.loading = true; view.error = null;
+          if (provider === "workbuddy") renderAccounts(); else renderTrae();
+          try {
+            const prefix = provider === "workbuddy" ? "/accounts" : "/trae/accounts";
+            const data = await request(`${prefix}/${encodeURIComponent(account.id)}/credits`);
+            if (!data || typeof data.remaining !== "number" || !Array.isArray(data.packages)) throw new Error("invalid balance");
+            view.data = data;
+          } catch (error) {
+            view.data = null;
+            view.error = error && error.code === "unknown_balance" ? "credits.unknown" : error && error.code === "upstream_rejected" ? "credits.rejected" : "credits.error";
+          } finally {
+            view.loading = false;
+            if (provider === "workbuddy") renderAccounts(); else renderTrae();
+          }
+        });
+        button.disabled = view.loading;
+        panel.append(button);
+        if (view.loading || view.error || view.data) {
+          const status = makeText("p", "model-panel-status", view.loading ? t("credits.loading") : view.error ? t(view.error) : t("credits.remaining", {amount: view.data.remaining}) + (view.data.partial ? ` · ${t("credits.partial")}` : ""));
+          status.setAttribute("role", "status");
+          panel.append(status);
+        }
+        if (view.data && view.data.packages.length) {
+          const list = document.createElement("ul"); list.className = "provider-model-list";
+          for (const item of view.data.packages) {
+            if (!item || typeof item.remaining !== "number" || !Number.isFinite(item.remaining) || item.remaining <= 0 || item.expired ||
+                (typeof item.expire_at === "number" && item.expire_at > 0 && item.expire_at * 1000 <= Date.now())) continue;
+            const name = typeof item.name === "string" && item.name ? item.name : t("credits.unnamed");
+            const total = typeof item.total === "number" ? ` / ${item.total}` : "";
+            const expire = typeof item.expire_at === "number" ? ` · ${new Date(item.expire_at * 1000).toLocaleDateString()}` : "";
+            list.append(makeText("li", "", `${name}: ${item.remaining}${total}${expire}`));
+          }
+          if (list.children.length) panel.append(list);
+        }
+        return panel;
+      }
+      function modelView(provider, accountId) {
+        const key = `${provider}:${accountId}`;
+        if (!modelViews.has(key)) modelViews.set(key, { open: false, loading: false, items: null, source: null, stale: false, error: false, sequence: 0 });
+        return modelViews.get(key);
+      }
+      function renderProviderModels(provider, account) {
+        const view = modelView(provider, account.id);
+        const panel = document.createElement("div");
+        panel.className = "model-panel";
+        const heading = document.createElement("div");
+        heading.className = "model-panel-heading";
+        const toggle = makeButton(t(view.open ? "models.hide" : "models.show"), "button small", () => {
+          view.open = !view.open;
+          if (view.open && !view.items && !view.loading) void loadProviderModels(provider, account, false);
+          else if (provider === "workbuddy") renderAccounts();
+          else renderTrae();
+        });
+        toggle.setAttribute("aria-expanded", String(view.open));
+        heading.append(toggle);
+        if (view.open) {
+          const refresh = makeButton(t("models.refresh"), "button small", () => loadProviderModels(provider, account, true));
+          refresh.disabled = view.loading;
+          heading.append(refresh);
+        }
+        panel.append(heading);
+        if (!view.open) return panel;
+        const status = document.createElement("p");
+        status.className = "model-panel-status";
+        status.setAttribute("role", "status");
+        if (view.loading) status.textContent = t("models.loading");
+        else if (view.error) status.textContent = t("models.failed");
+        else if (view.items) {
+          const sourceKey = ({live: "live", upstream: "live", cached: "cached", upstream_cache: "cached", client_cache: "client_cache", builtin: "builtin", static_fallback: "builtin"})[view.source] || "unknown";
+          status.textContent = t("models.count", {count: view.items.length, source: t(`models.source.${sourceKey}`)}) + (view.stale ? ` · ${t("models.stale")}` : "");
+        } else status.textContent = t("models.empty");
+        panel.append(status);
+        if (view.items && view.items.length) {
+          const list = document.createElement("ul");
+          list.className = "provider-model-list";
+          for (const item of view.items) {
+            if (!item || typeof item.id !== "string") continue;
+            const name = typeof item.display_name === "string" ? item.display_name : item.id;
+            list.append(makeText("li", "", name !== item.id ? `${name} (${item.id})` : item.id));
+          }
+          panel.append(list);
+        }
+        return panel;
+      }
+      async function loadProviderModels(provider, account, refresh) {
+        const view = modelView(provider, account.id);
+        const sequence = ++view.sequence;
+        view.loading = true;
+        view.error = false;
+        if (provider === "workbuddy") renderAccounts(); else renderTrae();
+        try {
+          const query = refresh ? "?refresh=true" : "";
+          const result = provider === "workbuddy"
+            ? await request(`/accounts/${encodeURIComponent(account.id)}/models${query}`)
+            : await request(`/trae/v1/models${query}`, {root: true, headers: {"X-Trae-Account-Id": account.id}});
+          if (view.sequence !== sequence) return;
+          const items = provider === "workbuddy" ? result && result.models : result && result.data;
+          if (!Array.isArray(items)) throw new Error("invalid model list");
+          view.items = items;
+          view.source = provider === "workbuddy" ? result.catalog && result.catalog.source : result.source;
+          view.stale = provider === "workbuddy" ? result.catalog && result.catalog.stale === true : result.stale === true;
+        } catch (_) {
+          if (view.sequence === sequence) view.error = true;
+        } finally {
+          if (view.sequence === sequence) {
+            view.loading = false;
+            if (provider === "workbuddy") renderAccounts(); else renderTrae();
+          }
+        }
+      }
+
       function renderAccounts() {
         els.accountList.replaceChildren();
         state.cooldownElements = [];
@@ -1340,6 +1684,7 @@
           els.accountList.append(failed);
           return;
         }
+        if (state.accounts.length === 0 && traeAccounts && traeAccounts.length) return;
         if (state.accounts.length === 0) {
           const empty = document.createElement("div");
           empty.className = "empty";
@@ -1358,9 +1703,10 @@
           const nameLine = document.createElement("div");
           nameLine.className = "account-name-line";
           nameLine.append(makeText("span", "account-name", account.nickname || account.uid || t("account.defaultName")));
+          nameLine.append(makeText("span", "pill", "WorkBuddy"));
           const backend = t(account.backend === "global" ? "region.global" : "region.domestic");
           nameLine.append(makeText("span", `pill ${account.backend === "global" ? "global" : "domestic"}`, backend));
-          if (isActive) nameLine.append(makeText("span", "pill active-pill", t("account.active")));
+          if (isActive) nameLine.append(makeText("span", "pill active-pill", t("account.default")));
           info.append(nameLine);
           const meta = document.createElement("div");
           meta.className = "account-meta";
@@ -1394,6 +1740,8 @@
           if (nextPlan) checkinInfo.append(makeText("span", "", t("checkin.nextPlan", { time: nextPlan })));
           if (checkin.status === "error" && checkin.error) checkinInfo.append(makeText("span", "checkin-state error", localizedRaw(checkin.error, "source.checkinError")));
           info.append(checkinInfo);
+          info.append(renderProviderCredits("workbuddy", account));
+          info.append(renderProviderModels("workbuddy", account));
 
           const actions = document.createElement("div");
           actions.className = "account-actions";
@@ -1405,11 +1753,15 @@
           checkinActions.children[0].disabled = isCheckinBusy;
           checkinActions.children[1].disabled = isCheckinBusy || checkin.status === "checked" || checkin.checked === true;
           actions.append(checkinActions);
-          if (!isActive) {
+          {
             const manageActions = document.createElement("div");
             manageActions.className = "manage-actions";
-            manageActions.append(makeButton(t("button.activate"), "button small", () => activateAccount(account)));
+            const relogin = makeButton(t("button.relogin"), "button small", () => startLogin(account));
+            relogin.disabled = !!state.loginRun;
+            manageActions.append(relogin);
+            if (!isActive) {
             manageActions.append(makeButton(t("button.delete"), "button small danger", () => deleteAccount(account)));
+            }
             actions.append(manageActions);
           }
           card.append(info, actions);
@@ -1631,7 +1983,7 @@
 
       function setSelectedBackend(backend) {
         state.backend = backend;
-        for (const button of document.querySelectorAll("[data-backend]")) {
+      for (const button of document.querySelectorAll("[data-backend]")) {
           button.setAttribute("aria-pressed", String(button.dataset.backend === backend));
         }
       }
@@ -1687,6 +2039,8 @@
           const addedAccount = job.account_id && state.accounts.find((account) => account.id === job.account_id);
           if (!refreshed) {
             showNotice("notice.loginListFailed", "error");
+          } else if (run.accountId && addedAccount) {
+            showNotice("notice.reloginSuccess", "success", { name: addedAccount.nickname || addedAccount.uid || { i18nKey: "account.defaultName" } });
           } else if (beforeActive == null && state.activeAccountId === job.account_id) {
             showNotice("notice.loginFirstActive", "success");
           } else if (addedAccount) {
@@ -1779,11 +2133,12 @@
         } catch (_) { /* Some browsers expose a blank document only briefly. */ }
       }
 
-      async function startLogin() {
+      async function startLogin(account = null) {
         if (state.loginRun) return;
         clearNotice();
-        const backend = state.backend;
+        const backend = account ? account.backend : state.backend;
         state.lastLoginBackend = backend;
+        state.lastLoginAccount = account;
         const popup = window.open("about:blank", "codebuddy-account-login", "popup=yes,width=560,height=760,resizable=yes,scrollbars=yes");
         showInitialPopup(popup);
         setButtonBusy(els.associate, true);
@@ -1796,6 +2151,7 @@
         const run = {
           popup,
           backend,
+          accountId: account ? account.id : null,
           jobId: null,
           authUrl: null,
           cancelInFlight: false,
@@ -1810,7 +2166,7 @@
           const job = await request("/logins", {
             method: "POST",
             write: true,
-            body: { backend },
+            body: account ? { backend, account_id: account.id } : { backend },
             signal: controller.signal
           });
           if (!job || typeof job.id !== "string") throw new Error("代理未返回有效的登录任务编号，请重试。");
@@ -1856,16 +2212,302 @@
         }
       }
 
+      const traeList = document.getElementById("trae-list");
+      const traeMessage = document.getElementById("trae-message");
+      const traeStatus = document.getElementById("trae-login-status");
+      const traeLink = document.getElementById("trae-login-link");
+      const traeCancel = document.getElementById("trae-cancel");
+      const traeAuto = document.getElementById("trae-auto");
+      let traeJob = null;
+      let traePopup = null;
+      let traeAccounts = null;
+      let traeActiveAccountId = null;
+      let traeStatusKey = null;
+      let traeMessageKey = null;
+      function setTraeStatus(key) { traeStatusKey = key; traeStatus.textContent = t(key); }
+      function setTraeMessage(key) { traeMessageKey = key; traeMessage.textContent = t(key); }
+      function renderTrae() {
+          if (!traeAccounts) return;
+          traeList.replaceChildren();
+          for (const account of traeAccounts) {
+            const card = document.createElement("div"); card.className = "account-card"; card.dataset.accountId = String(account.id);
+            const info = document.createElement("div");
+            const nameLine = document.createElement("div"); nameLine.className = "account-name-line";
+            nameLine.append(makeText("strong", "account-name", account.nickname || t("trae.defaultName")), makeText("span", "pill global", "Trae CN"));
+            info.append(nameLine);
+            info.append(makeText("div", "account-meta", t("account.uid", {uid: account.uid})));
+            info.append(makeText("div", "account-meta", t("trae.today", {status: account.checkin?.status === "device_checked" ? t("trae.deviceChecked") : t(`checkin.${["unknown", "checking", "unchecked", "checked", "signing", "error"].includes(account.checkin?.status) ? account.checkin.status : "unknown"}`)})));
+            info.append(renderProviderCredits("trae", account));
+            info.append(renderProviderModels("trae", account));
+            const actions = document.createElement("div"); actions.className = "checkin-actions";
+            const operation = async (path, opts = {}) => {
+              try { await request(path, opts); setTraeMessage("trae.operationDone"); await refreshTrae(); }
+              catch (error) { traeMessageKey = null; traeMessage.textContent = error.message; }
+            };
+            const base = `/trae/accounts/${encodeURIComponent(account.id)}`;
+            actions.append(makeButton(t("button.checkinQuery"), "button small", () => operation(`${base}/checkin-status`)));
+            actions.append(makeButton(t("button.checkin"), "button small primary", () => operation(`${base}/checkin`, {method:"POST", write:true})));
+            actions.append(makeButton(t("button.relogin"), "button small", () => startTraeLogin(account.id)));
+            actions.append(makeButton(t("button.delete"), "button small", () => { if (window.confirm(t("trae.deleteConfirm"))) operation(base, {method:"DELETE", write:true}); }));
+            card.append(info, actions); traeList.append(card);
+          }
+      }
+      async function refreshTrae() {
+        try {
+          const data = await request("/trae/accounts");
+          traeAuto.checked = data.auto_checkin_enabled === true;
+          traeAccounts = data.accounts;
+          traeActiveAccountId = data.active_account_id || null;
+          renderTrae();
+          renderAccounts();
+        } catch (error) { traeMessageKey = null; traeMessage.textContent = error.message; }
+      }
+      async function startTraeLogin(accountId = null) {
+        if (traeJob) return;
+        traePopup = window.open("about:blank", "trae-account-login", "popup=yes,width=560,height=760,resizable=yes,scrollbars=yes");
+        setTraeStatus("trae.preparing"); traeLink.hidden = true;
+        try {
+          const job = await request("/trae/logins", {method:"POST", write:true, body:accountId ? {account_id:accountId} : {}});
+          traeJob = job.id; traeCancel.hidden = false;
+          async function poll() {
+            if (traeJob !== job.id) return;
+            try {
+              const current = await request(`/trae/logins/${encodeURIComponent(job.id)}`);
+              if (current.auth_url && traeLink.hidden) {
+                const url = new URL(current.auth_url);
+                if (url.protocol !== "https:" || url.username || url.password) throw new Error(t("trae.invalidUrl"));
+                traeLink.href = url.href; traeLink.hidden = false;
+                if (traePopup && !traePopup.closed) traePopup.location.href = url.href;
+                setTraeStatus("trae.authorize");
+              }
+              if (current.status === "pending") { window.setTimeout(poll, 1000); return; }
+              traeJob = null; traeCancel.hidden = true; traeLink.hidden = true;
+              if (traePopup && !traePopup.closed) traePopup.close();
+              if (current.status === "succeeded") setTraeStatus("trae.loginSuccess");
+              else if (current.status === "cancelled") setTraeStatus("trae.loginCancelled");
+              else if (current.error) { traeStatusKey = null; traeStatus.textContent = current.error; }
+              else setTraeStatus("trae.loginFailed");
+              await refreshTrae();
+            } catch (error) { traeStatusKey = null; traeStatus.textContent = error.message; window.setTimeout(poll, 3000); }
+          }
+          void poll();
+        } catch (error) { if (traePopup && !traePopup.closed) traePopup.close(); traeStatusKey = null; traeStatus.textContent = error.message; }
+      }
+      const addDialog = document.getElementById("add-account-dialog");
+      const addButton = document.getElementById("add-account-button");
+      function closeAddDialog() { addDialog.hidden = true; if (addButton.focus) addButton.focus(); }
+      addButton.addEventListener("click", () => { addDialog.hidden = false; if (els.associate.focus) els.associate.focus(); });
+      document.getElementById("add-dialog-close").addEventListener("click", closeAddDialog);
+      addDialog.addEventListener("click", (event) => { if (event.target === addDialog) closeAddDialog(); });
+      document.addEventListener("keydown", (event) => {
+        if (addDialog.hidden) return;
+        if (event.key === "Escape") { closeAddDialog(); return; }
+        if (event.key !== "Tab") return;
+        const choices = [document.getElementById("add-dialog-close"), els.associate,
+          document.getElementById("add-workbuddy-global"), document.getElementById("trae-add")].filter((el) => !el.disabled);
+        const first = choices[0], last = choices[choices.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      });
+      document.getElementById("trae-add").addEventListener("click", () => { closeAddDialog(); return startTraeLogin(); });
+      document.getElementById("add-workbuddy-global").addEventListener("click", () => { closeAddDialog(); setSelectedBackend("global"); return startLogin(); });
+      traeCancel.addEventListener("click", async () => { if (!traeJob) return; try { await request(`/trae/logins/${encodeURIComponent(traeJob)}`, {method:"DELETE", write:true}); } catch (error) { traeStatusKey = null; traeStatus.textContent = error.message; } });
+      traeAuto.addEventListener("change", async () => {
+        try { await request("/trae/settings", {method:"PATCH", write:true, body:{auto_checkin_enabled:traeAuto.checked}}); setTraeMessage("trae.settingSaved"); }
+        catch (error) { traeMessageKey = null; traeMessage.textContent = error.message; await refreshTrae(); }
+      });
+      void refreshTrae();
+
+      const routingView = {loaded: false, models: {}, routes: {}, autoSwitch: {}, autoAssign: {}, exclusions: {}, bindingCounts: {}, expanded: null, failed: 0};
+      let routingSaveChain = Promise.resolve();
+      const routingList = document.getElementById('routing-list');
+      const routingStatus = document.getElementById('routing-status');
+      function renderRouting() {
+        routingList.replaceChildren();
+        const fallback = document.getElementById('routing-default-account');
+        fallback.replaceChildren();
+        if (!state.accounts.length) {
+          const option = document.createElement('option'); option.value = ''; option.textContent = t('routing.noAccount'); fallback.append(option);
+        }
+        for (const account of state.accounts) {
+          const option = document.createElement('option'); option.value = account.id;
+          option.textContent = `${account.backend === 'global' ? 'WorkBuddy Global' : 'WorkBuddy CN'} · ${account.nickname || account.uid || t('account.defaultName')}`;
+          fallback.append(option);
+        }
+        fallback.disabled = !state.accounts.length;
+        fallback.value = state.activeAccountId || '';
+        const traeDefault = document.getElementById('routing-default-trae');
+        traeDefault.replaceChildren();
+        if (!traeActiveAccountId) {
+          const option = document.createElement('option'); option.value = ''; option.textContent = t(traeAccounts && traeAccounts.length ? 'routing.chooseTrae' : 'routing.noTrae'); traeDefault.append(option);
+        }
+        for (const account of traeAccounts || []) {
+          const option = document.createElement('option'); option.value = account.id;
+          option.textContent = `Trae CN · ${account.nickname || account.uid || t('trae.defaultName')}`;
+          traeDefault.append(option);
+        }
+        traeDefault.disabled = !traeAccounts || !traeAccounts.length;
+        traeDefault.value = traeActiveAccountId || '';
+        const names = [...new Set([...Object.keys(routingView.models), ...Object.keys(routingView.routes), ...Object.keys(routingView.autoSwitch), ...Object.keys(routingView.autoAssign)])].sort();
+        routingStatus.textContent = t('routing.ready', {count: names.length, failed: routingView.failed});
+        for (const name of names) {
+          const row = document.createElement('div'); row.className = 'routing-row routing-model-row';
+          row.append(makeText('strong', '', name));
+          const select = document.createElement('select'); select.setAttribute('aria-label', name);
+          const none = document.createElement('option'); none.value = ''; none.textContent = t('routing.default'); select.append(none);
+          const options = routingView.models[name] || [];
+          const selected = routingView.routes[name];
+          let found = false;
+          for (const option of options) {
+            const item = document.createElement('option');
+            item.value = JSON.stringify([option.provider, option.account_id]);
+            item.textContent = `${option.provider === 'trae' ? 'Trae CN' : option.backend === 'global' ? 'WorkBuddy Global' : 'WorkBuddy CN'} · ${option.label}`;
+            if (selected && selected.provider === option.provider && selected.account_id === option.account_id) found = true;
+            select.append(item);
+          }
+          if (selected && !found) {
+            const item = document.createElement('option'); item.value = JSON.stringify([selected.provider, selected.account_id]);
+            item.textContent = `${selected.provider} · ${t('routing.unavailable')}`; select.append(item);
+          }
+          select.value = selected ? JSON.stringify([selected.provider, selected.account_id]) : '';
+          select.disabled = routingView.autoAssign[name] === true;
+          select.addEventListener('change', async () => {
+            select.disabled = true;
+            try {
+              const pair = select.value ? JSON.parse(select.value) : null;
+              const save = () => request('/model-routing', {method: 'PUT', write: true, body: {model: name, target: pair ? {provider: pair[0], account_id: pair[1]} : null}});
+              const pending = routingSaveChain.catch(() => {}).then(save);
+              routingSaveChain = pending;
+              const result = await pending;
+              routingView.routes = result.routes; renderRouting(); routingStatus.textContent = t('routing.saved');
+            } catch (_) { renderRouting(); routingStatus.textContent = t('routing.failed'); }
+          });
+          row.append(select);
+          const autoLabel = document.createElement('label');
+          const autoToggle = document.createElement('input'); autoToggle.type = 'checkbox';
+          autoToggle.checked = routingView.autoSwitch[name] === true;
+          autoToggle.setAttribute('aria-label', `${name} ${t('routing.autoSwitch')}`);
+          autoToggle.addEventListener('change', async () => {
+            autoToggle.disabled = true;
+            try {
+              const enabled = autoToggle.checked;
+              const save = () => request('/model-routing/auto-switch', {method:'PUT', write:true, body:{model:name, enabled}});
+              const pending = routingSaveChain.catch(() => {}).then(save);
+              routingSaveChain = pending;
+              const result = await pending;
+              routingView.autoSwitch = result.auto_switch; renderRouting(); routingStatus.textContent = t('routing.saved');
+            } catch (_) { renderRouting(); routingStatus.textContent = t('routing.failed'); }
+          });
+          autoLabel.append(autoToggle, makeText('span', '', t('routing.autoSwitch'))); row.append(autoLabel);
+          const assignLabel = document.createElement('label');
+          const assignToggle = document.createElement('input'); assignToggle.type = 'checkbox';
+          assignToggle.checked = routingView.autoAssign[name] === true;
+          assignToggle.setAttribute('aria-label', `${name} ${t('routing.autoAssign')}`);
+          assignToggle.addEventListener('change', async () => {
+            assignToggle.disabled = true;
+            try {
+              const enabled = assignToggle.checked;
+              const save = () => request('/model-routing/auto-assign', {method:'PUT', write:true, body:{model:name, enabled}});
+              const pending = routingSaveChain.catch(() => {}).then(save);
+              routingSaveChain = pending;
+              const result = await pending;
+              routingView.autoAssign = result.auto_assign; renderRouting(); routingStatus.textContent = t('routing.saved');
+            } catch (_) { renderRouting(); routingStatus.textContent = t('routing.failed'); }
+          });
+          assignLabel.append(assignToggle, makeText('span', '', t('routing.autoAssign'))); row.append(assignLabel); routingList.append(row);
+          if (routingView.autoAssign[name]) {
+            const choose = makeButton(t(routingView.expanded === name ? 'routing.hideAccounts' : 'routing.chooseAccounts'), 'button small', () => {
+              routingView.expanded = routingView.expanded === name ? null : name;
+              renderRouting();
+            });
+            choose.setAttribute('aria-expanded', routingView.expanded === name ? 'true' : 'false');
+            row.append(choose);
+            if (routingView.expanded === name) {
+              const accounts = document.createElement('div'); accounts.className = 'assignment-accounts';
+              accounts.append(makeText('p', '', t('routing.assignmentHelp')));
+              if (!options.length) accounts.append(makeText('p', '', t('routing.assignmentEmpty')));
+              const excluded = routingView.exclusions[name] || [];
+              for (const option of options) {
+                const label = document.createElement('label');
+                const toggle = document.createElement('input'); toggle.type = 'checkbox';
+                toggle.checked = !excluded.some(item => item.provider === option.provider && item.account_id === option.account_id);
+                const provider = option.provider === 'trae' ? 'Trae CN' : option.backend === 'global' ? 'WorkBuddy Global' : 'WorkBuddy CN';
+                toggle.setAttribute('aria-label', `${name} ${provider} ${option.label}`);
+                toggle.addEventListener('change', async () => {
+                  toggle.disabled = true;
+                  try {
+                    const enabled = toggle.checked;
+                    const save = () => request('/model-routing/assignment-account', {method:'PUT', write:true, body:{model:name, provider:option.provider, account_id:option.account_id, enabled}});
+                    const pending = routingSaveChain.catch(() => {}).then(save);
+                    routingSaveChain = pending;
+                    const result = await pending;
+                    routingView.exclusions = result.assignment_exclusions; renderRouting(); routingStatus.textContent = t('routing.saved');
+                  } catch (_) { renderRouting(); routingStatus.textContent = t('routing.failed'); }
+                });
+                label.append(toggle, makeText('span', '', `${provider} · ${option.label}`)); accounts.append(label);
+              }
+              row.append(accounts);
+            }
+            const counts = routingView.bindingCounts[name] || [];
+            for (const option of options) {
+              const count = counts.find(item => item.provider === option.provider && item.account_id === option.account_id)?.count || 0;
+              row.append(makeText('small', '', `${option.label} · ${t('routing.bindingCount', {count})}`));
+            }
+          }
+        }
+      }
+      async function loadRouting(refresh = false) {
+        routingStatus.textContent = t('routing.loading');
+        document.getElementById('routing-refresh').disabled = true;
+        try {
+          const data = await request(`/model-routing${refresh ? '?refresh=true' : ''}`);
+          if (!data || !data.models || !data.routes) throw new Error('invalid routing');
+          routingView.models = data.models; routingView.routes = data.routes; routingView.autoSwitch = data.auto_switch || {}; routingView.autoAssign = data.auto_assign || {}; routingView.exclusions = data.assignment_exclusions || {}; routingView.bindingCounts = data.binding_counts || {}; routingView.failed = data.unavailable_sources || 0; routingView.loaded = true;
+          renderRouting();
+        } catch (_) { routingStatus.textContent = t('routing.failed'); }
+        finally { document.getElementById('routing-refresh').disabled = false; }
+      }
+      const accountsTab = document.getElementById('accounts-tab'), routingTab = document.getElementById('routing-tab');
+      function selectTab(routing) {
+        document.getElementById('accounts-panel').hidden = routing;
+        document.getElementById('routing-panel').hidden = !routing;
+        accountsTab.className = `button${routing ? '' : ' primary'}`;
+        routingTab.className = `button${routing ? ' primary' : ''}`;
+        if (routing && !routingView.loaded) void loadRouting();
+      }
+      accountsTab.addEventListener('click', () => selectTab(false));
+      routingTab.addEventListener('click', () => selectTab(true));
+      document.getElementById('routing-refresh').addEventListener('click', () => loadRouting(true));
+      document.getElementById('routing-default-account').addEventListener('change', async (event) => {
+        const select = event.target; select.disabled = true;
+        try {
+          await request(`/accounts/${encodeURIComponent(select.value)}/activate`, {method: 'POST', write: true});
+          state.accountRevision += 1;
+          await refreshAccounts(true);
+          renderRouting(); routingStatus.textContent = t('routing.saved');
+        } catch (_) { renderRouting(); routingStatus.textContent = t('routing.failed'); }
+      });
+      document.getElementById('routing-default-trae').addEventListener('change', async (event) => {
+        const select = event.target;
+        if (!select.value) return;
+        select.disabled = true;
+        try {
+          await request(`/trae/accounts/${encodeURIComponent(select.value)}/activate`, {method: 'POST', write: true});
+          await refreshTrae();
+          renderRouting(); routingStatus.textContent = t('routing.saved');
+        } catch (_) { renderRouting(); routingStatus.textContent = t('routing.failed'); }
+      });
+
       for (const button of document.querySelectorAll("[data-backend]")) {
         button.addEventListener("click", () => setSelectedBackend(button.dataset.backend));
       }
       if (els.language) els.language.addEventListener("change", () => setLanguage(els.language.value));
-      els.refresh.addEventListener("click", () => refreshAccounts());
-      els.associate.addEventListener("click", startLogin);
+      els.refresh.addEventListener("click", () => Promise.all([refreshAccounts(), refreshTrae()]));
+      els.associate.addEventListener("click", () => { closeAddDialog(); setSelectedBackend("domestic"); return startLogin(); });
       els.cancel.addEventListener("click", cancelLogin);
       els.retry.addEventListener("click", () => {
         if (state.backend !== state.lastLoginBackend) setSelectedBackend(state.lastLoginBackend);
-        startLogin();
+        startLogin(state.lastLoginAccount);
       });
       els.autoSwitch.addEventListener("change", saveAutoSwitchSetting);
       els.autoCheckin.addEventListener("change", saveAutoCheckinSetting);

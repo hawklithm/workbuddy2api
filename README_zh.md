@@ -1,10 +1,18 @@
 # CodeBuddy API 代理
 
+> 开发集成：`packages/buddy-agent-auth` 是独立认证包，签到核心由 DailyCheckin 提供。本地可在 WorkBuddy2API 目录执行 `python scripts/prepare_dailycheckin_dev.py`，一键构建认证与签到 wheel、同步两个项目环境并校验已安装包。默认查找相邻的 `../trae2api` 或 `../dailycheckin`；其他位置使用 `--dailycheckin <目录>`。脚本会更新本项目的本地 wheel 依赖和 uv 锁定记录，不会发布或推送。`buddy-agent-auth` 与 DailyCheckin 尚未发布，普通发行包安装需等包仓库可用。
+
 > 一个轻量级的 API 代理服务，将 CodeBuddy 底层接口转换为标准的 OpenAI、Anthropic 和 Responses 协议格式。
 
 > **English version: see [README.md](README.md).**
 
 Windows 代理无异常记录却自动退出时，使用[独立进程监控](docs/external-process-monitor.md)，在不重启代理的情况下采集 uv/Python 生命周期、退出码、内存、探活和可读取的系统事件。
+
+Trae CN 的实验性 OpenAI 入口包括 `GET /trae/v1/models` 和 `POST /trae/v1/chat/completions`，使用账号管理页已关联的 Trae 账号。只有一个账号时自动选中；有多个时，独立 Trae 接口可通过 `X-Trae-Account-Id` 请求头指定账号 ID；统一入口可在管理页按模型配置路由，账号 ID 可从本机 `GET /admin/api/trae/accounts` 的 `accounts[].id` 获取。模型列表按账号缓存 6 小时，可用 `GET /trae/v1/models?refresh=true` 强制刷新；响应中的 `source` 与 `stale` 标明来源和是否回退到客户端缓存、过期缓存或内置清单。内置清单可能过时，不保证该账号可用。聊天请求需提供模型名和 `messages`，支持流式与非流式响应；暂不支持 Trae 的 Responses 或 Anthropic 接口。基本文本调用已用真实账号验证，工具调用仅经离线验证。此入口使用 Trae 服务额度，并且与 WorkBuddy 账号切换独立。
+
+账号管理页可按账号手动查询 WorkBuddy 和 Trae CN 剩余积分及积分包；查询失败或上游未提供可解析额度时显示未知，不当作零积分。
+
+账号管理页的“模型路由”标签按账号实际获取的模型列表配置供应商和账号。`/v1/chat/completions`、`/v1/responses` 和 `/v1/messages` 对已配置模型使用指定账号；未配置模型从实际提供该模型的供应商默认账号中选择，双方都提供时优先 WorkBuddy。没有可用模型清单或路由账号失效时返回错误，失败后不自动切换供应商。
 
 ## ✨ 核心特性
 
@@ -88,7 +96,13 @@ uv run --with workbuddy2api python -m codebuddy_proxy --global --desensitize
 | 模式 | 启动参数 | 上游 endpoint |
 | --- | --- | --- |
 | 国内版（默认） | 无 | `https://copilot.tencent.com` |
-| 国际版 | `--global` | `https://www.codebuddy.ai` |
+| 国际版 | `--global` | `https://www.workbuddy.ai` |
+
+当前源码已对齐 Buddy Switch 的 WorkBuddy 出站协议：WorkBuddy 身份头、会话关联头、DeepSeek thinking/档位适配、账号缓存键和国际版首条 system。已有账号继续使用其保存的 endpoint；旧国际站可显式指定 `--global --endpoint https://www.codebuddy.ai`，凭据不会自动跨站迁移。
+
+`--desensitize` 在原有 harness 压缩上加入模板指纹处理，默认仍关闭。`--prompt-mode passthrough` 保留客户端 system；`--prompt-mode custom --prompt-file prompt.txt` 替换为 UTF-8 文件中的 system，不传文件时使用内置工程提示词。passthrough 遇特定内容拦截时最多降级重试一次，降级按账号和 endpoint 隔离，到次日北京时间零点结束。`--model-efforts-file efforts.json` 可指定模型默认档位，例如 `{"deepseek-v4.1-flash":"high"}`；显式请求参数优先。
+
+三种协议共用 reasoning 快照差分，支持 Responses reasoning summary 和 Anthropic thinking 输出。会话 ID 只用于上游关联，不是用户身份认证；Responses 历史缓存仍未启用。实现与验收见 [出站对齐记录](docs/buddy-upstream-alignment-2026-11-21.md)。这些是当前源码能力，不代表已发布版本。
 
 关联账号按区域分别保存在 `~/.workbuddy2api/accounts`。可以通过
 `--accounts-dir DIR` 指定其他本机目录。未指定账号选择参数时，代理恢复上次选择的当前账号。
@@ -133,22 +147,26 @@ endpoint 解析优先级为：显式 `--endpoint` > `--global` 对应的 profile
 > 非 global 模式下的 `CODEBUDDY_ENDPOINT` > 国内默认 endpoint。也就是说，
 `--global` 未同时指定 `--endpoint` 时不会被 `CODEBUDDY_ENDPOINT` 覆盖回国内域名。
 
-运行时模型配置从包内 profile 资源加载：
+`/v1/models` 按当前 WorkBuddy 账号和区域从上游获取 `cli` 模型列表，缓存 24 小时；
+`/v1/models?refresh=true` 可强制刷新。响应的 `catalog` 字段标注来源和回退状态；
+上游不可用时使用同账号缓存，未有缓存时使用包内 profile 资源。`--static-models` 只使用本地资源，
+`--config-cache-ttl` 可调整缓存秒数。包内回退资源为：
 `src/codebuddy_proxy/models_config.domestic.json` 和
 `src/codebuddy_proxy/models_config.global.json`。根目录的
 `models_config.json` 仅作为开发兼容用的国内版配置副本保留，不是运行时数据源。
 
-### 国内版 developer 消息兼容
+### 内置 CodeBuddy 网关的 developer 消息兼容
 
-当前国内默认上游 `https://copilot.tencent.com` 的 Chat Completions 接口对包含
-`developer` 角色的请求可能返回 HTTP 400 / code 11128。本代理在**转发到该上游之前**
-将 `developer` 映射为 `system`，保留消息顺序、内容和工具调用记录，不修改客户端传来的
+内置国内站（`https://copilot.tencent.com`）和国际站
+（`https://www.codebuddy.ai`）的 Chat Completions 接口可能对包含 `developer`
+角色的请求返回 HTTP 400 / code 11128。本代理在**转发到匹配的内置网关之前**将
+`developer` 映射为 `system`，保留消息顺序、内容和工具调用记录，不修改客户端传来的
 原始消息；映射后再执行已启用的 `--desensitize` 处理。无需更改客户端配置。
 
-此适配仅针对国内默认上游，不影响国际站及自定义 endpoint。
-由于旧上游不区分 `developer` 和 `system` 的指令优先级，此映射是兼容性近似处理，
-不能保证与原生支持 `developer` 的模型完全一致。日志中的
-`upstream_role_compat` 事件仅记录转换数量，不记录提示词内容。
+此映射同时校验后端和精确主机名；使用其他主机名的 endpoint 保留原始角色。国际站的
+`X-Conversation-*` 请求头仍在请求体转换后生成。由于上游不区分 `developer` 和
+`system` 的指令优先级，此映射是兼容性近似处理，不能保证与原生支持 `developer` 的模型
+完全一致。日志中的 `upstream_role_compat` 事件记录后端和转换数量，不记录提示词内容。
 
 ### 2. 验证
 
@@ -975,3 +993,12 @@ uv run --with workbuddy2api python -m codebuddy_proxy \
 - 使用本项目产生的任何后果由使用者自行承担
 - 请勿将本项目用于任何违反 CodeBuddy 服务条款的用途
 - 请勿将本项目用于商业用途
+
+
+### Trae CN 账号管理
+
+本机管理页面 `/admin` 提供独立的 Trae CN 账号区：通过浏览器关联多个账号、重新登录、删除、查询签到状态及手动签到。自动签到开关默认关闭，与 WorkBuddy 的签到设置互不影响。账号凭据和独立设备身份保存在账号目录的 `trae-cn` 子目录中；重新登录必须是原账号。Trae 账号用于签到，不参与 WorkBuddy 模型代理的账号切换。登录及首次签到可能注册设备；凭据过期后请重新登录。独立登录和签到的实际服务端行为仍需使用真实账号验证。
+
+### Trae CN 自动签到（可选）
+
+启动 WorkBuddy2API 前设置 `$env:DAILYCHECKIN_TRAE_NATIVE = "1"`，可让 DailyCheckin 使用本机 Trae CN 登录态自动签到；也可改为设置 `$env:DAILYCHECKIN_TRAE_CREDS = "凭据文件路径"`。默认使用按账号绑定的设备配置，`DAILYCHECKIN_TRAE_DEVICE_ID_SOURCE=existing` 可显式使用原生设备。两种账号来源仅选一种。该功能与 WorkBuddy 的自动签到开关独立；需要持续运行进程。

@@ -124,7 +124,8 @@ def sanitize_tool_pairing(
             continue
 
         # Empty assistant messages have no meaning in Chat histories.
-        if role == "assistant" and not str(message.get("content") or "").strip():
+        if role == "assistant" and not any(str(message.get(key) or "").strip()
+                                           for key in ("content", "reasoning_content", "reasoning")):
             continue
 
         if active:

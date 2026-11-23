@@ -31,7 +31,6 @@ import pathlib
 import platform
 import sys
 import time
-import tempfile
 import uuid
 from contextlib import AsyncExitStack
 from typing import Any, Optional
@@ -52,11 +51,15 @@ from codebuddy_proxy.backend_profile import (
     resolve_backend_from_args,
 )
 from codebuddy_proxy.codebuddy_client_demo import CodeBuddyClient, CodeBuddyError
-from codebuddy_proxy.billing_proxy import forward_billing
+from daily_checkin.workbuddy_api import create_legacy_router
 from codebuddy_proxy.upstream_request import ChatRequestPreparer
+from codebuddy_proxy.session_context import SessionContext, SESSION_ID_HEADERS
+from codebuddy_proxy.prompt_rewrite import PromptRewriter, should_degrade
+from codebuddy_proxy.reasoning import ReasoningNormalizer
 from codebuddy_proxy.protocol_response import format_nonstream_response
 from codebuddy_proxy.process_diagnostics import ProcessDiagnostics
 from codebuddy_proxy.admin_api import create_admin_router
+from codebuddy_proxy.workbuddy_catalog import WorkBuddyCatalog, TTL_SECONDS as MODEL_CATALOG_TTL
 
 # 尝试导入高级功能模块（可选）
 try:
@@ -77,7 +80,7 @@ except ImportError:
 
 # 导入协议转换器
 try:
-    from codebuddy_proxy.responses_adapter import responses_request_to_chat, ResponsesStreamConverter
+    from codebuddy_proxy.responses_adapter import responses_request_to_chat, ResponsesStreamConverter, ResponsesContextError, ToolTranslationError
     HAS_RESPONSES_ADAPTER = True
 except ImportError:
     HAS_RESPONSES_ADAPTER = False
@@ -187,6 +190,9 @@ class ProxyState:
         logger: logging.Logger | None = None,
         json_logger: logging.Logger | None = None,
         account_manager=None,
+        prompt_rewriter=None,
+        model_efforts=None,
+        model_catalog=None,
     ):
         self._client = client
         self.account_manager = account_manager
@@ -195,6 +201,13 @@ class ProxyState:
         self.mock_dir = mock_dir
         self.log_file = log_file
         self.enable_desensitize = enable_desensitize
+        self.prompt_rewriter = prompt_rewriter or PromptRewriter()
+        self.model_efforts = model_efforts or {}
+        cache_root = getattr(getattr(account_manager, "store", None), "root", None)
+        self.model_catalog = model_catalog or WorkBuddyCatalog(
+            pathlib.Path(cache_root) / "model-catalog" if cache_root else pathlib.Path.home() / ".workbuddy2api" / "model-catalog",
+            static=mock_dir is not None,
+        )
         self.enable_optimize_context = enable_optimize_context
         self.verbose_llm = verbose_llm
         self.logger = logger
@@ -310,7 +323,9 @@ async def pin_account_at_request_entry(request: Request, call_next):
     # inherits this context, including streaming responses.
     if proxy_state is None or not request.url.path.startswith("/v1/"):
         return await call_next(request)
-    state = proxy_state.for_request() if isinstance(proxy_state, ProxyState) else proxy_state
+    state = proxy_state.for_request() if isinstance(proxy_state, ProxyState) else copy.copy(proxy_state)
+    state.inbound_headers = {key: value for key, value in request.headers.items()
+                             if key.lower() in SESSION_ID_HEADERS}
     token = _request_state.set(state)
     try:
         return await call_next(request)
@@ -331,13 +346,67 @@ app.router.add_event_handler("startup", install_process_asyncio_diagnostics)
 async def start_account_checkin() -> None:
     if isinstance(proxy_state, ProxyState) and proxy_state.account_manager is not None:
         await proxy_state.account_manager.checkins.start()
+        try:
+            from codebuddy_proxy.trae_accounts import TraeAccounts
+            manager = proxy_state.account_manager
+            if getattr(manager, "trae_accounts", None) is None:
+                manager.trae_accounts = TraeAccounts(manager.store.root)
+            configure = getattr(manager.trae_accounts, "configure_logging", None)
+            if callable(configure):
+                configure(proxy_state.log_checkin)
+            await manager.trae_accounts.start()
+        except Exception as exc:
+            try:
+                from daily_checkin.trae_diagnostics import safe_error_fields
+                proxy_state.log_checkin("trae_checkin_failure", brand="trae_cn", stage="host_start",
+                                        reason="startup", **safe_error_fields(exc))
+            except Exception:
+                pass
+            logging.getLogger(__name__).warning("Trae account automation could not start")
 
 
 app.router.add_event_handler("startup", start_account_checkin)
 
+# Trae automation is opt-in because its local login is independent of WorkBuddy.
+_trae_checkin_service = None
+
+
+async def start_trae_checkin() -> None:
+    global _trae_checkin_service
+    native = os.environ.get("DAILYCHECKIN_TRAE_NATIVE") == "1"
+    creds = os.environ.get("DAILYCHECKIN_TRAE_CREDS") or None
+    if not native and not creds:
+        return
+    try:
+        from daily_checkin.trae_scheduler import create_service
+        service = await asyncio.to_thread(
+            create_service, native=native, creds=creds,
+            device_id_source=os.environ.get("DAILYCHECKIN_TRAE_DEVICE_ID_SOURCE", "get-device-id"))
+        if isinstance(proxy_state, ProxyState):
+            service.configure_logging(proxy_state.log_checkin)
+        await service.start()
+        _trae_checkin_service = service
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "Trae automatic check-in could not start; check the configured account and device source")
+
+
+async def close_trae_checkin() -> None:
+    global _trae_checkin_service
+    service, _trae_checkin_service = _trae_checkin_service, None
+    if service is not None:
+        await service.close()
+
+
+app.router.add_event_handler("startup", start_trae_checkin)
+app.router.add_event_handler("shutdown", close_trae_checkin)
+
 
 async def close_account_manager() -> None:
     if isinstance(proxy_state, ProxyState) and proxy_state.account_manager is not None:
+        trae_accounts = getattr(proxy_state.account_manager, "trae_accounts", None)
+        if trae_accounts is not None:
+            await trae_accounts.close()
         await proxy_state.account_manager.checkins.close()
         proxy_state.account_manager.close()
 
@@ -704,6 +773,11 @@ def normalize_model_format(remote_model: dict[str, Any]) -> dict[str, Any]:
         remote_model.get("desc")
     )
     
+    reasoning_config = remote_model.get("reasoning")
+    reasoning_config = reasoning_config if isinstance(reasoning_config, dict) else {}
+    levels = reasoning_config.get("supportedEfforts")
+    levels = [level.strip() for level in levels if isinstance(level, str) and level.strip()] if isinstance(levels, list) else []
+    default_effort = reasoning_config.get("defaultEffort") or reasoning_config.get("effort")
     return {
         "id": model_id,
         "name": name,
@@ -713,6 +787,9 @@ def normalize_model_format(remote_model: dict[str, Any]) -> dict[str, Any]:
         "tool_call": tool_call,
         "images": images,
         "reasoning": reasoning,
+        "reasoning_levels": levels,
+        "reasoning_explicit": isinstance(remote_model.get("reasoning"), dict),
+        "default_reasoning_level": default_effort if isinstance(default_effort, str) else None,
         "desc": description,
         "tags": remote_model.get("tags", []),
         "modelType": remote_model.get("modelType"),
@@ -806,8 +883,9 @@ def model_to_codex_format(m: dict[str, Any]) -> dict[str, Any]:
         "owned_by": m.get("vendor", "codebuddy"),
         
         # Reasoning 支持
-        "default_reasoning_level": None,
-        "supported_reasoning_levels": [{"effort": "High", "description": "High"}] if m.get("reasoning") else [],
+        "default_reasoning_level": m.get("default_reasoning_level"),
+        "supported_reasoning_levels": ([{"effort": level, "description": level} for level in m["reasoning_levels"]]
+                                       if m.get("reasoning_levels") else ([{"effort": "High", "description": "High"}] if m.get("reasoning") and not m.get("reasoning_explicit") else [])),
         "default_reasoning_summary": "auto",
         "supports_reasoning_summary_parameter": True,
         
@@ -943,49 +1021,83 @@ async def health():
     }
 
 
-# ============================================================================
-# 端点：/v1/checkin-status 与 /v1/checkin（每日签到透传）
-# ============================================================================
-
-@app.api_route("/v1/checkin-status", methods=["GET", "POST"])
-async def checkin_status():
-    """Accept GET/POST locally; the real upstream billing status endpoint requires POST."""
-    return await forward_billing(
-        get_request_state(), "POST", "/v2/billing/meter/checkin-activity-status", diagnostic
-    )
-
-
-@app.post("/v1/checkin")
-async def checkin():
-    """POST daily check-in: preserve the upstream HTTP status and raw body."""
-    return await forward_billing(
-        get_request_state(), "POST", "/v2/billing/meter/daily-checkin", diagnostic
-    )
+# Compatibility routes are implemented and maintained by DailyCheckin.
+app.include_router(create_legacy_router(get_request_state, diagnostic))
 
 
 # ============================================================================
 # 端点：/v1/models
 # ============================================================================
 
+async def workbuddy_models_for_client(client, model_catalog, refresh=False):
+    fallback = load_models_from_local_config(client.backend)
+    raw_models, catalog = await model_catalog.get(client, fallback, refresh=refresh)
+    data = fallback if catalog["source"] == "builtin" else [normalize_model_format(model) for model in raw_models]
+    return {"models": [model_to_codex_format(model) for model in data],
+            "catalog": {"backend": client.profile.key, **catalog}}
+
+
+async def admin_workbuddy_models(client, refresh=False):
+    return await workbuddy_models_for_client(client, get_state().model_catalog, refresh)
+
+
+app.state.admin_workbuddy_models = admin_workbuddy_models
+
+
 @app.get("/v1/models")
-async def list_models():
-    state = get_state()
-    # 始终从当前 backend 的包内资源读取；不访问远程动态配置。
-    data = load_models_from_local_config(state.client.backend)
+async def list_models(refresh: bool = False):
+    state = get_request_state()
+    manager = getattr(state, 'account_runtime', None)
+    root = getattr(getattr(manager, 'store', None), 'root', None)
+    if root is None:
+        result = await workbuddy_models_for_client(state.client, state.model_catalog, refresh)
+    else:
+        from codebuddy_proxy.model_routing import ModelRouting, RoutingError, provider_defaults, list_candidates, automatic_target
+        try:
+            routes = ModelRouting(root).read()
+            defaults = provider_defaults(manager, state.client)
+        except RoutingError:
+            raise HTTPException(503, '模型路由配置损坏') from None
+        except Exception:
+            raise HTTPException(503, '供应商默认账号不可用') from None
+        candidates, failed = await list_candidates(app, manager, refresh, defaults, include_metadata=True)
+        models = []
+        for name, options in candidates.items():
+            target = automatic_target(name, candidates)
+            chosen = next(option for option in options if option['provider'] == target['provider'] and option['account_id'] == target['account_id'])
+            entry = chosen['metadata']
+            if target['provider'] == 'trae':
+                entry = model_to_codex_format({'id': name, 'name': entry.get('display_name') or name,
+                                               'vendor': 'trae', 'max_input': entry.get('context_length')})
+            models.append(entry)
+        result = {'models': models, 'catalog': {'source': 'provider_catalogs', 'unavailable_sources': failed}}
+        known = {model['id']: index for index, model in enumerate(models)}
+        trae = getattr(manager, 'trae_accounts', None)
+        for name, target in routes.items():
+            if target['provider'] == 'workbuddy':
+                exists = manager.has_account(target['account_id'])
+            else:
+                exists = trae is not None and any(a['id'] == target['account_id'] for a in trae.snapshot()['accounts'])
+            if exists:
+                # A shared model name may have different capabilities per provider.
+                # Do not advertise the default account's metadata for a routed account.
+                entry = model_to_codex_format({'id': name, 'name': name, 'vendor': target['provider']})
+                if name in known:
+                    result['models'][known[name]] = entry
+                else:
+                    known[name] = len(result['models'])
+                    result['models'].append(entry)
 
     # 记录模型列表请求
     diagnostic(
         "models_list_request",
         backend=state.client.profile.key,
         resource=state.client.profile.models_resource,
-        models_count=len(data),
-        source="local_config"
+        models_count=len(result["models"]),
+        source=result["catalog"]["source"]
     )
     
-    # 转换为 Codex 格式
-    codex_models = [model_to_codex_format(m) for m in data]
-    
-    return {"models": codex_models}
+    return result
 
 
 # ============================================================================
@@ -1023,6 +1135,162 @@ async def parse_request_body(request: Request) -> Any:
     )
 
 
+# Register separately so Trae never shares WorkBuddy's model routing or account state.
+from codebuddy_proxy.trae_gateway import router as trae_gateway_router
+import codebuddy_proxy.trae_models  # registers the Trae model route on the same router
+app.state.trae_parse_request_body = parse_request_body
+app.state.trae_get_account_manager = get_account_manager
+app.include_router(trae_gateway_router)
+
+
+async def route_model_chat(body, protocol, original=None):
+    """Pin an explicit target or a model-capable provider's default account."""
+    from codebuddy_proxy.model_routing import ModelRouting, RoutingError, provider_defaults, list_candidates, automatic_target, failover_state
+    from codebuddy_proxy.model_failover import observe_response, error_outcome
+    from codebuddy_proxy.session_routing import SessionRouting, SessionRoutingError, session_key
+    state = get_request_state()
+    manager = getattr(state, 'account_runtime', None)
+    root = getattr(getattr(manager, 'store', None), 'root', None)
+    if root is None:
+        return await forward_chat(body, protocol, original=original)
+    try:
+        name = body.get('model')
+        routing = ModelRouting(root)
+        target = routing.read().get(name) if isinstance(name, str) else None
+        auto_switch = routing.read_auto_switch().get(name, False) if isinstance(name, str) else False
+        auto_assign = routing.read_auto_assign().get(name, False) if isinstance(name, str) else False
+    except RoutingError:
+        raise HTTPException(503, '模型路由配置损坏') from None
+    if auto_assign:
+        try:
+            session = session_key(original if isinstance(original, dict) else body, getattr(state, 'inbound_headers', {}))
+            all_candidates, failed = await list_candidates(app, manager)
+            options = all_candidates.get(name, [])
+            known = {('workbuddy', item['id']) for item in manager.store.list_accounts()} if failed else None
+            trae_accounts = getattr(manager, 'trae_accounts', None)
+            if failed and trae_accounts is not None:
+                known.update(('trae', item['id']) for item in trae_accounts.snapshot()['accounts'])
+            session_routes = SessionRouting(root)
+            target = await asyncio.to_thread(session_routes.resolve, session, name, options, bool(failed), known)
+        except SessionRoutingError as exc:
+            raise HTTPException(409, str(exc)) from None
+        except Exception:
+            raise HTTPException(503, '无法分配会话账号或获取模型列表') from None
+    if target is None:
+        if not isinstance(name, str) or not name.strip():
+            raise HTTPException(400, '必须指定模型名称')
+        try:
+            defaults = provider_defaults(manager, state.client)
+            if not any(defaults.values()):
+                raise HTTPException(401, detail={'error': {'type': 'authentication_error', 'message': '请先关联供应商账号并设置默认账号'}})
+            candidates, failed = await list_candidates(app, manager, defaults=defaults)
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(503, '无法获取供应商模型列表') from None
+        target = automatic_target(name, candidates)
+        if target is None:
+            if failed:
+                raise HTTPException(503, '供应商模型列表不可用，无法确定模型路由')
+            raise HTTPException(404, '默认供应商账号均未提供该模型，请配置模型路由')
+    initial = target
+    if not auto_assign:
+        options = []
+    if auto_switch and not auto_assign:
+        try:
+            all_candidates, _ = await list_candidates(app, manager)
+            options = all_candidates.get(name, [])
+            target = failover_state.choose(root, name, initial, options)
+        except Exception:
+            # Keep the configured target when catalogs are unavailable.
+            auto_switch = False
+    account_id = target['account_id']
+    def record_outcome(outcome):
+        try:
+            if auto_assign:
+                session_routes.record(name, target, outcome, auto_switch)
+            elif auto_switch:
+                failover_state.record(root, name, initial, target, options, outcome)
+        except Exception:
+            logging.getLogger(__name__).warning('Failed to record account availability', exc_info=True)
+    if target['provider'] == 'workbuddy':
+        try:
+            client = manager.store.get_client(account_id)
+        except Exception:
+            raise HTTPException(409, '模型路由指向的 WorkBuddy 账号不可用') from None
+        routed = copy.copy(state)
+        routed._client = client
+        routed.account_manager = None
+        routed.account_runtime = None  # Never fail over to a different configured target.
+        token = _request_state.set(routed)
+        try:
+            try:
+                response = await forward_chat(body, protocol, original=original)
+            except HTTPException as exc:
+                if (auto_switch or auto_assign) and (exc.status_code in (401, 403, 429) or exc.status_code >= 500):
+                    detail = exc.detail.get('error', exc.detail) if isinstance(exc.detail, dict) else {}
+                    record_outcome(error_outcome(detail, target['provider']))
+                raise
+            return observe_response(response, root, name, initial, target, options, recorder=record_outcome) if (auto_switch or auto_assign) else response
+        finally:
+            _request_state.reset(token)
+    from codebuddy_proxy.trae_gateway import forward_trae
+    accounts = getattr(manager, 'trae_accounts', None)
+    if accounts is None:
+        raise HTTPException(409, '模型路由指向的 Trae 账号不可用')
+    with accounts.lock:
+        if not any(item['id'] == account_id for item in accounts._records()):
+            raise HTTPException(409, '模型路由指向的 Trae 账号不可用')
+    try:
+        response = await forward_trae(body, accounts, account_id)
+    except HTTPException as exc:
+        if (auto_switch or auto_assign) and (exc.status_code in (401, 403, 429) or exc.status_code >= 500):
+            detail = exc.detail.get('error', exc.detail) if isinstance(exc.detail, dict) else {}
+            record_outcome(error_outcome(detail, target['provider']))
+        raise
+    if auto_switch or auto_assign:
+        response = observe_response(response, root, name, initial, target, options, recorder=record_outcome)
+    if protocol == 'openai':
+        return response
+    if isinstance(response, JSONResponse):
+        if response.status_code >= 400:
+            return response
+        data = json.loads(response.body)
+        return JSONResponse(format_nonstream_response(data, protocol, original, lambda: int(time.time())))
+    converter = (ResponsesStreamConverter(model=body.get('model', 'auto'), original=original)
+                 if protocol == 'responses' else AnthropicStreamConverter((original or {}).get('model', 'default')))
+    async def converted_stream():
+        failed = False
+        try:
+            async for raw in response.body_iterator:
+                text = raw.decode('utf-8') if isinstance(raw, bytes) else raw
+                for line in text.splitlines():
+                    if not line.startswith('data:'):
+                        continue
+                    value = line[5:].strip()
+                    if value == '[DONE]':
+                        continue
+                    chunk = json.loads(value)
+                    if 'error' in chunk:
+                        failed = True
+                        error = chunk['error']
+                        events = (converter.fail('upstream_error', str(error.get('message', 'Trae upstream error')))
+                                  if protocol == 'responses' else [('error', {'type': 'error', 'error': {'type': 'api_error', 'message': 'Trae upstream error'}})])
+                    else:
+                        events = converter.feed_chunk(chunk)
+                    for event, data in events:
+                        yield f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                    if failed:
+                        break
+                if failed:
+                    break
+            if not failed:
+                for event, data in converter.finish():
+                    yield f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+        finally:
+            await response.body_iterator.aclose()
+    return StreamingResponse(converted_stream(), media_type='text/event-stream')
+
 # ============================================================================
 # 端点：/v1/chat/completions
 # ============================================================================
@@ -1035,7 +1303,7 @@ async def chat_completions(request: Request):
     log_client_request("POST", "/v1/chat/completions", body)
     diagnostic("request", protocol="openai", **body_summary(body))
     
-    return await forward_chat(body, "openai")
+    return await route_model_chat(body, "openai")
 
 
 # ============================================================================
@@ -1052,12 +1320,17 @@ async def create_response(request: Request):
     # 转换 Responses → Chat
     try:
         chat_body = responses_request_to_chat(body)
+    except (ResponsesContextError, ToolTranslationError) as exc:
+        raise HTTPException(status_code=400, detail={
+            "error": {"type": "unsupported_context", "message": str(exc)}
+        }) from exc
     except ToolPairingError as exc:
         diagnostic("tool_pairing_rejected", protocol="responses", reason=exc.reason,
                    call_count=len(exc.call_ids))
         raise HTTPException(status_code=422, detail=exc.as_detail()) from exc
     
     # 消息压缩优化（如果启用）
+    state.session_context = SessionContext.from_request(body, getattr(state, "inbound_headers", {}), chat_body)
     if state.enable_optimize_context and HAS_PROJECTION:
         chat_body, proj_stats = project_responses_chat_body(chat_body)
         diagnostic("projection_applied", protocol="responses", **proj_stats)
@@ -1098,7 +1371,7 @@ async def create_response(request: Request):
                       filtered=filtered_names)
     
     diagnostic("request", protocol="responses", **body_summary(chat_body))
-    return await forward_chat(chat_body, "responses", original=body)
+    return await route_model_chat(chat_body, "responses", original=body)
 
 
 # ============================================================================
@@ -1121,7 +1394,7 @@ async def create_message(request: Request):
         raise HTTPException(status_code=422, detail=exc.as_detail()) from exc
     diagnostic("request", protocol="anthropic", **body_summary(chat_body))
     
-    return await forward_chat(chat_body, "anthropic", original=body)
+    return await route_model_chat(chat_body, "anthropic", original=body)
 
 
 # ============================================================================
@@ -1159,6 +1432,10 @@ async def forward_chat(
     """Forward with bounded account failover before sending a client response."""
     state = get_request_state()
     manager = getattr(state, "account_runtime", None)
+    state = copy.copy(state)
+    state.session_context = getattr(state, "session_context", None) or SessionContext.from_request(
+        original if original is not None else body, getattr(state, "inbound_headers", {}), body,
+    )
     attempted: set[str] = set()
     max_attempts = 1
     if manager is not None:
@@ -1220,6 +1497,9 @@ async def _forward_chat_once(body, protocol, original, state):
         desensitize_body=desensitize_body,
         normalize_tool_choice=_normalize_tool_choice,
         diagnostic=diagnostic,
+        prompt_rewriter=getattr(state, "prompt_rewriter", None),
+        session_context=getattr(state, "session_context", None),
+        model_efforts=getattr(state, "model_efforts", None),
     ).prepare(body, protocol)
     stream, upstream_body, url, headers = (
         prepared.stream, prepared.body, prepared.url, prepared.headers,
@@ -1279,6 +1559,16 @@ async def _forward_chat_once(body, protocol, original, state):
                     error_json.get("msg") or error_json.get("message") or error_text
                     if isinstance(error_json, dict) else error_text
                 )
+                rewriter = getattr(state, "prompt_rewriter", None)
+                if (rewriter is not None and prepared.prompt_scope and rewriter.mode == "passthrough"
+                        and not getattr(state, "prompt_degrade_attempted", False)
+                        and should_degrade(upstream_response.status_code, error_text, prepared.sanitized)
+                        and rewriter.trigger(prepared.prompt_scope)):
+                    await upstream_response.aclose()
+                    await upstream_client.aclose()
+                    state.prompt_degrade_attempted = True
+                    diagnostic("prompt_degraded", protocol=protocol)
+                    return await _forward_chat_once(body, protocol, original, state)
                 error_info = {
                     "type": "upstream_error",
                     "message": str(error_message)[:1000],
@@ -1310,6 +1600,14 @@ async def _forward_chat_once(body, protocol, original, state):
     try:
         collected = await collect_upstream(url, headers, upstream_body, protocol)
     except HTTPException as exc:
+        rewriter = getattr(state, "prompt_rewriter", None)
+        if (rewriter is not None and prepared.prompt_scope and rewriter.mode == "passthrough"
+                and not getattr(state, "prompt_degrade_attempted", False)
+                and should_degrade(exc.status_code, json.dumps(exc.detail, ensure_ascii=False), prepared.sanitized)
+                and rewriter.trigger(prepared.prompt_scope)):
+            diagnostic("prompt_degraded", protocol=protocol)
+            state.prompt_degrade_attempted = True
+            return await _forward_chat_once(body, protocol, original, state)
         if exc.status_code != 429:
             raise
         return JSONResponse(
@@ -1460,11 +1758,12 @@ async def stream_upstream(
     
     # Responses 协议转换器（使用传入的 body 参数）
     responses_state = ResponsesStreamConverter(
-        model=body.get("model", "auto")
+        model=body.get("model", "auto"), original=original
     ) if protocol == "responses" and ResponsesStreamConverter else None
     
     # DSML 缓冲区（用于处理可能的文本标记格式工具调用）
     dsml_buffer = DSMLStreamBuffer()
+    reasoning_normalizer = ReasoningNormalizer()
     
     # 【修复 B1】原生流式 tool_calls name 缓存
     # 上游首 chunk 带完整 name，后续 chunk name 为空但有 arguments 分片
@@ -1638,6 +1937,9 @@ async def stream_upstream(
                             yield f"data: {json.dumps({'error': upstream_error}, ensure_ascii=False)}\n\n".encode()
                         return
 
+                    chunk = reasoning_normalizer.normalize(chunk)
+                    if chunk is None:
+                        continue
                     chunk_count += 1
                     
                     # 【修复 C3】记录最后一个上游 chunk 的元数据，供流结束 flush 复用
@@ -1958,7 +2260,10 @@ async def collect_upstream(
     usage = None
     finish_reason = None
     content = ""
+    reasoning = ""
+    reasoning_normalizer = ReasoningNormalizer()
     tool_calls_dict: dict[int, dict] = {}  # 使用 dict 按 index 累加
+    done_seen = False
     # DSML 缓冲区
     dsml_buffer = DSMLStreamBuffer()
     
@@ -1982,6 +2287,7 @@ async def collect_upstream(
                     
                     data = line[5:].strip()
                     if data == "[DONE]":
+                        done_seen = True
                         break
                     
                     try:
@@ -1989,11 +2295,18 @@ async def collect_upstream(
                     except json.JSONDecodeError:
                         continue
                     
+                    if chunk.get("error"):
+                        raise HTTPException(status_code=502, detail={"error": {
+                            "type": "upstream_error", "message": "Upstream emitted an error event"}})
+                    chunk = reasoning_normalizer.normalize(chunk)
+                    if chunk is None:
+                        continue
                     usage = chunk.get("usage") or usage
                     
                     for choice in chunk.get("choices") or []:
                         finish_reason = choice.get("finish_reason") or finish_reason
                         delta = choice.get("delta") or {}
+                        reasoning += delta.get("reasoning_content") or ""
                         
                         # 处理 content（可能包含 DSML）
                         if delta.get("content"):
@@ -2044,6 +2357,11 @@ async def collect_upstream(
         state.write_log("upstream_error", **details)
         raise HTTPException(status_code=502, detail={"error": {"message": f"upstream error: {exc}", "type": "upstream_error"}})
     
+    if not done_seen:
+        raise HTTPException(status_code=502, detail={"error": {
+            "type": "upstream_error", "message": "Upstream stream ended without [DONE]"}})
+    content += dsml_buffer.flush()
+
     # 转换为 list 并过滤掉无效的 tool_calls（name 为空的）
     tool_calls = [
         v for k, v in sorted(tool_calls_dict.items()) 
@@ -2071,6 +2389,7 @@ async def collect_upstream(
             "message": {
                 "role": "assistant",
                 "content": content,
+                **({"reasoning_content": reasoning} if reasoning else {}),
                 "tool_calls": tool_calls if tool_calls else None
             },
             "finish_reason": finish_reason or "stop"
@@ -2154,6 +2473,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--desensitize", action="store_true",
                         help="启用脱敏处理，对 system 消息中的敏感词插入零宽空格（缓解审核误拦）")
+    parser.add_argument("--prompt-mode", choices=("passthrough", "custom"), default="passthrough",
+                        help="提示词模式：保留客户端指令，或使用网关自定义 system")
+    parser.add_argument("--prompt-file", type=pathlib.Path,
+                        help="custom 模式的 UTF-8 system 提示词文件")
+    parser.add_argument("--model-efforts-file", type=pathlib.Path,
+                        help="模型默认思考档位 JSON 对象文件")
     parser.add_argument("--optimize-context", action="store_true",
                         help="启用消息压缩优化（仅 /v1/responses），大幅减少 token 使用（适用于 Codex CLI 等长上下文场景）")
     parser.add_argument("--login", action="store_true",
@@ -2165,13 +2490,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--static-models",
         action="store_true",
-        help="兼容旧参数；/v1/models 当前始终使用 profile 对应的本地模型资源",
+        help="仅使用当前 backend 的本地模型资源，不请求上游模型目录",
     )
     parser.add_argument(
         "--config-cache-ttl",
         type=int,
-        default=int(os.getenv("CODEBUDDY_CONFIG_CACHE_TTL", "300")),
-        help="兼容旧参数；当前 /v1/models 不启用远程动态模型",
+        default=int(os.getenv("CODEBUDDY_CONFIG_CACHE_TTL", str(MODEL_CATALOG_TTL))),
+        help="WorkBuddy 模型目录缓存时间（秒，默认 86400）",
     )
     return parser
 
@@ -2192,63 +2517,14 @@ def initialize_account_manager(args, resolved_backend):
     from codebuddy_proxy.account_manager import AccountManager
 
     store = AccountStore(args.accounts_dir)
-    initial_import = not store.index_file.exists()
-    explicit = bool(args.global_mode or args.endpoint is not None
-                    or args.session_file is not None
-                    or os.getenv("CODEBUDDY_ENDPOINT"))
-    candidates = [resolved_backend]
-    for profile in (DOMESTIC_PROFILE, GLOBAL_PROFILE):
-        candidate = resolve_backend(profile=profile, environment={})
-        if candidate not in candidates:
-            candidates.append(candidate)
-    selected_uid = None
-    for candidate in candidates:
-        # Migration is one-time. Re-reading a legacy file after its account
-        # was deleted must not silently associate that identity again.
-        if not initial_import and not (args.session_file is not None
-                                       and candidate is resolved_backend):
-            continue
-        try:
-            old = CodeBuddyClient(backend=candidate)
-        except CodeBuddyError:
-            if args.session_file is not None and candidate is resolved_backend:
-                raise
-            print(f"Skipped incompatible legacy session for {candidate.profile.key}", file=sys.stderr)
-            continue
-        account = old.session.get("account") or {}
-        auth = old.session.get("auth") or {}
-        if not isinstance(account, dict) or not isinstance(auth, dict):
-            continue
-        uid = account.get("uid")
-        if not uid or not (auth.get("accessToken") or auth.get("refreshToken")):
-            continue
-        if candidate is resolved_backend:
-            selected_uid = str(uid).strip()
-        known = any(
-            row["backend"] == old.profile.key and row["endpoint"] == old.endpoint
-            and str(row["uid"]) == str(uid) for row in store.list_accounts()
-        )
-        if not known:
-            store.import_client(old)
-    if args.login:
-        with tempfile.TemporaryDirectory(prefix="login-", dir=store.root) as temporary:
-            login_backend = resolve_backend(
-                profile=resolved_backend.profile, endpoint=resolved_backend.endpoint,
-                session_file=pathlib.Path(temporary) / "session.json", environment={},
-            )
-            login_client = CodeBuddyClient(backend=login_backend)
-            login_client.login(open_browser=not args.no_browser)
-            store.import_client(login_client, activate=True)
-    elif explicit:
-        matching = [row for row in store.list_accounts()
-                    if row["backend"] == resolved_backend.profile.key
-                    and row["endpoint"] == resolved_backend.endpoint
-                    and (args.session_file is None or str(row["uid"]) == selected_uid)]
-        if matching:
-            chosen = next((row for row in matching if row["active"]), matching[0])
-            store.set_active(chosen["id"])
-        else:
-            store.clear_active()
+    from buddy_agent_auth.providers.codebuddy.bootstrap import prepare_account_store
+    prepare_account_store(
+        store, resolved_backend, global_mode=args.global_mode, endpoint=args.endpoint,
+        session_file=args.session_file, login=args.login, no_browser=args.no_browser,
+        environment_endpoint=os.getenv("CODEBUDDY_ENDPOINT"), client_class=CodeBuddyClient,
+        on_incompatible=lambda backend: print(
+            f"Skipped incompatible legacy session for {backend}", file=sys.stderr),
+    )
     manager = AccountManager(store)
     # The empty fallback preserves the requested profile for health/models.
     # Managed requests cannot start browser login or write to a legacy file.
@@ -2263,12 +2539,18 @@ def _run_proxy(args: argparse.Namespace) -> int:
     global proxy_state
     try:
         resolved_backend = resolve_backend_from_args(args)
+        prompt_rewriter = PromptRewriter(getattr(args, "prompt_mode", "passthrough"), getattr(args, "prompt_file", None))
+        model_efforts = {}
+        if getattr(args, "model_efforts_file", None):
+            model_efforts = json.loads(args.model_efforts_file.read_text(encoding="utf-8"))
+            if not isinstance(model_efforts, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in model_efforts.items()):
+                raise ValueError("model efforts must be a JSON object of string values")
         manager = None
         if args.mock_dir is not None:
             client = CodeBuddyClient(backend=resolved_backend)
         else:
             manager, client = initialize_account_manager(args, resolved_backend)
-    except (CodeBuddyError, ValueError) as exc:
+    except (CodeBuddyError, ValueError, OSError) as exc:
         print(f"错误: {exc}", file=sys.stderr)
         return 1
     
@@ -2288,6 +2570,13 @@ def _run_proxy(args: argparse.Namespace) -> int:
         logger=logger,
         json_logger=json_logger,
         account_manager=manager,
+        prompt_rewriter=prompt_rewriter,
+        model_efforts=model_efforts,
+        model_catalog=WorkBuddyCatalog(
+            pathlib.Path(manager.store.root if manager is not None else pathlib.Path.home() / ".workbuddy2api") / "model-catalog",
+            ttl=args.config_cache_ttl,
+            static=args.static_models or args.mock_dir is not None,
+        ),
     )
     proxy_state.write_log(
         "startup",
@@ -2313,16 +2602,16 @@ def _run_proxy(args: argparse.Namespace) -> int:
         proxy_state.runtime_info["machine"],
     )
     
-    # 保留远程缓存类以兼容旧调用方，但 /v1/models 明确使用包内资源。
+    # 保留旧远程配置类供兼容调用；模型目录使用 WorkBuddyCatalog。
     global remote_config_cache
     remote_config_cache = None
     logger.info(
-        "Using local model resource: backend=%s resource=%s",
+        "Model catalog fallback: backend=%s resource=%s",
         client.profile.key,
         client.profile.models_resource,
     )
     print(
-        f"[Local Models] backend={client.profile.key}, "
+        f"[Model Catalog Fallback] backend={client.profile.key}, "
         f"resource={client.profile.models_resource}"
     )
     

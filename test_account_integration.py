@@ -2,7 +2,9 @@
 
 import asyncio
 import json
+import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -38,6 +40,9 @@ def managed(tmp_path, monkeypatch):
     manager = AccountManager(store)
     state = proxy.ProxyState(domestic, None, None, account_manager=manager)
     monkeypatch.setattr(proxy, "proxy_state", state)
+    async def account_catalog(client, refresh=False):
+        return {'models': [{'id': 'test'}, {'id': client.profile.key}], 'catalog': {'source': 'live'}}
+    monkeypatch.setattr(proxy.app.state, 'admin_workbuddy_models', account_catalog)
     yield store, manager, state, first, second
     manager.close()
 
@@ -55,6 +60,79 @@ def test_switch_updates_health_models_and_preserves_captured_request(managed):
         assert state.for_request().client.profile.key == "global"
         assert snapshot.client.session["auth"]["accessToken"] == "token-domestic-same-uid"
     assert AccountStore(store.root).active_account_id == second
+
+
+def test_admin_model_list_can_inspect_inactive_account_without_switching(managed, monkeypatch):
+    store, manager, state, first, second = managed
+    async def get_models(client, refresh=False):
+        return {"models": [{"id": client.profile.key}], "catalog": {"source": "live", "refresh": refresh}}
+    monkeypatch.setattr(proxy.app.state, "admin_workbuddy_models", get_models)
+    original = store.active_account_id
+    inactive = second if original == first else first
+    with TestClient(proxy.app, base_url="http://localhost", client=("127.0.0.1", 50000)) as app:
+        response = app.get(f"/admin/api/accounts/{inactive}/models?refresh=true")
+        assert response.status_code == 200
+        assert response.json()["models"][0]["id"] == manager.store.get_client(inactive).profile.key
+        assert response.json()["catalog"]["refresh"] is True
+        assert store.active_account_id == original
+        assert app.get("/admin/api/accounts/not-an-account/models").status_code == 404
+
+
+def test_admin_credit_query_uses_requested_account_without_switching(managed, monkeypatch):
+    import codebuddy_proxy.account_credits as credits
+    store, manager, state, first, second = managed
+    async def fake_credits(client):
+        return {'remaining': 7, 'packages': [], 'provider': client.profile.key}
+    monkeypatch.setattr(credits, 'workbuddy_credits', fake_credits)
+    original = store.active_account_id
+    inactive = second if original == first else first
+    with TestClient(proxy.app, base_url='http://localhost', client=('127.0.0.1', 50000)) as app:
+        response = app.get(f'/admin/api/accounts/{inactive}/credits')
+        assert response.status_code == 200
+        assert response.json()['provider'] == store.get_client(inactive).profile.key
+        assert store.active_account_id == original
+        assert app.get('/admin/api/accounts/missing/credits').status_code == 404
+
+
+def test_model_routes_pin_workbuddy_and_trae_without_switching(managed, monkeypatch):
+    from fastapi.responses import JSONResponse
+    from codebuddy_proxy.model_routing import ModelRouting
+    import codebuddy_proxy.trae_gateway as trae_gateway
+    store, manager, state, first, second = managed
+    initial = store.active_account_id
+    target = second if initial == first else first
+    class FakeTrae:
+        lock = threading.RLock()
+        def _records(self): return [{'id':'trae-id'}]
+        def _active_id_locked(self): return 'trae-id'
+        def snapshot(self): return {'accounts':self._records()}
+        async def start(self): pass
+        async def close(self): pass
+    manager.trae_accounts = FakeTrae()
+    async def fake_workbuddy(body, protocol, original=None):
+        return JSONResponse({'provider':'workbuddy', 'backend':proxy.get_request_state().client.profile.key})
+    async def fake_trae(body, accounts, account_id):
+        return JSONResponse({'id':'x', 'model':body['model'], 'choices':[{'index':0,'message':{'role':'assistant','content':'ok'},'finish_reason':'stop'}]})
+    async def fake_models(client, catalog, refresh=False):
+        return {'models':[{'id':'trae-model', 'input_modalities':['text','image']}], 'catalog':{'source':'cached'}}
+    monkeypatch.setattr(proxy, 'forward_chat', fake_workbuddy)
+    monkeypatch.setattr(trae_gateway, 'forward_trae', fake_trae)
+    monkeypatch.setattr(proxy, 'workbuddy_models_for_client', fake_models)
+    routes = ModelRouting(store.root)
+    routes.set('wb-model', {'provider':'workbuddy','account_id':target})
+    routes.set('trae-model', {'provider':'trae','account_id':'trae-id'})
+    with TestClient(proxy.app) as app:
+        available = app.get('/v1/models').json()['models']
+        entry = next(model for model in available if model['id'] == 'trae-model')
+        assert entry['owned_by'] == 'trae' and entry['input_modalities'] == ['text']
+        wb = app.post('/v1/chat/completions', json={'model':'wb-model','messages':[]})
+        assert wb.json()['backend'] == store.get_client(target).profile.key
+        tr = app.post('/v1/chat/completions', json={'model':'trae-model','messages':[]})
+        assert tr.json()['choices'][0]['message']['content'] == 'ok'
+        assert store.active_account_id == initial
+        manager.trae_accounts._records = lambda: []
+        assert app.post('/v1/chat/completions', json={'model':'trae-model','messages':[]}).status_code == 409
+    manager.trae_accounts = None
 
 
 @pytest.mark.parametrize("path,body", [
@@ -83,7 +161,7 @@ def test_three_protocols_switch_endpoint_and_credentials(managed, monkeypatch, p
         manager.activate(second)
         assert app.post(path, json={"model": "test", "stream": False, **body}).status_code == 200
     assert seen == [("copilot.tencent.com", "Bearer token-domestic-same-uid"),
-                    ("www.codebuddy.ai", "Bearer token-global-same-uid")]
+                    ("www.workbuddy.ai", "Bearer token-global-same-uid")]
 
 
 def test_billing_refresh_during_switch_stays_with_original_account(managed, monkeypatch):
@@ -149,7 +227,7 @@ def test_account_switch_while_streaming_preserves_original_request(managed, monk
         assert state.client.profile.key == "global"
         assert app.post("/v1/chat/completions", json=body).status_code == 200
     assert seen == [("copilot.tencent.com", "Bearer token-domestic-same-uid"),
-                    ("www.codebuddy.ai", "Bearer token-global-same-uid")]
+                    ("www.workbuddy.ai", "Bearer token-global-same-uid")]
 
 
 @pytest.mark.parametrize("path,body", [
