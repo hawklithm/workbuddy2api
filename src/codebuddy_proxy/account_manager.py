@@ -78,6 +78,14 @@ class AccountManager(WorkBuddyLoginJobs):
         from daily_checkin.workbuddy import AccountCheckinService
 
         self.checkins = AccountCheckinService(self)
+        try:
+            from daily_checkin.workbuddy_travel import WorkBuddyTravelService
+        except ModuleNotFoundError as exc:
+            if exc.name != 'daily_checkin.workbuddy_travel':
+                raise
+            self.travel = None  # Older installed DailyCheckin remains usable.
+        else:
+            self.travel = WorkBuddyTravelService(store) if getattr(store, 'root', None) is not None else None
 
     @property
     def client(self) -> Any | None:
@@ -145,6 +153,8 @@ class AccountManager(WorkBuddyLoginJobs):
             account["checkin"] = self.checkins.snapshot(
                 account_id if isinstance(account_id, str) else ""
             )
+            if self.travel is not None and account.get('backend') == 'domestic':
+                account['travel'] = self.travel.snapshot(account_id if isinstance(account_id, str) else '')
         return {
             "accounts": safe_accounts,
             "active_account_id": active_id,
@@ -518,6 +528,8 @@ class AccountManager(WorkBuddyLoginJobs):
 
     def close(self) -> None:
         self.checkins.stop()
+        if self.travel is not None:
+            self.travel.stop()
         self._close_logins()
 
 

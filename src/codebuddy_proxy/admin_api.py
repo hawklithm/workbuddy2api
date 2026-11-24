@@ -200,6 +200,22 @@ def _safe_snapshot(value: Any) -> dict[str, Any]:
                     account.get("model_cooldowns")
                 )
                 safe["checkin"] = _safe_checkin(account.get("checkin"))
+                travel = account.get('travel')
+                if isinstance(travel, dict):
+                    allowed = {'idle', 'traveling', 'arrived', 'departed', 'claimed', 'already_claimed',
+                               'daily_limit', 'unknown', 'account_missing', 'unsupported_region',
+                               'unsupported_endpoint', 'authentication', 'network', 'invalid_response',
+                               'invalid_state', 'business_rejected', 'no_buddy', 'no_location',
+                               'location_unavailable', 'not_arrived', 'storage', 'disabled',
+                               'outcome_unknown', 'unexpected'}
+                    projected = {'ok': travel.get('ok') if type(travel.get('ok')) is bool else None}
+                    if type(travel.get('daily_limit_reached')) is bool:
+                        projected['daily_limit_reached'] = travel['daily_limit_reached']
+                    for key in ('state', 'action', 'error'):
+                        field_value = travel.get(key)
+                        if isinstance(field_value, str) and (field_value in allowed or re.fullmatch(r'http_[1-5][0-9]{2}', field_value)):
+                            projected[key] = field_value
+                    safe['travel'] = projected
                 safe_accounts.append(safe)
     server_time = value.get("server_time")
     return {
@@ -517,6 +533,42 @@ def create_admin_router(get_manager: Callable[[], AccountManager]) -> APIRouter:
             return _safe_settings(updated)
         except Exception as exc:
             _raise_manager_error(exc)
+
+    def travel_service():
+        service = getattr(get_manager(), 'travel', None)
+        if service is None:
+            raise HTTPException(status_code=503, detail='旅行服务不可用')
+        return service
+
+    @router.get('/admin/api/travel/settings')
+    async def travel_settings():
+        return {'enabled': travel_service().enabled()}
+
+    @router.patch('/admin/api/travel/settings')
+    async def update_travel_settings(request: Request):
+        _require_write_header(request)
+        payload = await _read_json_object(request, _MAX_SETTINGS_BODY)
+        if set(payload) != {'enabled'} or type(payload['enabled']) is not bool:
+            raise HTTPException(status_code=400, detail='旅行设置必须是布尔值')
+        try:
+            return travel_service().set_enabled(payload['enabled'])
+        except OSError:
+            raise HTTPException(status_code=503, detail='旅行设置保存失败') from None
+
+    @router.get('/admin/api/accounts/{account_id}/travel')
+    async def travel_status(account_id: str):
+        manager = get_manager()
+        if not _manager_has_account(manager, account_id):
+            raise HTTPException(status_code=404, detail='未找到该账号')
+        return await travel_service().status(account_id)
+
+    @router.post('/admin/api/accounts/{account_id}/travel')
+    async def travel_execute(account_id: str, request: Request):
+        _require_write_header(request)
+        manager = get_manager()
+        if not _manager_has_account(manager, account_id):
+            raise HTTPException(status_code=404, detail='未找到该账号')
+        return await travel_service().run_account(account_id)
 
     @router.get(
         "/admin/api/accounts/{account_id}/checkin-status", response_model=None

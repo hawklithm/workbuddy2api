@@ -141,7 +141,7 @@ function makePageElements() {
     'notice', 'account-list', 'refresh-button', 'associate-button', 'login-progress',
     'progress-title', 'progress-copy', 'progress-spinner', 'cancel-button',
     'retry-button', 'manual-auth-link', 'auto-switch-toggle', 'settings-status',
-    'auto-checkin-toggle', 'checkin-settings-status', 'sync-status', 'language-select',
+    'auto-checkin-toggle', 'checkin-settings-status', 'travel-auto', 'travel-message', 'sync-status', 'language-select',
     'trae-list', 'trae-message', 'trae-login-status', 'trae-login-link', 'trae-cancel',
     'trae-auto', 'trae-add', 'add-account-button', 'add-account-dialog', 'add-dialog-close', 'add-workbuddy-global',
     'accounts-tab', 'routing-tab', 'accounts-panel', 'routing-panel', 'routing-refresh', 'routing-status', 'routing-list', 'routing-default-account', 'routing-default-trae'
@@ -279,7 +279,9 @@ const snapshotFixture = (accounts = [accountFixture()], autoSwitch = false, serv
 function startPage(document, window, fetch, clock = Date) {
   const script = fs.readFileSync(process.argv[2], 'utf8');
   const DateType = typeof clock === 'function' ? clock : class TestDate extends Date { static now() { return clock.now(); } };
-  const adaptedFetch = (url, options) => url.includes('/trae/')
+  const adaptedFetch = (url, options) => url.includes('/travel')
+    ? (fetch.travel ? fetch.travel(url, options || {}) : Promise.resolve(jsonResponse({enabled: false})))
+    : url.includes('/trae/')
     ? (fetch.trae ? fetch.trae(url, options || {}) : Promise.resolve(jsonResponse({accounts: [], auto_checkin_enabled: false})))
     : fetch(url, options);
   vm.runInNewContext(script, {
@@ -1405,7 +1407,48 @@ async function verifyAutoCheckinIsBackendOwned() {
   assert.deepEqual(signWrites, ['existing']);
 }
 
+async function verifyCatTravelControls() {
+  const elements = makePageElements(), document = makeDocument(elements), {window} = makeWindow(makeTimers());
+  let enabled = false;
+  const writes = [];
+  async function fetch(url) {
+    if (url.endsWith('/accounts')) return jsonResponse(snapshotFixture([accountFixture(), accountFixture({id:'global', backend:'global'})]));
+    if (url.endsWith('/settings')) return jsonResponse(settingsFixture());
+    return jsonResponse({});
+  }
+  fetch.travel = async (url, options = {}) => {
+    if (url.endsWith('/travel/settings')) {
+      if (options.method === 'PATCH') {
+        assert.equal(options.headers.get('X-Account-Manager'), '1');
+        enabled = JSON.parse(options.body).enabled;
+      }
+      return jsonResponse({enabled});
+    }
+    if (options.method === 'POST') {
+      assert.equal(options.headers.get('X-Account-Manager'), '1');
+      writes.push(url);
+      return jsonResponse({ok:true, action:'departed'});
+    }
+    return jsonResponse({ok:true, state:'idle'});
+  };
+  startPage(document, window, fetch);
+  await flush(); await flush(); await flush();
+  assert.equal(elements['travel-auto'].checked, false);
+  elements['travel-auto'].checked = true;
+  await elements['travel-auto'].dispatch('change');
+  assert.equal(enabled, true);
+  const domestic = findAccountCard(elements, 'existing');
+  const global = findAccountCard(elements, 'global');
+  assert.equal(walk(global).filter(node => node.textContent === '派出 / 领奖').length, 0);
+  const button = walk(domestic).find(node => node.textContent === '派出 / 领奖');
+  assert.ok(button);
+  await button.dispatch('click');
+  assert.equal(writes.length, 1);
+  assert.match(walk(findAccountCard(elements, 'existing')).map(node => node.textContent).join(' '), /已派出/);
+}
+
 (async () => {
+  await verifyCatTravelControls();
   await verifyModelRoutingTab();
   await verifyUnifiedAddDialog();
   await verifyProviderModelLists();

@@ -1,6 +1,6 @@
 # CodeBuddy API 代理
 
-> 开发集成：`packages/buddy-agent-auth` 是独立认证包，签到核心由 DailyCheckin 提供。本地可在 WorkBuddy2API 目录执行 `python scripts/prepare_dailycheckin_dev.py`，一键构建认证与签到 wheel、同步两个项目环境并校验已安装包。默认查找相邻的 `../trae2api` 或 `../dailycheckin`；其他位置使用 `--dailycheckin <目录>`。脚本会更新本项目的本地 wheel 依赖和 uv 锁定记录，不会发布或推送。`buddy-agent-auth` 与 DailyCheckin 尚未发布，普通发行包安装需等包仓库可用。
+> 开发集成：`packages/buddy-agent-auth` 是独立认证包，签到和旅行逻辑由 DailyCheckin 提供。本工作区通过 `uv` 使用相邻 `../trae2api` 源码，以便接入尚未发布的旅行功能。两个基础包已发布到 PyPI，但当前发布版不包含本工作区的旅行实现。
 
 > 一个轻量级的 API 代理服务，将 CodeBuddy 底层接口转换为标准的 OpenAI、Anthropic 和 Responses 协议格式。
 
@@ -437,6 +437,10 @@ uv run --with workbuddy2api python -m codebuddy_proxy --desensitize --optimize-c
 不会切换当前账号。管理页只保存开关并显示状态，自动检查和签到由代理在后台执行，即使关闭管理页也会继续。
 开启后代理会立即检查全部账号，启动时也会重新检查；此外北京时间每日 00:00 检查所有账号，随机等待 0 至 10 分钟后再检查，确认仍未签到才会执行；
 关闭开关会取消等待中的计划。未知状态不会自动签到。开关会持久化；重启后，签到状态以重新查询上游的结果为准。
+
+账号管理页的“WorkBuddy 猫猫旅行”可查询、派出或领取奖励；自动开关默认关闭。开启后只处理国内账号，启动时检查，之后每 15 分钟检查领奖、每 30 分钟检查派出。旅行请求结果未知时会保守阻止重复提交。
+
+旅行功能目前来自相邻目录 `../trae2api` 中的 DailyCheckin 源码，当前 PyPI 版 `buddy-agent-checkin` 尚不包含该功能。本地使用 `uv sync` 后启动本项目，或在其他安装方式中安装包含旅行模块的 DailyCheckin；不要将本地功能视为已发布版本。
 
 命令行 `--login` 和 `--session-file` 仍可用于终端登录和导入已有 session。
 

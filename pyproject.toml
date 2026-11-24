@@ -38,4 +38,4 @@ dev = [
 
 [tool.uv.sources]
 buddy-agent-auth = { path = "../trae2api/dist/buddy_agent_auth-0.1.1-py3-none-any.whl" }
-daily-checkin = { path = "../trae2api/dist/daily_checkin-0.1.2.dev1-py3-none-any.whl" }
+daily-checkin = { path = "../trae2api", editable = true }

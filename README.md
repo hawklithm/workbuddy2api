@@ -457,6 +457,10 @@ it cancels pending scheduled work. Unknown status is never treated as permission
 sign. The setting persists; after restart, check-in status is confirmed by querying
 the upstream service again.
 
+The **WorkBuddy cat travel** controls can query status, send a cat, or claim rewards. Automatic travel is off by default and applies to domestic accounts only; it checks on startup, then checks claims every 15 minutes and departures every 30 minutes. Uncertain outcomes block duplicate submissions.
+
+Travel currently uses the DailyCheckin source in the adjacent `../trae2api` directory; the published `buddy-agent-checkin` version does not yet include this feature. Run `uv sync` for this local workspace, or install a DailyCheckin build that includes the travel module.
+
 The command-line `--login` flow and `--session-file` option remain available for
 terminal use and importing an existing session.
 
