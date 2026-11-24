@@ -217,6 +217,9 @@ class ProxyState:
         checkins = getattr(account_manager, "checkins", None)
         if checkins is not None:
             checkins.configure_logging(self.log_checkin)
+        travel = getattr(account_manager, "travel", None)
+        if travel is not None:
+            travel.configure_logging(self.log_checkin)
 
     def log_checkin(self, event: str, **fields) -> None:
         """Send safe check-in events to existing files and the process console."""
@@ -346,6 +349,9 @@ app.router.add_event_handler("startup", install_process_asyncio_diagnostics)
 async def start_account_checkin() -> None:
     if isinstance(proxy_state, ProxyState) and proxy_state.account_manager is not None:
         await proxy_state.account_manager.checkins.start()
+        travel = getattr(proxy_state.account_manager, "travel", None)
+        if travel is not None:
+            await travel.start()
         try:
             from codebuddy_proxy.trae_accounts import TraeAccounts
             manager = proxy_state.account_manager
@@ -407,6 +413,9 @@ async def close_account_manager() -> None:
         trae_accounts = getattr(proxy_state.account_manager, "trae_accounts", None)
         if trae_accounts is not None:
             await trae_accounts.close()
+        travel = getattr(proxy_state.account_manager, "travel", None)
+        if travel is not None:
+            await travel.close()
         await proxy_state.account_manager.checkins.close()
         proxy_state.account_manager.close()
 

@@ -126,6 +126,9 @@ class TraeAccountAuth:
                     identity = source / 'credentials.device.secret'
                     original_identity = identity.read_bytes()
                     shutil.copyfile(identity, directory / identity.name)
+                    hardware_file = source / 'credentials.hardware.secret'
+                    if hardware_file.exists():
+                        shutil.copyfile(hardware_file, directory / hardware_file.name)
                 from buddy_agent_auth.providers.trae.login import TraeLoginFlow
                 flow = TraeLoginFlow(creds_file=credentials)
                 with self.lock:
@@ -162,11 +165,24 @@ class TraeAccountAuth:
                             raise _LoginFailure('登录账号与所选账号不一致，或所选账号已删除')
                         if (directory / 'credentials.device.secret').read_bytes() != original_identity:
                             raise _LoginFailure('设备身份已变化，未替换原账号凭据')
-                        os.replace(credentials, self._path(target['id']) / 'credentials.json')
-                        account_id = target['id']
                     else:
                         if any(x['uid'] == uid for x in records):
                             raise _LoginFailure('该 Trae 账号已关联，请使用重新登录')
+                    hardware_file = directory / 'credentials.hardware.secret'
+                    if hardware_file.exists():
+                        from buddy_agent_auth.providers.trae.app_storage import bind_login_device
+                        from buddy_agent_auth.providers.trae.device_hardware import Hardware
+                        hardware = Hardware(**json.loads(hardware_file.read_text(encoding='utf-8')))
+                        try:
+                            bind_login_device(uid, auth.device.device_id, hardware)
+                        except ValueError as exc:
+                            if str(exc).startswith('account already has a different'):
+                                raise _LoginFailure('该 Trae 账号已有不同的设备绑定，未覆盖原有设备信息') from None
+                            raise
+                    if target:
+                        os.replace(credentials, self._path(target['id']) / 'credentials.json')
+                        account_id = target['id']
+                    else:
                         account_id = uuid.uuid4().hex
                         _atomic_json(directory / 'account.json', {'uid': uid, 'nickname': nickname})
                         os.rename(directory, self._path(account_id))

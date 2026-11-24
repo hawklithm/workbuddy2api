@@ -1,8 +1,10 @@
-# CodeBuddy API Proxy
+# WorkBuddy2API
 
-> A lightweight API proxy service that converts CodeBuddy's underlying interface into standard OpenAI, Anthropic, and Responses protocol formats.
+> A local proxy exposing WorkBuddy and Trae CN models through OpenAI, Anthropic, and Responses compatible APIs.
 
 > **中文版文档见 [README_zh.md](README_zh.md).**
+
+Login is provided by `buddy-agent-auth` and check-in by `buddy-agent-checkin`; both are available on PyPI and installed as dependencies. Python 3.10 or later is required.
 
 For unexplained Windows process exits, use the [independent process monitor](docs/external-process-monitor.md) to collect uv/Python exit codes, lifecycle, memory, health, and available Windows events without restarting the proxy.
 
@@ -10,20 +12,20 @@ The experimental Trae CN OpenAI endpoints are `GET /trae/v1/models` and `POST /t
 
 The account management page can query remaining WorkBuddy and Trae CN credits per account on demand, including package details. Unreadable balances and failed queries are not treated as zero.
 
-Use the Model routing tab to select a provider and account for each model offered by the account catalogs. Configured routes apply to `/v1/chat/completions`, `/v1/responses`, and `/v1/messages`; unconfigured models use a default account whose catalog offers the requested model, preferring WorkBuddy when both providers offer it. Missing model catalogs or route targets return an error; failures do not trigger provider failover.
+Use the Model routing tab to select a provider and account for each model offered by the account catalogs. Configured routes apply to `/v1/chat/completions`, `/v1/responses`, and `/v1/messages`; unconfigured models use a default account whose catalog offers the requested model, preferring WorkBuddy when both providers offer it. Missing model catalogs or route targets return an error; per-model automatic switching is off by default.
 
 ## ✨ Core Features
 
 - **Protocol conversion** - Supports three standard formats: OpenAI Chat Completions, Anthropic Messages API, and Responses
-- **Desensitization** - Built-in smart desensitization module that automatically filters sensitive information (accounts, passwords, keys, brand terms, paths, etc.) to mitigate review-based false blocks
+- **Optional prompt handling** - Use `--desensitize` for supported prompt transformations or configure a custom system prompt; upstream acceptance is not guaranteed
 - **Message compression** - Intelligently compresses historical messages to dramatically reduce token usage (ideal for long-context scenarios such as Codex CLI)
 - **Tool call support** - Full support for function calling and tool use, with automatic filtering of invalid tool definitions
 - **DSML parsing** - Automatically detects and converts DeepSeek Markup Language (DSML) tool calls
 - **Streaming responses** - SSE streaming output, returning generated content in real time, with built-in 60-second timeout protection
 - **Domestic and international backends** - Uses domestic CodeBuddy by default and switches to the international CodeBuddy service with `--global`, with isolated sessions and model catalogs
-- **Multi-account management** - Link domestic and Global accounts, switch the active account, and remove non-active accounts from the local admin page
-- **Model-level 429 handling** - Track cooldowns per account and model, with optional same-region failover
-- **Daily check-in** - Check in manually or enable background checks for all linked accounts
+- **Multi-provider accounts** - Link WorkBuddy and Trae CN accounts and inspect models and credits
+- **Model and session routing** - Select an account per model, with optional session assignment and account switching
+- **Daily check-in** - Check status or check in manually, or enable background check-ins separately for each provider
 
 ---
 
@@ -52,20 +54,23 @@ No need to manually activate the virtual environment on subsequent starts; just 
 Run the following commands from the project root to use the workspace source code instead of the published PyPI version:
 
 ```bash
-# Sync local project dependencies
-uv sync
+# Sync published dependencies without local wheel overrides
+uv sync --no-sources
 
-# Start the local source
-uv run python -m codebuddy_proxy --desensitize
+# Optional: use the authentication source in this repository
+uv pip install --no-deps -e packages/buddy-agent-auth
+
+# Start local source without replacing the editable authentication package
+uv run --no-sync python -m codebuddy_proxy --desensitize
 ```
 
 On first use, start the proxy and open the local account manager:
 
 ```bash
-uv run python -m codebuddy_proxy --desensitize
+uv run --no-sync python -m codebuddy_proxy --desensitize
 ```
 
-Then visit `http://127.0.0.1:8787/admin` and link a domestic or Global account.
+Then visit `http://127.0.0.1:8787/admin` and add a WorkBuddy or Trae CN account.
 
 ## Quick Start
 
@@ -405,60 +410,28 @@ uv run --with workbuddy2api python -m codebuddy_proxy --desensitize --optimize-c
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
-### Multi-account switching
+### Account management and model routing
 
-Start the proxy and open [http://127.0.0.1:8787/admin](http://127.0.0.1:8787/admin).
-Choose **Domestic** or **Global**, then link the account in the browser window.
-The first linked account becomes active automatically; linking another account
-does not change the account currently in use. Use **Set active** to switch, or
-remove a non-active account from the same page. The selection is saved for the
-next proxy start. Switching affects new requests; requests already in progress
-continue with the account selected when they began.
+Start the proxy and open [http://127.0.0.1:8787/admin](http://127.0.0.1:8787/admin). Add an account and select WorkBuddy or Trae CN to complete its login flow. The account list supports re-login, removal, credit queries, model lists, and check-ins. Failed or unreadable credit queries are shown as unknown.
 
-![Account manager with check-in controls and redacted account identifiers](docs/images/account-manager-checkin.png)
+In **Model routing**, set a default account for each provider and optionally select a model-capable account for a specific model. Without an explicit route, the proxy selects from provider defaults whose catalogs offer the model, preferring WorkBuddy if both offer it. It returns an error when availability cannot be established.
 
-The screenshot uses synthetic demo accounts. Account UIDs are covered, and no
-credentials or session contents are shown. Accounts are kept separately by
-backend, normalized endpoint, and user ID in `~/.workbuddy2api/accounts`; use
-`--accounts-dir DIR` to choose another local directory. The manager remains
-available before any account is linked. Its page and API are restricted to
-loopback access, and API responses do not include tokens or session data.
+Each model has two independent options, both off by default:
 
-Use the language selector at the top of the page to switch between Chinese and
-English. The choice is remembered in this browser; without a saved preference,
-the page follows the browser language. Switching languages keeps ongoing login
-and account operations running.
+- **Automatic session assignment** requires a stable client session ID, for example `X-Session-Id`. A session and model stay bound to an account. Excluded accounts and accounts not confirmed to offer the model cannot be assigned.
+- **Automatic account switching** selects another eligible account for subsequent requests after quota exhaustion or five consecutive upstream errors. When session assignment is enabled, its account selection restrictions also apply. In-flight requests are not replayed; no eligible candidates results in an error.
 
-Automatic account switching after an upstream HTTP `429` is off by default.
-When enabled, a request can fail over only before any response has been sent,
-and only to accounts with the same region and endpoint. Each account is tried
-at most once per request. The proxy skips a candidate only when the request's
-model is cooling down there; other models on that account remain eligible. A
-missing or invalid model does not create a model cooldown or trigger failover.
-If all tried accounts return `429`, the final status remains `429`, and the
-last upstream response's `Retry-After` header is preserved when present.
-Cooldowns are tracked per account and model, using upstream `Retry-After` or a
-default 60 seconds when that value is missing or invalid. The setting and model
-cooldowns persist across restarts. Old v1 account-wide cooldowns had no model
-identity and are not carried forward during upgrade. The page shows a separate
-remaining countdown and source for each model, and refreshes account state
-periodically and immediately when a hidden page becomes visible again.
+See [session routing](docs/session-account-routing.md) for persistence, cooldowns, and the DeepSeek Harness session ID integration.
 
-The account list also shows each linked account's check-in status for today
-(Beijing time). The **Check in** action is available for every account, including
-the active one; it checks the account first and does nothing when today's check-in
-is already complete. The global automatic check-in setting is off by default and
-applies to all linked accounts without changing the active account. The page saves
-this setting and displays status; the proxy performs automatic checks and check-ins
-in the background, including when the management page is closed. When enabled, the
-proxy checks all linked accounts immediately and on startup. At Beijing midnight it
-checks them, waits a random 0–10 minutes, then checks again before signing; disabling
-it cancels pending scheduled work. Unknown status is never treated as permission to
-sign. The setting persists; after restart, check-in status is confirmed by querying
-the upstream service again.
+Credentials are stored under `~/.workbuddy2api/accounts` by default; `--accounts-dir DIR` changes the location. Trae CN accounts use the `trae-cn` subdirectory, and re-login must use the same account. Trae login registers a device and sends device identifiers and hardware information to the provider.
 
-The command-line `--login` flow and `--session-file` option remain available for
-terminal use and importing an existing session.
+The **WorkBuddy cat travel** controls can query status, send a cat, or claim rewards. Automatic travel is off by default and applies to domestic accounts only; it checks on startup, then checks claims every 15 minutes and departures every 30 minutes. Uncertain outcomes block duplicate submissions.
+
+The published `buddy-agent-checkin` version does not yet include travel. For local development, build and install the updated DailyCheckin source using `python scripts/prepare_dailycheckin_dev.py --dailycheckin <source-directory>`.
+
+The login device preallocation changes in this working tree are not yet published to PyPI: new accounts use a preallocated profile associated with the user ID after login; conflicting existing bindings are not overwritten, and legacy accounts retain their prior device identity.
+
+Automatic check-in settings are independent per provider and off by default; background check-in requires the proxy process to remain running. The admin page and `/admin/api` are limited to loopback access. The `--login` and `--session-file` options remain available for WorkBuddy terminal login and import.
 
 ### Listening on all interfaces (LAN sharing)
 
@@ -970,7 +943,3 @@ uv run --with workbuddy2api python -m codebuddy_proxy \
 - Any consequences arising from the use of this project are the sole responsibility of the user
 - Do not use this project for any purpose that violates CodeBuddy's Terms of Service
 - Do not use this project for commercial purposes
-
-### Trae CN account management
-
-The local `/admin` page has a separate Trae CN section for linking multiple accounts, re-login, removal, status checks and manual check-in. Its automatic check-in switch defaults to off and is independent of WorkBuddy. Credentials and independent device identities are stored in the account directory under `trae-cn`; re-login must use the same account. Trae accounts do not change WorkBuddy proxy routing. Login and the first check-in may register a device; re-login when credentials expire. Real upstream login and check-in still require validation with a real account.

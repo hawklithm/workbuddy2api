@@ -300,6 +300,9 @@
           </label>
         </div>
         <p id="checkin-settings-status" class="settings-status" aria-live="polite" data-i18n="settings.autoCheckin.loading">正在读取自动签到设置…</p>
+        <div class="settings-row"><div class="settings-copy"><strong data-i18n="travel.title">WorkBuddy 猫猫旅行</strong><p data-i18n="travel.description">开启后自动派出并领取旅行奖励，仅支持国内账号，默认关闭。</p></div>
+          <label class="switch-control" data-i18n-aria-label="travel.title"><input id="travel-auto" type="checkbox" data-i18n-aria-label="travel.title"><span class="switch-track" aria-hidden="true"></span></label></div>
+        <p id="travel-message" class="settings-status" role="status" aria-live="polite"></p>
         <p id="sync-status" class="sync-status" role="status" aria-live="polite" hidden></p>
         <p class="footer-note" data-i18n="footer.note">账号管理仅供本机使用。切换账号会影响之后发起的新请求，已经开始的请求会继续使用原账号。</p>
       <div class="settings-row"><div class="settings-copy"><strong data-i18n="trae.autoTitle">Trae CN 自动签到</strong>
@@ -453,6 +456,34 @@
           "settings.autoCheckin.title": "WorkBuddy 自动签到",
           "settings.autoCheckin.description": "开启后由代理立即检查全部关联账号，并按北京时间计划自动签到。未知状态不会自动签到；关闭后会取消待执行计划。默认关闭。",
           "settings.autoCheckin.loading": "正在读取自动签到设置…",
+          "travel.title": "WorkBuddy 猫猫旅行",
+          "travel.description": "开启后自动派出并领取旅行奖励，仅支持国内账号，默认关闭。",
+          "travel.query": "旅行状态",
+          "travel.execute": "派出 / 领奖",
+          "travel.saved": "旅行设置已保存。",
+          "travel.failed": "旅行操作失败，请检查账号及服务状态。",
+          "travel.idle": "可派出",
+          "travel.traveling": "旅行中",
+          "travel.arrived": "已到达",
+          "travel.departed": "已派出",
+          "travel.claimed": "已领取奖励",
+          "travel.already_claimed": "奖励已领取",
+          "travel.daily_limit": "今日旅行已完成",
+          "travel.outcome_unknown": "结果未确认，已停止重复提交",
+          "travel.no_buddy": "账号没有可用猫猫",
+          "travel.no_location": "没有可用地点",
+          "travel.unsupported_endpoint": "该账号的服务地址不支持旅行",
+          "travel.unsupported_region": "该地区不支持旅行",
+          "travel.invalid_state": "旅行状态无法识别",
+          "travel.network": "旅行请求网络失败",
+          "travel.authentication": "账号需要重新登录",
+          "travel.business_rejected": "旅行请求被上游拒绝",
+          "travel.location_unavailable": "旅行地点不可用",
+          "travel.not_arrived": "猫猫尚未到达",
+          "travel.storage": "本地旅行记录不可用",
+          "travel.disabled": "自动旅行已关闭",
+          "travel.unexpected": "旅行操作失败",
+          "travel.invalid_response": "旅行响应无法识别",
           "footer.note": "账号管理仅供本机使用。切换账号会影响之后发起的代理请求，已经开始的请求会继续使用原账号。",
           "empty.loading": "正在读取账号列表…",
           "empty.failedTitle": "账号列表暂时无法读取",
@@ -722,6 +753,34 @@
           "settings.autoCheckin.title": "Automatic WorkBuddy check-in",
           "settings.autoCheckin.description": "When enabled, the proxy checks every linked account and checks in on its Beijing-time schedule. Unknown status is never signed automatically. Turning it off cancels pending work. Off by default.",
           "settings.autoCheckin.loading": "Loading automatic check-in setting…",
+          "travel.title": "WorkBuddy cat travel",
+          "travel.description": "Automatically send cats and claim travel rewards for domestic accounts. Off by default.",
+          "travel.query": "Travel status",
+          "travel.execute": "Send / claim",
+          "travel.saved": "Travel setting saved.",
+          "travel.failed": "Travel request failed; check the account and service.",
+          "travel.idle": "Ready to travel",
+          "travel.traveling": "Traveling",
+          "travel.arrived": "Arrived",
+          "travel.departed": "Departed",
+          "travel.claimed": "Reward claimed",
+          "travel.already_claimed": "Reward already claimed",
+          "travel.daily_limit": "Today's travel is complete",
+          "travel.outcome_unknown": "Outcome unconfirmed; repeat request blocked",
+          "travel.no_buddy": "No active cat",
+          "travel.no_location": "No travel locations available",
+          "travel.unsupported_endpoint": "This endpoint does not support travel",
+          "travel.unsupported_region": "Travel is not supported in this region",
+          "travel.invalid_state": "Travel state not recognized",
+          "travel.network": "Travel network request failed",
+          "travel.authentication": "Account needs sign-in",
+          "travel.business_rejected": "Travel request rejected by the upstream",
+          "travel.location_unavailable": "Travel location unavailable",
+          "travel.not_arrived": "Cat has not arrived yet",
+          "travel.storage": "Local travel record unavailable",
+          "travel.disabled": "Automatic travel is disabled",
+          "travel.unexpected": "Travel operation failed",
+          "travel.invalid_response": "Travel response not recognized",
           "footer.note": "Account management is local only. Switching affects new proxy requests; requests already in progress keep using their original account.",
           "empty.loading": "Loading accounts…",
           "empty.failedTitle": "Accounts are temporarily unavailable",
@@ -986,6 +1045,10 @@
         refreshTimer: null,
         countdownTimer: null,
         cooldownElements: [],
+        travelResults: new Map(),
+        travelSettingRevision: 0,
+        travelSettingSaving: false,
+        travelBusy: new Set(),
         checkinResults: new Map(),
         checkinAutoLookupKeys: new Set(),
         checkinOperations: new Map(),
@@ -1015,6 +1078,8 @@
         authLink: document.getElementById("manual-auth-link"),
         autoSwitch: document.getElementById("auto-switch-toggle"),
         autoCheckin: document.getElementById("auto-checkin-toggle"),
+        travelAuto: document.getElementById("travel-auto"),
+        travelMessage: document.getElementById("travel-message"),
         settingsStatus: document.getElementById("settings-status"),
         checkinSettingsStatus: document.getElementById("checkin-settings-status"),
         syncStatus: document.getElementById("sync-status")
@@ -1740,6 +1805,13 @@
           if (nextPlan) checkinInfo.append(makeText("span", "", t("checkin.nextPlan", { time: nextPlan })));
           if (checkin.status === "error" && checkin.error) checkinInfo.append(makeText("span", "checkin-state error", localizedRaw(checkin.error, "source.checkinError")));
           info.append(checkinInfo);
+          const travel = state.travelResults.get(account.id) || account.travel;
+          if (account.backend === "domestic" && travel && (travel.action || travel.error || (travel.state && travel.state !== "unknown"))) {
+            const code = travel.action || travel.error || (travel.state === "idle" && travel.daily_limit_reached === true ? "daily_limit" : travel.state);
+            const key = `travel.${code}`;
+            const label = Object.hasOwn(STRINGS[state.language] || {}, key) ? t(key) : t("travel.failed");
+            info.append(makeText("div", "account-meta", `${t("travel.title")}: ${label}`));
+          }
           info.append(renderProviderCredits("workbuddy", account));
           info.append(renderProviderModels("workbuddy", account));
 
@@ -1753,6 +1825,15 @@
           checkinActions.children[0].disabled = isCheckinBusy;
           checkinActions.children[1].disabled = isCheckinBusy || checkin.status === "checked" || checkin.checked === true;
           actions.append(checkinActions);
+          if (account.backend === "domestic") {
+            const travelActions = document.createElement("div");
+            travelActions.className = "checkin-actions";
+            const query = makeButton(t("travel.query"), "button small", () => runTravel(account, false));
+            const execute = makeButton(t("travel.execute"), "button small", () => runTravel(account, true));
+            query.disabled = execute.disabled = state.travelBusy.has(account.id);
+            travelActions.append(query, execute);
+            actions.append(travelActions);
+          }
           {
             const manageActions = document.createElement("div");
             manageActions.className = "manage-actions";
@@ -1768,6 +1849,49 @@
           els.accountList.append(card);
         }
         updateCooldownLabels();
+      }
+
+      async function refreshTravelSetting() {
+        const revision = state.travelSettingRevision;
+        try {
+          const result = await request("/travel/settings");
+          if (typeof result.enabled !== "boolean") throw new Error();
+          if (revision !== state.travelSettingRevision || state.travelSettingSaving) return;
+          els.travelAuto.checked = result.enabled;
+          els.travelMessage.textContent = "";
+        } catch (_) {
+          if (revision === state.travelSettingRevision && !state.travelSettingSaving) els.travelMessage.textContent = t("travel.failed");
+        }
+      }
+
+      async function saveTravelSetting() {
+        if (state.travelSettingSaving) return;
+        const desired = els.travelAuto.checked;
+        state.travelSettingRevision += 1;
+        state.travelSettingSaving = true;
+        els.travelAuto.disabled = true;
+        try {
+          const result = await request("/travel/settings", {method: "PATCH", write: true, body: {enabled: desired}});
+          if (typeof result.enabled !== "boolean") throw new Error();
+          els.travelAuto.checked = result.enabled;
+          els.travelMessage.textContent = t("travel.saved");
+        } catch (_) {
+          state.travelSettingSaving = false;
+          await refreshTravelSetting();
+          els.travelMessage.textContent = t("travel.failed");
+        } finally { state.travelSettingSaving = false; els.travelAuto.disabled = false; }
+      }
+
+      async function runTravel(account, execute) {
+        if (state.travelBusy.has(account.id)) return;
+        state.travelBusy.add(account.id);
+        renderAccounts();
+        try {
+          const path = `/accounts/${encodeURIComponent(account.id)}/travel`;
+          const result = execute ? await request(path, {method: "POST", write: true}) : await request(path);
+          state.travelResults.set(account.id, result);
+        } catch (_) { state.travelResults.set(account.id, {error: "unexpected"}); }
+        finally { state.travelBusy.delete(account.id); renderAccounts(); }
       }
 
       async function refreshAccounts(quiet = false, background = false) {
@@ -1793,6 +1917,9 @@
           }
           state.accountAppliedSequence = readSequence;
           state.accounts = result.accounts;
+          for (const account of result.accounts) {
+            if (account.travel && !state.travelBusy.has(account.id)) state.travelResults.set(account.id, account.travel);
+          }
           state.activeAccountId = result.active_account_id || null;
           state.listError = null;
           calibrateServerClock(result.server_time, startedAt, finishedAt);
@@ -2502,7 +2629,7 @@
         button.addEventListener("click", () => setSelectedBackend(button.dataset.backend));
       }
       if (els.language) els.language.addEventListener("change", () => setLanguage(els.language.value));
-      els.refresh.addEventListener("click", () => Promise.all([refreshAccounts(), refreshTrae()]));
+      els.refresh.addEventListener("click", () => Promise.all([refreshAccounts(), refreshTrae(), refreshTravelSetting()]));
       els.associate.addEventListener("click", () => { closeAddDialog(); setSelectedBackend("domestic"); return startLogin(); });
       els.cancel.addEventListener("click", cancelLogin);
       els.retry.addEventListener("click", () => {
@@ -2511,12 +2638,14 @@
       });
       els.autoSwitch.addEventListener("change", saveAutoSwitchSetting);
       els.autoCheckin.addEventListener("change", saveAutoCheckinSetting);
+      els.travelAuto.addEventListener("change", saveTravelSetting);
       document.addEventListener("visibilitychange", handleVisibilityChange);
       window.setInterval(updateCooldownLabels, 1000);
       applyLanguage();
       (async () => {
         await refreshAccounts();
         await refreshSettings();
+        await refreshTravelSetting();
         scheduleAccountRefresh();
       })();
     })();
