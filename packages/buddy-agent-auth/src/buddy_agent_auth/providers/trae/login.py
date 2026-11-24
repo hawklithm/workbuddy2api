@@ -3,7 +3,7 @@
 Reverse engineered from out-build/vs/code/electron-main/oauth/marscode/ (login.js,
 userLogin/loginUrlBuilder.js, oauthLocalServer.js):
 
-1. Resolve/register real hardware, persist its remote device ID and ECDSA
+1. Resolve/register a persistent hardware profile, its remote device ID and ECDSA
    P-256 keypair independently, and generate a fresh PKCE pair (S256).
 2. Serve a one-shot local HTTP server on 127.0.0.1:<random> listening for
    GET /authorize (also /login-confirm, /login-success).
@@ -34,6 +34,7 @@ import threading
 import time
 import uuid
 import webbrowser
+from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -45,7 +46,7 @@ from cryptography.hazmat.primitives import serialization
 from .auth import DEFAULT_CLIENT_ID, TraeAuth
 from .client_metadata import client_version, device_model, installed_client, os_metadata
 from .device_hardware import Hardware, manufacturer, cpu_brand
-from .login_identity import IdentityStore
+from .login_identity import IdentityStore, atomic_json
 from .aha_device_service import AhaDeviceService
 
 CONSOLE_HOST = os.environ.get("TRAE2API_CONSOLE_HOST", "https://www.trae.cn")
@@ -118,7 +119,20 @@ class TraeLoginFlow:
 
     def prepare_device(self) -> None:
         """Register once, resume activation if needed, and reuse the same key."""
-        result = AhaDeviceService(self.identity_store, http=self.http, version=self.client_version).get_device_id(
+        profile_path = self.creds_file.with_name(self.creds_file.stem + '.hardware.secret')
+        if profile_path.exists():
+            values = json.loads(profile_path.read_text(encoding='utf-8'))
+            if not isinstance(values, dict) or set(values) != set(Hardware.__dataclass_fields__):
+                raise ValueError('invalid login hardware profile')
+            hardware = Hardware(**values)
+        elif self.identity.registered:
+            # Existing installations must keep the hardware that registered them.
+            hardware = Hardware.read()
+        else:
+            hardware = Hardware.allocate()
+            atomic_json(profile_path, asdict(hardware))
+        result = AhaDeviceService(self.identity_store, http=self.http, version=self.client_version,
+                                  hardware_reader=lambda: hardware).get_device_id(
             allow_network=True, require_activation=True)
         identity, hardware = result.identity, result.hardware
         self.identity = identity

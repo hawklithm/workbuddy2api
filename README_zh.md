@@ -1,8 +1,8 @@
-# CodeBuddy API 代理
+# WorkBuddy2API
 
-> 开发集成：`packages/buddy-agent-auth` 是独立认证包，签到和旅行逻辑由 DailyCheckin 提供。本工作区通过 `uv` 使用相邻 `../trae2api` 源码，以便接入尚未发布的旅行功能。两个基础包已发布到 PyPI，但当前发布版不包含本工作区的旅行实现。
+> 开发集成：`packages/buddy-agent-auth` 是独立认证包，签到和旅行逻辑由 DailyCheckin 提供。两个基础包已发布到 PyPI，但当前发布版不包含本工作区的旅行实现。
 
-> 一个轻量级的 API 代理服务，将 CodeBuddy 底层接口转换为标准的 OpenAI、Anthropic 和 Responses 协议格式。
+> 一个本地 API 代理，将 WorkBuddy 和 Trae CN 模型接入 OpenAI、Anthropic 和 Responses 兼容接口。
 
 > **English version: see [README.md](README.md).**
 
@@ -12,20 +12,20 @@ Trae CN 的实验性 OpenAI 入口包括 `GET /trae/v1/models` 和 `POST /trae/v
 
 账号管理页可按账号手动查询 WorkBuddy 和 Trae CN 剩余积分及积分包；查询失败或上游未提供可解析额度时显示未知，不当作零积分。
 
-账号管理页的“模型路由”标签按账号实际获取的模型列表配置供应商和账号。`/v1/chat/completions`、`/v1/responses` 和 `/v1/messages` 对已配置模型使用指定账号；未配置模型从实际提供该模型的供应商默认账号中选择，双方都提供时优先 WorkBuddy。没有可用模型清单或路由账号失效时返回错误，失败后不自动切换供应商。
+账号管理页的“模型路由”标签按账号实际获取的模型列表配置供应商和账号。未配置模型从提供该模型的供应商默认账号中选择，双方都提供时优先 WorkBuddy；没有可用模型清单或路由账号失效时返回错误。按模型自动切换默认关闭。
 
 ## ✨ 核心特性
 
 - **协议转换** - 支持 OpenAI Chat Completions、Anthropic Messages API 和 Responses 三种标准格式
-- **脱敏处理** - 内置智能脱敏模块，自动过滤敏感信息（账号、密码、密钥、品牌词、路径等），有效缓解审核误拦
+- **可选提示词处理** - 使用 `--desensitize` 调整部分提示词特征，也可使用自定义系统提示词；不能保证上游接受所有请求
 - **消息压缩** - 智能压缩历史消息，大幅降低 token 使用量（适用于 Codex CLI 等长上下文场景）
 - **工具调用支持** - 完整支持 function calling 和 tool use 特性，自动过滤无效工具定义
 - **DSML 解析** - 自动识别和转换 DeepSeek 标记语言（DSML）格式的工具调用
 - **流式响应** - 支持 SSE 流式输出，实时返回生成内容，内置 60 秒超时保护
 - **国内版与国际版后端** - 默认连接国内版 CodeBuddy，通过 `--global` 切换国际版，并隔离登录态和模型列表
-- **多账号管理** - 在本机管理页关联国内版和 Global 账号、切换当前账号或删除非当前账号
-- **模型级 429 冷却** - 按账号和模型记录冷却状态，并可选启用同区域账号自动切换
-- **每日签到** - 可手动签到，也可开启覆盖全部关联账号的后台自动检查
+- **多供应商账号管理** - 关联 WorkBuddy 和 Trae CN 账号，查看模型列表与积分
+- **模型路由与会话分配** - 按模型配置账号，可选启用会话绑定及账号自动切换
+- **每日签到** - 手动检查和签到，或分别启用供应商的后台自动签到
 ---
 
 ## 安装
@@ -53,20 +53,23 @@ uv run --refresh-package workbuddy2api --with workbuddy2api \
 在项目根目录执行以下命令，使用当前工作区源码而不是 PyPI 中的已发布版本：
 
 ```bash
-# 同步本地项目依赖
-uv sync
+# 从 PyPI 同步依赖，不使用本地 wheel 覆盖
+uv sync --no-sources
 
-# 启动本地源码
-uv run python -m codebuddy_proxy --desensitize
+# 如需使用仓库中的认证包源码（包括尚未发布的改动）
+uv pip install --no-deps -e packages/buddy-agent-auth
+
+# 启动本地源码，保留上面安装的认证包
+uv run --no-sync python -m codebuddy_proxy --desensitize
 ```
 
 首次使用时，启动代理并打开本机账号管理页：
 
 ```bash
-uv run python -m codebuddy_proxy --desensitize
+uv run --no-sync python -m codebuddy_proxy --desensitize
 ```
 
-然后访问 `http://127.0.0.1:8787/admin`，关联国内版或 Global 账号。
+然后访问 `http://127.0.0.1:8787/admin`，添加 WorkBuddy 或 Trae CN 账号。
 
 ## 快速开始
 
@@ -409,40 +412,28 @@ uv run --with workbuddy2api python -m codebuddy_proxy --desensitize --optimize-c
   --log-file "$HOME/.workbuddy2api/codebuddy-proxy.jsonl"
 ```
 
-### 多账号切换
+### 账号管理与模型路由
 
-启动代理后访问 [http://127.0.0.1:8787/admin](http://127.0.0.1:8787/admin)，选择
-**国内**或 **Global**，再在新打开的浏览器窗口中完成关联。首次关联的账号会自动设为当前账号；
-之后关联其他账号不会隐式切换。可在列表中切换当前账号或删除非当前账号，当前选择会在下次启动时恢复。
-切换只影响之后开始的新请求；已经进行中的请求会继续使用进入时固定的账号。
+启动后访问 [http://127.0.0.1:8787/admin](http://127.0.0.1:8787/admin)。在账号列表点击添加账号，选择 WorkBuddy 或 Trae CN，完成相应的登录授权。页面支持重新登录、删除、积分查询、模型列表和签到；积分查询失败或无法解析时显示未知。
 
-![账号管理页面，展示签到控件并遮挡账号标识](docs/images/account-manager-checkin.png)
+在“模型路由”中设置各供应商的默认账号，也可为模型指定提供该模型的账号。没有显式路由时，从供应商默认账号的模型清单中选择；双方都提供时优先 WorkBuddy。无法确认模型可用性时返回错误。
 
-截图中的账号为合成演示数据，UID 已遮挡，不包含凭据或 session 内容。账号按 backend、规范化 endpoint
-和用户 ID 区分，分别保存在 `~/.workbuddy2api/accounts`；可用 `--accounts-dir DIR` 更换本机目录。
-尚未关联任何账号时，管理页也可以打开。页面和管理 API 仅允许 loopback 本机访问，API 响应不会包含 token 或 session 数据。
-页面顶部可切换中文和 English，选择会保存在当前浏览器；没有保存偏好时跟随浏览器语言。
-切换即时生效，不会中断进行中的登录、签到或账号操作。
+每个模型可分别开启以下选项，默认关闭：
 
-遇到上游 HTTP `429` 时自动切换账号的功能默认关闭。开启后，仅当尚未向客户端发送响应时才会重试，
-且只会尝试区域和 endpoint 都相同的账号；每个账号在一次请求中最多尝试一次。仅当该账号的“本次请求模型”仍在冷却时才会跳过，同一账号的其他模型仍可用。
-模型名缺失或无效时不会记录模型冷却，也不会触发自动切换。
-所有已尝试账号都返回 `429` 时，最终 HTTP 状态仍为 `429`，并保留最后一次上游响应中的 `Retry-After`（若有）。冷却按账号和模型分别记录；
-该值缺失或无效时，默认冷却 60 秒。自动切换设置和模型冷却会在重启后保留。
-旧版 v1 的整账号冷却没有模型信息，升级后不会沿用。管理页分别显示每个模型的剩余冷却时间
-及其来源（`Retry-After` 或默认值），并定期同步账号状态；页面从后台重新显示时会立即同步。
+- **按会话自动分配**：客户端需要提供稳定的 session ID，例如 `X-Session-Id`。同一会话和模型保持账号绑定；可排除不参与分配的账号，且只选择确认支持当前模型的账号。
+- **自动切换账号**：额度耗尽或连续五次上游异常后，为后续请求选择其他支持该模型的账号。启用会话分配时，切换同样受所选账号范围限制。已开始的请求不会因切换而重放；没有可用候选账号时返回错误。
 
-账号列表还会显示每个关联账号当天（北京时间）的签到状态。每个账号都有“查询签到”和“签到”按钮，
-当前账号也可操作；签到前会先检查，已签到时不会重复签到。全局自动签到默认关闭，适用于所有关联账号，
-不会切换当前账号。管理页只保存开关并显示状态，自动检查和签到由代理在后台执行，即使关闭管理页也会继续。
-开启后代理会立即检查全部账号，启动时也会重新检查；此外北京时间每日 00:00 检查所有账号，随机等待 0 至 10 分钟后再检查，确认仍未签到才会执行；
-关闭开关会取消等待中的计划。未知状态不会自动签到。开关会持久化；重启后，签到状态以重新查询上游的结果为准。
+会话绑定、冷却及 DeepSeek Harness 的 session ID 配置见[会话账号分配说明](docs/session-account-routing.md)。
 
 账号管理页的“WorkBuddy 猫猫旅行”可查询、派出或领取奖励；自动开关默认关闭。开启后只处理国内账号，启动时检查，之后每 15 分钟检查领奖、每 30 分钟检查派出。旅行请求结果未知时会保守阻止重复提交。
 
-旅行功能目前来自相邻目录 `../trae2api` 中的 DailyCheckin 源码，当前 PyPI 版 `buddy-agent-checkin` 尚不包含该功能。本地使用 `uv sync` 后启动本项目，或在其他安装方式中安装包含旅行模块的 DailyCheckin；不要将本地功能视为已发布版本。
+当前 PyPI 版 `buddy-agent-checkin` 尚不包含旅行功能。本地开发可使用 `python scripts/prepare_dailycheckin_dev.py --dailycheckin <源码目录>` 构建并安装更新后的 DailyCheckin。
 
-命令行 `--login` 和 `--session-file` 仍可用于终端登录和导入已有 session。
+账号凭据默认保存在 `~/.workbuddy2api/accounts`；可用 `--accounts-dir DIR` 指定目录。Trae CN 账号保存在 `trae-cn` 子目录，重新登录必须使用原账号。登录需要设备注册，并向服务商发送设备标识及设备信息。
+
+当前工作区的登录设备预分配改动尚未发布到 PyPI：新关联账号使用预分配设备档案，登录后关联用户 ID；已有不同绑定时不会覆盖，旧账号继续使用原设备身份。
+
+各供应商的自动签到设置相互独立，默认关闭；后台签到需要代理进程持续运行。管理页面及 `/admin/api` 仅允许本机回环访问。命令行 `--login` 和 `--session-file` 仍可用于 WorkBuddy 终端登录和导入。
 
 ### 监听所有网卡（局域网共享）
 
@@ -465,10 +456,7 @@ uv run --with workbuddy2api python -m codebuddy_proxy --host 0.0.0.0 --desensiti
 | POST | `/v1/messages` | Anthropic Messages API，兼容 Claude Code / CC Switch |
 
 账号管理接口位于 `/admin/api`，只允许本机回环地址访问。写请求必须携带
-`X-Account-Manager: 1`，跨源请求会被拒绝。`GET /admin/api/accounts` 返回当前账号和冷却状态；
-每个账号还包含缓存的当日签到状态。`GET /admin/api/accounts/{id}/checkin-status` 会向上游查询；
-`POST /admin/api/accounts/{id}/checkin` 会先检查再执行必要的签到。`GET` 与 `PATCH /admin/api/settings`
-用于分别读取和保存自动切换、全局自动签到设置。
+`X-Account-Manager: 1`，跨源请求会被拒绝。
 
 ### `/health` - 健康检查
 
@@ -997,12 +985,3 @@ uv run --with workbuddy2api python -m codebuddy_proxy \
 - 使用本项目产生的任何后果由使用者自行承担
 - 请勿将本项目用于任何违反 CodeBuddy 服务条款的用途
 - 请勿将本项目用于商业用途
-
-
-### Trae CN 账号管理
-
-本机管理页面 `/admin` 提供独立的 Trae CN 账号区：通过浏览器关联多个账号、重新登录、删除、查询签到状态及手动签到。自动签到开关默认关闭，与 WorkBuddy 的签到设置互不影响。账号凭据和独立设备身份保存在账号目录的 `trae-cn` 子目录中；重新登录必须是原账号。Trae 账号用于签到，不参与 WorkBuddy 模型代理的账号切换。登录及首次签到可能注册设备；凭据过期后请重新登录。独立登录和签到的实际服务端行为仍需使用真实账号验证。
-
-### Trae CN 自动签到（可选）
-
-启动 WorkBuddy2API 前设置 `$env:DAILYCHECKIN_TRAE_NATIVE = "1"`，可让 DailyCheckin 使用本机 Trae CN 登录态自动签到；也可改为设置 `$env:DAILYCHECKIN_TRAE_CREDS = "凭据文件路径"`。默认使用按账号绑定的设备配置，`DAILYCHECKIN_TRAE_DEVICE_ID_SOURCE=existing` 可显式使用原生设备。两种账号来源仅选一种。该功能与 WorkBuddy 的自动签到开关独立；需要持续运行进程。

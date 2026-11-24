@@ -136,6 +136,33 @@ def _read_pairs(path: Path) -> dict[str, str]:
     return data
 
 
+def bind_login_device(user_id: str, device_id: str, hardware) -> None:
+    """Bind a successful login without replacing existing check-in identity."""
+    from dataclasses import asdict
+    from .login_identity import atomic_json
+    if not isinstance(user_id, str) or not user_id:
+        raise ValueError('login user ID is missing')
+    device_path(device_id)
+    profiles_path = root() / 'device_hardware.json'
+    pairs_path = root() / 'device_pair.json'
+    with _locked():
+        profiles = json.loads(profiles_path.read_text(encoding='utf-8-sig')) if profiles_path.exists() else {}
+        if not isinstance(profiles, dict):
+            raise ValueError('invalid device_hardware.json; refusing to overwrite it')
+        pairs = _read_pairs(pairs_path)
+        profile = asdict(hardware)
+        if user_id in profiles and profiles[user_id] != profile:
+            raise ValueError('account already has a different hardware profile')
+        if user_id in pairs and pairs[user_id] != device_id:
+            raise ValueError('account already has a different device binding')
+        if user_id not in profiles:
+            profiles[user_id] = profile
+            atomic_json(profiles_path, profiles)
+        if user_id not in pairs:
+            pairs[user_id] = device_id
+            atomic_json(pairs_path, pairs)
+
+
 def resolve_pair(user_id: str, device_id: str, client, version: str):
     """Reuse the account binding, registering a device only on first use."""
     from .login_identity import atomic_json

@@ -309,6 +309,18 @@ class Hardware:
     local_device_id: str | None = field(default=None, repr=False)
 
     @classmethod
+    def allocate(cls) -> "Hardware":
+        """Allocate one stable profile from the local hardware baseline."""
+        baseline = cls.read()
+        if not baseline.pc_uuid:
+            raise ValueError("cannot read a hardware UUID from SMBIOS or WMI")
+        new_uuid = str(uuid.uuid4()).upper()
+        local_uuid = (new_uuid if baseline.local_device_id == baseline.pc_uuid else
+                      str(uuid.uuid4()).upper() if baseline.local_device_id else baseline.local_device_id)
+        return replace(baseline, pc_uuid=new_uuid, local_device_id=local_uuid,
+                       pc_serial=_drift_serial(baseline.pc_serial), mac=_drift_mac(baseline.mac))
+
+    @classmethod
     def read(cls, user_id: str | None = None) -> "Hardware":
         result = cls.read_native(user_id) if user_id is not None else cls.read_native()
         if not result.pc_uuid:
@@ -344,14 +356,7 @@ class Hardware:
                 except (TypeError, ValueError):
                     raise ValueError("invalid account hardware profile; refusing to overwrite it") from None
             else:
-                baseline = cls.read_real()
-                if not baseline.pc_uuid:
-                    raise ValueError("cannot read a hardware UUID from SMBIOS or WMI")
-                new_uuid = str(uuid.uuid4()).upper()
-                local_uuid = (new_uuid if baseline.local_device_id == baseline.pc_uuid else
-                              str(uuid.uuid4()).upper() if baseline.local_device_id else baseline.local_device_id)
-                result = replace(baseline, pc_uuid=new_uuid, local_device_id=local_uuid,
-                                 pc_serial=_drift_serial(baseline.pc_serial), mac=_drift_mac(baseline.mac))
+                result = cls.allocate()
                 profiles[user_id] = asdict(result)
                 atomic_json(path, profiles)
         from .diagnostics import get_logger
